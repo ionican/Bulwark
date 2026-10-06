@@ -195,3 +195,28 @@ export function heightAt(t: Terrain, x: number, z: number): number {
 
 export const tileAt = (t: Terrain, tx: number, ty: number): number =>
   tx < 0 || ty < 0 || tx >= t.w || ty >= t.h ? TILE_ROCK : t.tiles[ty * t.w + tx]!;
+
+/**
+ * A flat, rock-free terrain for tests. `rocks` lists rock tiles; deposits and entries as given.
+ */
+export function flatTerrain(
+  w: number,
+  h: number,
+  opts: { rocks?: Array<[number, number]>; deposits?: Deposit[]; entries?: EntryPoint[]; base?: Point } = {},
+): Terrain {
+  const tiles = new Uint8Array(w * h);
+  for (const [x, z] of opts.rocks ?? []) tiles[z * w + x] = TILE_ROCK;
+  const deposits = opts.deposits ?? [];
+  for (const d of deposits) {
+    for (let j = 0; j < 2; j++) for (let i = 0; i < 2; i++) tiles[(d.ty + j) * w + d.tx + i] = d.kind === 'mass' ? TILE_MASS : TILE_RARE;
+  }
+  return {
+    w,
+    h,
+    heights: new Float32Array((w + 1) * (h + 1)),
+    tiles,
+    deposits,
+    entries: opts.entries ?? [{ name: 'north', x: w / 2, z: 0.5, dirX: 0, dirZ: 1 }],
+    base: opts.base ?? { x: w / 2, z: h / 2 },
+  };
+}

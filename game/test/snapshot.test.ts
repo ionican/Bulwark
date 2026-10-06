@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { World } from '../src/sim/world.ts';
 import { Rng } from '../src/sim/rng.ts';
-import { ALIEN_FIELDS, BUILDING_FIELDS, UNIT_FIELDS } from '../src/sim/schema.ts';
-import { decodeSnapshot, encodeSnapshot, SNAPSHOT_MAGIC } from '../src/sim/snapshot.ts';
+import { ALIEN_FIELDS, BUILDING_FIELDS, PROJECTILE_FIELDS, UNIT_FIELDS, WRECK_FIELDS } from '../src/sim/schema.ts';
+import { decodeSnapshot, encodeSnapshot, SNAPSHOT_MAGIC, G_COMMANDER_HP, G_ENERGY, G_INCOME, G_KILLS, G_MASS, G_PARTS, G_RARE, G_SPEND } from '../src/sim/snapshot.ts';
 import type { AnyTypedArray, FieldSpec, Table } from '../src/sim/table.ts';
 
 /** A value of the column's type that survives storage exactly, and is never zero. */
@@ -43,12 +43,26 @@ describe('snapshot encode -> decode', () => {
     buildings: w.buildings as unknown as Table<readonly FieldSpec[]>,
     aliens: w.aliens as unknown as Table<readonly FieldSpec[]>,
     units: w.units as unknown as Table<readonly FieldSpec[]>,
+    wrecks: w.wrecks as unknown as Table<readonly FieldSpec[]>,
+    projectiles: w.projectiles as unknown as Table<readonly FieldSpec[]>,
   };
   fill(tables.buildings, 301, r);
   fill(tables.aliens, 517, r);
   fill(tables.units, 23, r);
+  fill(tables.wrecks, 41, r);
+  fill(tables.projectiles, 77, r);
   for (let i = 0; i < 37; i++) w.rng.next();
   w.tick = 98765;
+  w.pool.set([123.25, 4567.5, 8.125]);
+  w.incomeRate.set([3, 15, 0.1]);
+  w.spendRate.set([1.5, 2.5, 0.25]);
+  w.parts = 42;
+  w.kills = 77;
+  w.routes = [
+    { entry: 0, category: 1, cells: [5, 133, 261, 389] },
+    { entry: 1, category: 3, cells: [16383] },
+    { entry: 1, category: 0, cells: [] },
+  ];
 
   const snap = decodeSnapshot(encodeSnapshot(w));
 
@@ -61,12 +75,30 @@ describe('snapshot encode -> decode', () => {
     expect(snap.buildings.count).toBe(w.buildings.count);
     expect(snap.aliens.count).toBe(w.aliens.count);
     expect(snap.units.count).toBe(w.units.count);
+    expect(snap.wrecks.count).toBe(w.wrecks.count);
+    expect(snap.projectiles.count).toBe(w.projectiles.count);
+  });
+
+  it('round-trips the globals (pool, rates, parts, counters)', () => {
+    const g = snap.globals;
+    expect([g[G_MASS], g[G_ENERGY], g[G_RARE]]).toEqual([123.25, 4567.5, 8.125]);
+    expect([g[G_INCOME], g[G_INCOME + 1], g[G_INCOME + 2]]).toEqual([3, 15, 0.1]);
+    expect([g[G_SPEND], g[G_SPEND + 1], g[G_SPEND + 2]]).toEqual([1.5, 2.5, 0.25]);
+    expect(g[G_PARTS]).toBe(42);
+    expect(g[G_KILLS]).toBe(77);
+    expect(g[G_COMMANDER_HP]).toBe(0); // no commander in this world
+  });
+
+  it('round-trips the predicted routes', () => {
+    expect(snap.routes.map((r) => ({ entry: r.entry, category: r.category, cells: Array.from(r.cells) }))).toEqual(w.routes);
   });
 
   const cases = [
     ['buildings', BUILDING_FIELDS],
     ['aliens', ALIEN_FIELDS],
     ['units', UNIT_FIELDS],
+    ['wrecks', WRECK_FIELDS],
+    ['projectiles', PROJECTILE_FIELDS],
   ] as const;
 
   for (const [name, schema] of cases) {

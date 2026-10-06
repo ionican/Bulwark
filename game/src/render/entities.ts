@@ -1,9 +1,12 @@
-// Instanced drawing of buildings, aliens and player units. One InstancedMesh per kind per detail
-// level, so the draw-call count depends on the number of kinds, not the number of entities.
-// Each frame every entity is frustum-tested, given its own LOD by camera distance (with
-// hysteresis, see lod.ts) and written straight into its mesh's instance matrix array.
+// Instanced drawing of everything the simulation sends: buildings, aliens, player units, wrecks,
+// belt items, projectiles, beams, shields, construction frames, health bars, the aliens' predicted
+// routes and selection markers. One InstancedMesh per kind per detail level, so the draw-call count
+// depends on the number of kinds, not the number of entities.
+// Each frame every entity is frustum-tested, given its own LOD by camera distance (with hysteresis,
+// see lod.ts) and written straight into its mesh's instance matrix array.
 
 import {
+  DoubleSide,
   Frustum,
   InstancedMesh,
   Matrix4,
@@ -12,16 +15,33 @@ import {
   Sphere,
   Vector3,
   type BufferGeometry,
+  type Material,
   type PerspectiveCamera,
   type Scene,
 } from 'three';
-import { BUILDING_KINDS, alienInfo, buildingSize, unitInfo, UNIT_KINDS, ALIEN_KINDS, U } from '../sim/kinds.ts';
+import { B, BUILDING_KINDS, CATEGORY_COUNT, ITEM_PART, SHIELD, U, UNIT_KINDS, ALIEN_KINDS, alienInfo, buildingSize, isBelt, unitInfo } from '../sim/kinds.ts';
+import { BF_COMPLETE, BF_FIRING, BF_UPGRADING } from '../sim/schema.ts';
 import { CAPACITY } from '../sim/world.ts';
 import { heightAt, type Terrain } from '../sim/terrain.ts';
 import { slotOf } from '../sim/table.ts';
 import type { Snapshot } from '../sim/snapshot.ts';
-import { alienGeometries, buildingGeometries, selectionMarkerGeometry, unitGeometries, type KindGeometry } from './geometry.ts';
-import { LOD_FULL, LOD_ICON, LOD_LEVELS, chooseLod } from './lod.ts';
+import {
+  alienGeometries,
+  barGeometry,
+  buildingGeometries,
+  constructionFrameGeometry,
+  dashedRingGeometry,
+  itemGeometries,
+  lineGeometry,
+  projectileGeometries,
+  routeMarkerGeometries,
+  selectionMarkerGeometry,
+  shieldDomeGeometry,
+  unitGeometries,
+  wreckGeometry,
+  type KindGeometry,
+} from './geometry.ts';
+import { LOD_FULL, LOD_ICON, LOD_LEVELS, LOD_THRESHOLDS, chooseLod } from './lod.ts';
 import { worldPerPixel } from './cameraRig.ts';
 import type { MobileView } from './interp.ts';
 import type { Pick } from './picking.ts';
@@ -35,21 +55,24 @@ export interface LodCounts {
 }
 
 /** Icon radius in screen pixels. */
-const ICON_PX = { building: 9, alien: 6.5, commander: 13, engineer: 8 } as const;
+const ICON_PX = { building: 9, belt: 5, alien: 6.5, commander: 13, engineer: 8, wreck: 4.5, route: 6 } as const;
+const BDX = [1, 0, -1, 0];
+const BDZ = [0, 1, 0, -1];
 
-function writeTRS(arr: Float32Array, i: number, c: number, s: number, scale: number, x: number, y: number, z: number) {
+/** Instance matrix = translate · rotateY(c, s) · scale(sx, sy, sz), written in place. */
+function writeM(arr: Float32Array, i: number, c: number, s: number, sx: number, sy: number, sz: number, x: number, y: number, z: number) {
   const o = i * 16;
-  arr[o] = c * scale;
+  arr[o] = c * sx;
   arr[o + 1] = 0;
-  arr[o + 2] = -s * scale;
+  arr[o + 2] = -s * sx;
   arr[o + 3] = 0;
   arr[o + 4] = 0;
-  arr[o + 5] = scale;
+  arr[o + 5] = sy;
   arr[o + 6] = 0;
   arr[o + 7] = 0;
-  arr[o + 8] = s * scale;
+  arr[o + 8] = s * sz;
   arr[o + 9] = 0;
-  arr[o + 10] = c * scale;
+  arr[o + 10] = c * sz;
   arr[o + 11] = 0;
   arr[o + 12] = x;
   arr[o + 13] = y;
@@ -57,41 +80,37 @@ function writeTRS(arr: Float32Array, i: number, c: number, s: number, scale: num
   arr[o + 15] = 1;
 }
 
-class KindSet {
-  /** meshes[kind * LOD_LEVELS + lod] */
+/** A batch of InstancedMeshes filled from zero each frame. */
+class Batch {
   readonly meshes: InstancedMesh[] = [];
   readonly counts: Int32Array;
-  readonly capacity: number;
   overflowed = false;
 
-  constructor(scene: Scene, geoms: KindGeometry[], capacity: number, model: MeshLambertMaterial, icon: MeshBasicMaterial, iconOrder: number) {
-    this.capacity = capacity;
-    this.counts = new Int32Array(geoms.length * LOD_LEVELS);
-    for (const g of geoms) {
-      for (const [lod, geo] of [g.full, g.simple, g.icon].entries() as Iterable<[number, BufferGeometry]>) {
-        const m = new InstancedMesh(geo, lod === LOD_ICON ? icon : model, capacity);
-        m.frustumCulled = false; // culled per instance below
-        m.count = 0;
-        m.visible = false;
-        if (lod === LOD_ICON) m.renderOrder = iconOrder;
-        scene.add(m);
-        this.meshes.push(m);
-      }
-    }
+  constructor(scene: Scene, geoms: BufferGeometry[], materials: Material[], capacity: number, order = 0) {
+    this.counts = new Int32Array(geoms.length);
+    geoms.forEach((g, i) => {
+      const m = new InstancedMesh(g, materials[i] ?? materials[0]!, capacity);
+      m.frustumCulled = false;
+      m.count = 0;
+      m.visible = false;
+      m.renderOrder = order;
+      scene.add(m);
+      this.meshes.push(m);
+    });
   }
 
   reset() {
     this.counts.fill(0);
   }
 
-  push(kind: number, lod: number, c: number, s: number, scale: number, x: number, y: number, z: number) {
-    const k = kind * LOD_LEVELS + lod;
+  push(k: number, c: number, s: number, sx: number, sy: number, sz: number, x: number, y: number, z: number) {
+    const m = this.meshes[k]!;
     const n = this.counts[k]!;
-    if (n >= this.capacity) {
+    if (n >= m.instanceMatrix.count) {
       this.overflowed = true;
       return;
     }
-    writeTRS(this.meshes[k]!.instanceMatrix.array as Float32Array, n, c, s, scale, x, y, z);
+    writeM(m.instanceMatrix.array as Float32Array, n, c, s, sx, sy, sz, x, y, z);
     this.counts[k] = n + 1;
   }
 
@@ -110,6 +129,21 @@ class KindSet {
   }
 }
 
+/** Kinds × three detail levels: mesh index = kind * LOD_LEVELS + lod. */
+function kindBatch(scene: Scene, geoms: KindGeometry[], capacity: number, model: Material, icon: Material, iconOrder: number): Batch {
+  const list: BufferGeometry[] = [];
+  const mats: Material[] = [];
+  for (const g of geoms) {
+    list.push(g.full, g.simple, g.icon);
+    mats.push(model, model, icon);
+  }
+  const b = new Batch(scene, list, mats, capacity);
+  b.meshes.forEach((m, i) => {
+    if (i % LOD_LEVELS === LOD_ICON) m.renderOrder = iconOrder;
+  });
+  return b;
+}
+
 export interface FrameInput {
   camera: PerspectiveCamera;
   viewportHeight: number;
@@ -117,47 +151,68 @@ export interface FrameInput {
   snapshot: Snapshot;
   aliens: MobileView;
   units: MobileView;
+  projectiles: MobileView;
   selection: readonly Pick[];
+  showRoutes: boolean;
 }
 
 export class EntityRenderer {
-  private readonly buildings: KindSet;
-  private readonly aliens: KindSet;
-  private readonly units: KindSet;
-  private readonly markers: InstancedMesh;
-  private markerCount = 0;
-  private readonly lodB = new Uint8Array(CAPACITY.buildings).fill(255);
-  private readonly lodBId = new Uint32Array(CAPACITY.buildings);
-  private readonly lodA = new Uint8Array(CAPACITY.aliens).fill(255);
-  private readonly lodAId = new Uint32Array(CAPACITY.aliens);
-  private readonly lodU = new Uint8Array(CAPACITY.units).fill(255);
-  private readonly lodUId = new Uint32Array(CAPACITY.units);
+  private readonly buildings: Batch;
+  private readonly aliens: Batch;
+  private readonly units: Batch;
+  private readonly wrecks: Batch;
+  private readonly items: Batch;
+  private readonly shots: Batch;
+  private readonly lines: Batch; // 0 beam, 1 work line
+  private readonly shields: Batch; // 0 dome, 1 ring
+  private readonly frames: Batch;
+  private readonly bars: Batch; // 0 back, 1 fill
+  private readonly routes: Batch;
+  private readonly markers: Batch;
+  private readonly lod = {
+    b: new Uint8Array(CAPACITY.buildings).fill(255),
+    bId: new Uint32Array(CAPACITY.buildings),
+    a: new Uint8Array(CAPACITY.aliens).fill(255),
+    aId: new Uint32Array(CAPACITY.aliens),
+    u: new Uint8Array(CAPACITY.units).fill(255),
+    uId: new Uint32Array(CAPACITY.units),
+    w: new Uint8Array(CAPACITY.wrecks).fill(255),
+    wId: new Uint32Array(CAPACITY.wrecks),
+  };
+  /** Row of each live alien / building / wreck by slot, for id lookups this frame. */
+  private readonly alienRow = new Int32Array(CAPACITY.aliens);
+  private readonly buildingRow = new Int32Array(CAPACITY.buildings);
+  private readonly wreckRow = new Int32Array(CAPACITY.wrecks);
   private readonly frustum = new Frustum();
   private readonly projView = new Matrix4();
   private readonly sphere = new Sphere();
   private readonly camPos = new Vector3();
   readonly counts: LodCounts = { full: 0, simple: 0, icon: 0, culled: 0 };
   private readonly terrain: Terrain;
+  private wppPerDist = 0;
 
   constructor(scene: Scene, terrain: Terrain) {
     this.terrain = terrain;
     const model = new MeshLambertMaterial({ vertexColors: true, flatShading: true });
     const icon = new MeshBasicMaterial({ vertexColors: true, depthTest: false, depthWrite: false });
-    this.buildings = new KindSet(scene, buildingGeometries(), 1024, model, icon, 10);
-    this.aliens = new KindSet(scene, alienGeometries(), 2048, model, icon, 11);
-    this.units = new KindSet(scene, unitGeometries(), 64, model, icon, 12);
-    this.markers = new InstancedMesh(selectionMarkerGeometry(), icon, 2048);
-    this.markers.frustumCulled = false;
-    this.markers.renderOrder = 15;
-    this.markers.count = 0;
-    scene.add(this.markers);
-    if (BUILDING_KINDS.length * 3 + ALIEN_KINDS.length * 3 + UNIT_KINDS.length * 3 !== this.meshCount() - 1) {
-      throw new Error('mesh table size mismatch');
-    }
-  }
-
-  meshCount(): number {
-    return this.buildings.meshes.length + this.aliens.meshes.length + this.units.meshes.length + 1;
+    const flat = new MeshBasicMaterial({ vertexColors: true });
+    this.buildings = kindBatch(scene, buildingGeometries(), 1536, model, icon, 10);
+    this.aliens = kindBatch(scene, alienGeometries(), 2048, model, icon, 11);
+    this.units = kindBatch(scene, unitGeometries(), 64, model, icon, 12);
+    this.wrecks = kindBatch(scene, [wreckGeometry()], 2048, model, icon, 9);
+    this.items = new Batch(scene, itemGeometries(), [model], 1536);
+    this.shots = new Batch(scene, projectileGeometries(), [flat], 2048);
+    this.lines = new Batch(scene, [lineGeometry(0.12, '#cfeeff'), lineGeometry(0.05, '#a8f5df')], [flat], 512);
+    const dome = new MeshBasicMaterial({ color: '#cfe6ff', transparent: true, opacity: 0.12, depthWrite: false, side: DoubleSide });
+    this.shields = new Batch(scene, [shieldDomeGeometry(), dashedRingGeometry()], [dome, flat], 128);
+    this.frames = new Batch(scene, [constructionFrameGeometry()], [icon], 512, 14);
+    const back = new MeshBasicMaterial({ color: '#120f0d', depthTest: false, depthWrite: false });
+    const fill = new MeshBasicMaterial({ color: '#f4efe6', depthTest: false, depthWrite: false });
+    this.bars = new Batch(scene, [barGeometry(), barGeometry()], [back, fill], 1024, 13);
+    this.bars.meshes[1]!.renderOrder = 14;
+    this.routes = new Batch(scene, routeMarkerGeometries(), [icon], 1024, 8);
+    this.markers = new Batch(scene, [selectionMarkerGeometry()], [icon], 2048, 15);
+    if (BUILDING_KINDS.length + ALIEN_KINDS.length + UNIT_KINDS.length === 0) throw new Error('no kinds');
   }
 
   private lodFor(state: Uint8Array, ids: Uint32Array, id: number, dist: number): number {
@@ -181,75 +236,154 @@ export class EntityRenderer {
     else this.counts.icon++;
   }
 
+  private distTo(x: number, y: number, z: number): number {
+    const dx = x - this.camPos.x;
+    const dy = y - this.camPos.y;
+    const dz = z - this.camPos.z;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz);
+  }
+
+  /** Screen-aligned health bar above a point (only for damaged things at model detail). */
+  private bar(x: number, y: number, z: number, frac: number, len: number, yc: number, ys: number) {
+    const f = frac < 0 ? 0 : frac > 1 ? 1 : frac;
+    const sx = x - yc * (len / 2);
+    const sz = z + ys * (len / 2);
+    this.bars.push(0, yc, ys, len, 1, 1, sx, y, sz);
+    this.bars.push(1, yc, ys, Math.max(0.001, len * f), 1.4, 0.6, sx, y + 0.01, sz);
+  }
+
+  /** Line from (x0, z0) to (x1, z1) at height y. */
+  private line(k: number, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number) {
+    const dx = x1 - x0;
+    const dz = z1 - z0;
+    const len = Math.sqrt(dx * dx + dz * dz);
+    if (len < 1e-3) return;
+    this.lines.push(k, dx / len, -dz / len, len, 1, 1, x0, (y0 + y1) / 2, z0);
+  }
+
   update(f: FrameInput): void {
     const { camera, viewportHeight: vh, snapshot: snap } = f;
     const t = this.terrain;
     this.projView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     this.frustum.setFromProjectionMatrix(this.projView);
     this.camPos.copy(camera.position);
-    const cx = this.camPos.x;
-    const cy = this.camPos.y;
-    const cz = this.camPos.z;
-    const wppPerDist = worldPerPixel(camera, 1, vh);
+    this.wppPerDist = worldPerPixel(camera, 1, vh);
+    const wppd = this.wppPerDist;
     const yc = Math.cos(f.yaw);
     const ys = Math.sin(f.yaw);
     this.counts.full = this.counts.simple = this.counts.icon = this.counts.culled = 0;
-    this.markerCount = 0;
+    for (const b of [this.buildings, this.aliens, this.units, this.wrecks, this.items, this.shots, this.lines, this.shields, this.frames, this.bars, this.routes, this.markers]) b.reset();
 
-    // Buildings.
-    const B = snap.buildings;
-    const bset = this.buildings;
-    bset.reset();
-    for (let r = 0; r < B.count; r++) {
-      const kind = B.cols.kind[r]!;
-      const size = buildingSize(kind);
-      const x = B.cols.tx[r]! + size / 2;
-      const z = B.cols.ty[r]! + size / 2;
-      const y = heightAt(t, x, z);
-      if (!this.visible(x, y + 0.8, z, size * 0.75 + 1)) {
-        this.counts.culled++;
-        continue;
-      }
-      const dx = x - cx;
-      const dy = y - cy;
-      const dz = z - cz;
-      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      const lod = this.lodFor(this.lodB, this.lodBId, B.id[r]!, dist);
-      this.count(lod);
-      if (lod === LOD_ICON) bset.push(kind, lod, yc, ys, Math.max(size * 0.45, ICON_PX.building * wppPerDist * dist), x, y + 0.3, z);
-      else bset.push(kind, lod, 1, 0, 1, x, y, z);
-    }
-    bset.commit();
+    // Row lookups for this frame.
+    this.alienRow.fill(-1);
+    for (let r = 0; r < f.aliens.count; r++) this.alienRow[slotOf(f.aliens.id[r]!)] = r;
+    this.buildingRow.fill(-1);
+    for (let r = 0; r < snap.buildings.count; r++) this.buildingRow[slotOf(snap.buildings.id[r]!)] = r;
+    this.wreckRow.fill(-1);
+    for (let r = 0; r < snap.wrecks.count; r++) this.wreckRow[slotOf(snap.wrecks.id[r]!)] = r;
 
-    this.drawMobiles(f.aliens, this.aliens, this.lodA, this.lodAId, (k) => alienInfo(k).radius, () => ICON_PX.alien, wppPerDist, yc, ys);
+    this.drawBuildings(f, yc, ys);
+    this.drawMobiles(f.aliens, this.aliens, this.lod.a, this.lod.aId, (k) => alienInfo(k).radius, () => ICON_PX.alien, (k) => alienInfo(k).hp, yc, ys, snap.aliens.cols.hp);
     this.drawMobiles(
       f.units,
       this.units,
-      this.lodU,
-      this.lodUId,
+      this.lod.u,
+      this.lod.uId,
       (k) => unitInfo(k).radius,
       (k) => (k === U.commander ? ICON_PX.commander : ICON_PX.engineer),
-      wppPerDist,
+      (k) => unitInfo(k).hp,
       yc,
       ys,
+      snap.units.cols.hp,
     );
-    this.drawSelection(f, wppPerDist);
+    this.drawWorkLines(f);
+    this.drawWrecks(snap, yc, ys);
+    this.drawShots(f.projectiles);
+    if (f.showRoutes) this.drawRoutes(snap);
+    this.drawSelection(f, wppd);
+    for (const b of [this.buildings, this.aliens, this.units, this.wrecks, this.items, this.shots, this.lines, this.shields, this.frames, this.bars, this.routes, this.markers]) b.commit();
+    void t;
+  }
+
+  private drawBuildings(f: FrameInput, yc: number, ys: number) {
+    const snap = f.snapshot;
+    const B_ = snap.buildings;
+    const c = B_.cols;
+    const t = this.terrain;
+    const wppd = this.wppPerDist;
+    for (let r = 0; r < B_.count; r++) {
+      const kind = c.kind[r]!;
+      const size = buildingSize(kind);
+      const x = c.tx[r]! + size / 2;
+      const z = c.ty[r]! + size / 2;
+      const y = heightAt(t, x, z);
+      const flags = c.flags[r]!;
+      const shieldUp = kind === B.shield && c.shield[r]! > 0 && flags & BF_COMPLETE;
+      if (!this.visible(x, y + 0.8, z, shieldUp ? SHIELD.radius : size * 0.75 + 1)) {
+        this.counts.culled++;
+        continue;
+      }
+      const dist = this.distTo(x, y, z);
+      const lod = this.lodFor(this.lod.b, this.lod.bId, B_.id[r]!, dist);
+      this.count(lod);
+      const belt = isBelt(kind);
+      const rc = belt ? BDX[c.dir[r]!]! : 1;
+      const rs = belt ? -BDZ[c.dir[r]!]! : 0;
+      const complete = (flags & BF_COMPLETE) !== 0;
+      const k = kind * LOD_LEVELS + lod;
+      if (lod === LOD_ICON) {
+        const s = Math.max(size * 0.45, (belt ? ICON_PX.belt : ICON_PX.building) * wppd * dist) * (complete ? 1 : 0.7);
+        if (belt) this.buildings.push(k, rc, rs, s, 1, s, x, y + 0.3, z);
+        else this.buildings.push(k, yc, ys, s, 1, s, x, y + 0.3, z);
+      } else {
+        const sy = complete ? 1 : 0.15 + 0.85 * c.progress[r]!;
+        this.buildings.push(k, rc, rs, 1, sy, 1, x, y, z);
+      }
+      // Construction or upgrade under way: a scaffold frame round the footprint.
+      if (!complete || flags & BF_UPGRADING) {
+        const s = Math.max(size / 2 + 0.15, (ICON_PX.building + 3) * wppd * dist);
+        this.frames.push(0, 1, 0, s, 1, s, x, y + 0.12, z);
+      }
+      if (lod !== LOD_ICON) {
+        // Belt item.
+        if (belt && c.item[r]! !== 0) {
+          const p = c.itemPos[r]! - 0.5;
+          this.items.push(Math.min(ITEM_PART, c.item[r]!), rc, rs, 1, 1, 1, x + BDX[c.dir[r]!]! * p, y + 0.12, z + BDZ[c.dir[r]!]! * p);
+        }
+        if (c.hp[r]! < c.maxHp[r]! - 0.5 && complete && !belt) this.bar(x, y + 2.4, z, c.hp[r]! / c.maxHp[r]!, size * 0.9, yc, ys);
+      }
+      // Beam turret firing: a beam to its target.
+      if (kind === B.beam && flags & BF_FIRING && c.target[r]! > 0) {
+        const ar = this.alienRow[slotOf(c.target[r]! - 1)]!;
+        if (ar >= 0 && f.aliens.id[ar] === c.target[r]! - 1) {
+          const ax = f.aliens.x[ar]!;
+          const az = f.aliens.z[ar]!;
+          this.line(0, x, y + 1.8, z, ax, heightAt(t, ax, az) + 0.5, az);
+        }
+      }
+      // Shield bubble.
+      if (shieldUp) {
+        const frac = c.shield[r]! / SHIELD.capacity;
+        this.shields.push(0, 1, 0, SHIELD.radius, SHIELD.radius * (0.25 + 0.35 * frac), SHIELD.radius, x, y, z);
+        this.shields.push(1, 1, 0, SHIELD.radius, 1, SHIELD.radius, x, y + 0.1, z);
+      }
+    }
   }
 
   private drawMobiles(
     v: MobileView,
-    set: KindSet,
+    set: Batch,
     state: Uint8Array,
     ids: Uint32Array,
     radius: (k: number) => number,
     iconPx: (k: number) => number,
-    wppPerDist: number,
+    maxHp: (k: number) => number,
     yc: number,
     ys: number,
+    hp: Float32Array,
   ) {
     const t = this.terrain;
-    const { x: cx, y: cy, z: cz } = this.camPos;
-    set.reset();
+    const wppd = this.wppPerDist;
     for (let r = 0; r < v.count; r++) {
       const kind = v.kind[r]!;
       const x = v.x[r]!;
@@ -260,37 +394,150 @@ export class EntityRenderer {
         this.counts.culled++;
         continue;
       }
-      const dx = x - cx;
-      const dy = y - cy;
-      const dz = z - cz;
-      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      const dist = this.distTo(x, y, z);
       const lod = this.lodFor(state, ids, v.id[r]!, dist);
       this.count(lod);
-      if (lod === LOD_ICON) set.push(kind, lod, yc, ys, Math.max(rad, iconPx(kind) * wppPerDist * dist), x, y + 0.4, z);
-      else set.push(kind, lod, v.fx[r]!, -v.fz[r]!, lod === LOD_FULL ? 1 : 1.6, x, y, z);
+      const k = kind * LOD_LEVELS + lod;
+      if (lod === LOD_ICON) {
+        const s = Math.max(rad, iconPx(kind) * wppd * dist);
+        set.push(k, yc, ys, s, 1, s, x, y + 0.4, z);
+      } else {
+        const s = lod === LOD_FULL ? 1 : 1.6;
+        set.push(k, v.fx[r]!, -v.fz[r]!, s, s, s, x, y, z);
+        const m = maxHp(kind);
+        if (hp[r]! < m - 0.5) this.bar(x, y + rad * 2 + 0.9, z, hp[r]! / m, Math.max(0.8, rad * 2), yc, ys);
+      }
     }
-    set.commit();
   }
 
-  private drawSelection(f: FrameInput, wppPerDist: number) {
-    const arr = this.markers.instanceMatrix.array as Float32Array;
+  private drawWorkLines(f: FrameInput) {
+    const uc = f.snapshot.units.cols;
     const t = this.terrain;
-    const { x: cx, y: cy, z: cz } = this.camPos;
-    let n = 0;
-    const B = f.snapshot.buildings;
-    const add = (x: number, z: number, half: number, iconPx: number) => {
-      if (n >= this.markers.instanceMatrix.count) return;
+    for (let r = 0; r < f.units.count; r++) {
+      const target = uc.work[r]! - 1;
+      if (target < 0) continue;
+      const x = f.units.x[r]!;
+      const z = f.units.z[r]!;
+      const y = heightAt(t, x, z) + 0.6;
+      const br = this.buildingRow[slotOf(target)]!;
+      const B_ = f.snapshot.buildings;
+      if (br >= 0 && B_.id[br] === target) {
+        const half = buildingSize(B_.cols.kind[br]!) / 2;
+        const bx = B_.cols.tx[br]! + half;
+        const bz = B_.cols.ty[br]! + half;
+        this.line(1, x, y, z, bx, heightAt(t, bx, bz) + 0.5, bz);
+        continue;
+      }
+      const wr = this.wreckRow[slotOf(target)]!;
+      const W_ = f.snapshot.wrecks;
+      if (wr >= 0 && W_.id[wr] === target) {
+        const wx = W_.cols.x[wr]!;
+        const wz = W_.cols.z[wr]!;
+        this.line(1, x, y, z, wx, heightAt(t, wx, wz) + 0.2, wz);
+      }
+    }
+  }
+
+  private drawWrecks(snap: Snapshot, yc: number, ys: number) {
+    const W_ = snap.wrecks;
+    const t = this.terrain;
+    for (let r = 0; r < W_.count; r++) {
+      const x = W_.cols.x[r]!;
+      const z = W_.cols.z[r]!;
       const y = heightAt(t, x, z);
-      const dist = Math.hypot(x - cx, y - cy, z - cz);
-      const scale = Math.max(half, (iconPx + 8) * wppPerDist * dist);
-      writeTRS(arr, n++, 1, 0, scale, x, y + 0.15, z);
+      if (!this.visible(x, y, z, 1.2)) continue;
+      const dist = this.distTo(x, y, z);
+      const lod = this.lodFor(this.lod.w, this.lod.wId, W_.id[r]!, dist);
+      const size = 0.5 + Math.min(1.2, Math.sqrt(W_.cols.salvage[r]! / 10));
+      if (lod === LOD_ICON) {
+        const s = Math.max(0.5, ICON_PX.wreck * this.wppPerDist * dist);
+        this.wrecks.push(lod, yc, ys, s, 1, s, x, y + 0.25, z);
+      } else this.wrecks.push(lod, 1, 0, size, size, size, x, y, z);
+    }
+  }
+
+  private drawShots(v: MobileView) {
+    const t = this.terrain;
+    const far = LOD_THRESHOLDS[1]! * 1.1;
+    for (let r = 0; r < v.count; r++) {
+      const x = v.x[r]!;
+      const z = v.z[r]!;
+      const y = heightAt(t, x, z) + 0.9;
+      if (this.distTo(x, y, z) > far || !this.visible(x, y, z, 0.5)) continue;
+      this.shots.push(v.kind[r]!, v.fx[r]!, -v.fz[r]!, 1, 1, 1, x, y, z);
+    }
+  }
+
+  private routeCats = new Map<number, number>();
+  private routeCatsVersion = -1;
+
+  /**
+   * Markers along each predicted route, spaced to a constant screen distance. Where routes of
+   * several categories share a tile, one marker is drawn there and its shape cycles through the
+   * categories that pass, so a shared stretch shows every alien kind that will use it.
+   */
+  private drawRoutes(snap: Snapshot) {
+    const t = this.terrain;
+    const W = t.w;
+    const wppd = this.wppPerDist;
+    if (this.routeCatsVersion !== snap.routesVersion) {
+      this.routeCats.clear();
+      for (const r of snap.routes) for (const c of r.cells) this.routeCats.set(c, (this.routeCats.get(c) ?? 0) | (1 << r.category));
+      this.routeCatsVersion = snap.routesVersion;
+    }
+    const cats: number[] = [];
+    for (const route of snap.routes) {
+      const cells = route.cells;
+      if (cells.length < 2) continue;
+      let i = 1;
+      let n = 0;
+      while (i < cells.length - 1) {
+        const c0 = cells[i]!;
+        const mask = this.routeCats.get(c0) ?? 0;
+        // Only the lowest category through this tile draws it.
+        if ((mask & ((1 << route.category) - 1)) === 0) {
+          const c1 = cells[i + 1]!;
+          const x = (c0 % W) + 0.5;
+          const z = Math.floor(c0 / W) + 0.5;
+          const dx = (c1 % W) - (c0 % W);
+          const dz = Math.floor(c1 / W) - Math.floor(c0 / W);
+          const l = Math.sqrt(dx * dx + dz * dz) || 1;
+          const y = heightAt(t, x, z) + 0.2;
+          const wpp = wppd * this.distTo(x, y, z);
+          if (this.visible(x, y, z, 1)) {
+            cats.length = 0;
+            for (let k = 0; k < CATEGORY_COUNT; k++) if (mask & (1 << k)) cats.push(k);
+            const cat = cats[n % cats.length]!;
+            const s = Math.max(0.35, ICON_PX.route * wpp);
+            // Marker "up" (-Z) turned onto the route direction: rotation (cos, sin) = (-uz, -ux).
+            this.routes.push(cat, -dz / l, -dx / l, s, 1, s, x, y, z);
+          }
+          n++;
+          i += Math.max(3, Math.round(ICON_PX.route * 5 * wpp));
+        } else i++;
+      }
+    }
+  }
+
+  private drawSelection(f: FrameInput, wppd: number) {
+    const t = this.terrain;
+    const add = (x: number, z: number, half: number, iconPx: number) => {
+      const y = heightAt(t, x, z);
+      const dist = this.distTo(x, y, z);
+      const scale = Math.max(half, (iconPx + 8) * wppd * dist);
+      this.markers.push(0, 1, 0, scale, 1, scale, x, y + 0.15, z);
     };
+    const B_ = f.snapshot.buildings;
     for (const p of f.selection) {
       if (p.type === 'building') {
-        const r = findRow(B.id, B.count, p.id);
-        if (r < 0) continue;
-        const size = buildingSize(B.cols.kind[r]!);
-        add(B.cols.tx[r]! + size / 2, B.cols.ty[r]! + size / 2, size / 2 + 0.25, ICON_PX.building);
+        const r = this.buildingRow[slotOf(p.id)]!;
+        if (r < 0 || B_.id[r] !== p.id) continue;
+        const size = buildingSize(B_.cols.kind[r]!);
+        add(B_.cols.tx[r]! + size / 2, B_.cols.ty[r]! + size / 2, size / 2 + 0.25, ICON_PX.building);
+      } else if (p.type === 'wreck') {
+        const r = this.wreckRow[slotOf(p.id)]!;
+        if (r < 0 || f.snapshot.wrecks.id[r] !== p.id) continue;
+        add(f.snapshot.wrecks.cols.x[r]!, f.snapshot.wrecks.cols.z[r]!, 0.8, ICON_PX.wreck);
       } else {
         const v = p.type === 'unit' ? f.units : f.aliens;
         const r = findRow(v.id, v.count, p.id);
@@ -299,18 +546,10 @@ export class EntityRenderer {
         add(v.x[r]!, v.z[r]!, rad + 0.3, p.type === 'unit' && v.kind[r] === U.commander ? ICON_PX.commander : ICON_PX.alien);
       }
     }
-    this.markerCount = n;
-    this.markers.count = n;
-    this.markers.visible = n > 0;
-    if (n > 0) this.markers.instanceMatrix.needsUpdate = true;
-  }
-
-  get selectionMarkers(): number {
-    return this.markerCount;
   }
 
   get overflowed(): boolean {
-    return this.buildings.overflowed || this.aliens.overflowed || this.units.overflowed;
+    return [this.buildings, this.aliens, this.units, this.wrecks, this.items, this.shots, this.lines, this.routes].some((b) => b.overflowed);
   }
 }
 

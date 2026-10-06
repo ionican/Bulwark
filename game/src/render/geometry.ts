@@ -113,6 +113,42 @@ const box = (w: number, h: number, d: number) => new BoxGeometry(w, h, d);
 const cyl = (rt: number, rb: number, h: number, seg = 8) => new CylinderGeometry(rt, rb, h, seg);
 const cone = (r: number, h: number, seg = 4) => new ConeGeometry(r, h, seg);
 
+// ---- belt pieces (face +X; the renderer turns them to their direction) ----------------------
+
+/** Flat arrow in the XZ plane pointing +X, centred on (cx, cz). */
+function arrow(cx: number, cz: number, len: number, wid: number, y: number, hex: string, angle = 0): BufferGeometry {
+  const pts: Pt[] = [
+    [len / 2, 0],
+    [-len / 2, wid / 2],
+    [-len / 4, 0],
+    [-len / 2, -wid / 2],
+  ];
+  // Shape y maps to world -z after rotateX(-PI/2).
+  const g = new ShapeGeometry(shapeFrom(pts)).rotateX(-Math.PI / 2).rotateY(angle).translate(cx, y, cz);
+  return paint(g, hex);
+}
+
+function beltModel(kind: 'belt' | 'splitter' | 'merger', full: boolean): BufferGeometry {
+  const P = PALETTE;
+  const parts = [part(box(0.98, 0.12, 0.8), '#45484a', { y: 0.06 })];
+  if (full) {
+    parts.push(part(box(0.98, 0.16, 0.08), P.metal, { y: 0.08, z: 0.42 }));
+    parts.push(part(box(0.98, 0.16, 0.08), P.metal, { y: 0.08, z: -0.42 }));
+  }
+  if (kind === 'belt') parts.push(arrow(0, 0, 0.6, 0.5, 0.13, P.pale));
+  else if (kind === 'splitter') {
+    parts.push(part(box(0.3, 0.3, 0.3), P.sand, { y: 0.2 }));
+    parts.push(arrow(0, 0.3, 0.35, 0.3, 0.13, P.pale, -Math.PI / 2)); // out to +Z
+    parts.push(arrow(0, -0.3, 0.35, 0.3, 0.13, P.pale, Math.PI / 2)); // out to -Z
+  } else {
+    parts.push(part(box(0.3, 0.3, 0.3), P.moss, { y: 0.2 }));
+    parts.push(arrow(0.3, 0, 0.35, 0.3, 0.13, P.pale));
+    parts.push(arrow(0, 0.3, 0.3, 0.25, 0.13, P.pale, Math.PI / 2)); // in from +Z
+    parts.push(arrow(0, -0.3, 0.3, 0.25, 0.13, P.pale, -Math.PI / 2)); // in from -Z
+  }
+  return merge(parts);
+}
+
 // ---- buildings: full models ----------------------------------------------------------------
 // Built centred on the footprint at y = 0, footprint side `f` tiles.
 
@@ -213,6 +249,10 @@ function buildingFull(kind: BuildingKind): BufferGeometry {
         part(new TorusGeometry(0.45, 0.06, 4, 12), P.pale, { y: 1.55, rx: Math.PI / 2 }),
         part(new SphereGeometry(0.18, 6, 4), P.rare, { y: 1.75 }),
       ]);
+    case 'belt':
+    case 'splitter':
+    case 'merger':
+      return beltModel(kind, true);
     case 'tempTurret':
       return merge([
         part(cyl(0.35, 0.42, 0.3, 6), P.friendDark, { y: 0.15 }),
@@ -256,6 +296,10 @@ function buildingSimple(kind: BuildingKind): BufferGeometry {
       return merge([part(box(1.6, 0.4, 1.6), P.plate, { y: 0.2 }), part(new TorusGeometry(0.6, 0.15, 4, 12), P.pale, { y: 1.0, rx: Math.PI / 2 })]);
     case 'tempTurret':
       return merge([part(cyl(0.4, 0.4, 0.5, 6), P.friend, { y: 0.25 })]);
+    case 'belt':
+    case 'splitter':
+    case 'merger':
+      return beltModel(kind, false);
   }
 }
 
@@ -417,6 +461,10 @@ const BUILDING_ICONS: Record<BuildingKind, IconSpec> = {
     outer: [...Array.from({ length: 13 }, (_, i) => [Math.cos((i / 12) * Math.PI), -0.6 + 1.4 * Math.sin((i / 12) * Math.PI)] as Pt)],
     holes: [rev([...Array.from({ length: 13 }, (_, i) => [0.55 * Math.cos((i / 12) * Math.PI), -0.45 + 0.85 * Math.sin((i / 12) * Math.PI)] as Pt)])],
   },
+  // Belt pieces point along +X in icon space (the renderer turns them to their direction).
+  belt: { outer: [[0.9, 0], [-0.1, 0.75], [-0.1, 0.3], [-0.9, 0.3], [-0.9, -0.3], [-0.1, -0.3], [-0.1, -0.75]] },
+  splitter: { outer: [[0, 0.95], [0.5, 0.45], [0.2, 0.45], [0.2, -0.45], [0.5, -0.45], [0, -0.95], [-0.5, -0.45], [-0.2, -0.45], [-0.2, 0.45], [-0.5, 0.45]] },
+  merger: { outer: [[0.95, 0], [0.4, 0.55], [0.4, 0.25], [-0.9, 0.9], [-0.9, -0.9], [0.4, -0.25], [0.4, -0.55]] },
   tempTurret: { outer: [[-0.25, 0.8], [0.25, 0.8], [0.25, 0.25], [0.8, 0.25], [0.8, -0.25], [0.25, -0.25], [0.25, -0.8], [-0.25, -0.8], [-0.25, -0.25], [-0.8, -0.25], [-0.8, 0.25], [-0.25, 0.25]] },
 };
 
@@ -507,4 +555,138 @@ export function entryGeometry(): BufferGeometry {
     g(chev, PALETTE.iconAlien, 0.08),
     g(back, PALETTE.iconAlien, 0.08),
   ]);
+}
+
+// ---- M2: items, wrecks, projectiles, beams, shields, construction, routes, ghost -------------
+
+/** Belt items, indexed by item kind (0 unused): salvage chunk, scrap cube, alloy ingot, part. */
+export function itemGeometries(): BufferGeometry[] {
+  const P = PALETTE;
+  return [
+    merge([part(box(0.1, 0.1, 0.1), P.ink)]),
+    merge([part(new DodecahedronGeometry(0.17, 0), '#b07a4a', { y: 0.17 })]),
+    merge([part(box(0.24, 0.24, 0.24), '#a8a8a0', { y: 0.16 })]),
+    merge([part(box(0.36, 0.12, 0.2), '#d9c27a', { y: 0.1 })]),
+    merge([part(cyl(0.18, 0.18, 0.1, 6), P.pale, { y: 0.1 }), part(cyl(0.07, 0.07, 0.12, 6), P.ink, { y: 0.11 })]),
+  ];
+}
+
+/** Wreck: a heap of dark shards (models) and a flat X (icon). */
+export function wreckGeometry(): KindGeometry {
+  const P = PALETTE;
+  const shards = [];
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2;
+    shards.push(part(cone(0.18, 0.5, 4), i % 2 ? P.alienDark : '#3a3430', { x: Math.cos(a) * 0.3, y: 0.15, z: Math.sin(a) * 0.3, rx: 0.9 * Math.sin(a), rz: 0.9 * Math.cos(a) }));
+  }
+  shards.push(part(box(0.5, 0.15, 0.4), '#3a3430', { y: 0.07, ry: 0.4 }));
+  const full = merge(shards);
+  const simple = merge([part(new DodecahedronGeometry(0.4, 0), '#4a3a30', { y: 0.15, sy: 0.4 })]);
+  const xs: Pt[] = [[-0.9, -0.6], [-0.6, -0.9], [0, -0.3], [0.6, -0.9], [0.9, -0.6], [0.3, 0], [0.9, 0.6], [0.6, 0.9], [0, 0.3], [-0.6, 0.9], [-0.9, 0.6], [-0.3, 0]];
+  const icon = iconGeometry({ outer: xs }, '#8a8078');
+  return { full, simple, icon };
+}
+
+/** Projectiles by P_* kind: bullet, shell, heavy slug, alien shot. All face +X. */
+export function projectileGeometries(): BufferGeometry[] {
+  return [
+    merge([part(box(0.35, 0.08, 0.08), '#fff6b8')]),
+    merge([part(new SphereGeometry(0.16, 6, 4), '#ffe08a')]),
+    merge([part(box(0.6, 0.18, 0.18), '#ffffff'), part(cone(0.12, 0.25, 4), '#ffd27a', { x: 0.42, rz: -Math.PI / 2 })]),
+    merge([part(new OctahedronGeometry(0.13), '#ff8a3a', { sx: 1.8 })]),
+  ];
+}
+
+/** Unit-length bar along +X (beam, build and reclaim lines). */
+export function lineGeometry(thick: number, hex: string): BufferGeometry {
+  return merge([part(box(1, thick, thick), hex, { x: 0.5 })]);
+}
+
+export function shieldDomeGeometry(): BufferGeometry {
+  return new SphereGeometry(1, 20, 8, 0, Math.PI * 2, 0, Math.PI / 2);
+}
+
+/** Dashed ring of radius 1 in the XZ plane. */
+export function dashedRingGeometry(dashes = 24, width = 0.04): BufferGeometry {
+  const parts: BufferGeometry[] = [];
+  for (let i = 0; i < dashes; i++) {
+    const a0 = (i / dashes) * Math.PI * 2;
+    const a1 = a0 + (Math.PI * 2) / dashes * 0.55;
+    const pts: Pt[] = [];
+    for (let k = 0; k <= 4; k++) pts.push([Math.cos(a0 + ((a1 - a0) * k) / 4), Math.sin(a0 + ((a1 - a0) * k) / 4)]);
+    for (let k = 4; k >= 0; k--) pts.push([(1 - width) * Math.cos(a0 + ((a1 - a0) * k) / 4), (1 - width) * Math.sin(a0 + ((a1 - a0) * k) / 4)]);
+    parts.push(paint(new ShapeGeometry(shapeFrom(pts)).rotateX(-Math.PI / 2), '#e6f2ff'));
+  }
+  return merge(parts);
+}
+
+/** Construction frame: a dashed square round a unit footprint (shape differs from the selection brackets). */
+export function constructionFrameGeometry(): BufferGeometry {
+  const P = PALETTE;
+  const parts: BufferGeometry[] = [];
+  const n = 4;
+  const t = 0.08;
+  for (let side = 0; side < 4; side++) {
+    for (let i = 0; i < n; i++) {
+      const a = -1 + (2 * i) / n + 0.06;
+      const b = a + 2 / n - 0.18;
+      const r: Pt[] = side === 0 ? rect(a, 1 - t, b, 1) : side === 1 ? rect(a, -1, b, -1 + t) : side === 2 ? rect(-1, a, -1 + t, b) : rect(1 - t, a, 1, b);
+      parts.push(paint(new ShapeGeometry(shapeFrom(r)).rotateX(-Math.PI / 2), P.sand));
+    }
+  }
+  // Two diagonal struts across the corners: reads as "scaffold".
+  parts.push(paint(new ShapeGeometry(shapeFrom([[-1, -1], [-0.85, -1], [-0.55, -0.7], [-0.7, -0.7]])).rotateX(-Math.PI / 2), P.sand));
+  parts.push(paint(new ShapeGeometry(shapeFrom([[1, 1], [0.85, 1], [0.55, 0.7], [0.7, 0.7]])).rotateX(-Math.PI / 2), P.sand));
+  return merge(parts);
+}
+
+/**
+ * Route markers per alien target category, shaped like the icon of the alien kind that uses it:
+ * commander = hunter chevron, defences = rusher triangle, walls and turrets = breaker block,
+ * economy = saboteur bow-tie. They point along the route ("up" = -Z, turned by the renderer).
+ */
+export function routeMarkerGeometries(): BufferGeometry[] {
+  // Hollow (a light rim round a dark centre), so a marker never reads as a live alien icon,
+  // which is solid. The difference is shape, not colour.
+  const fill = '#ffb347';
+  const hollow = (spec: IconSpec): IconSpec => {
+    const pts = spec.outer;
+    let cx = 0;
+    let cy = 0;
+    for (const [x, y] of pts) {
+      cx += x;
+      cy += y;
+    }
+    cx /= pts.length;
+    cy /= pts.length;
+    return { outer: pts, holes: [rev(pts.map(([x, y]) => [cx + (x - cx) * 0.45, cy + (y - cy) * 0.45] as Pt))] };
+  };
+  return [
+    iconGeometry(hollow(ALIEN_ICONS.hunter), fill),
+    iconGeometry(hollow(ALIEN_ICONS.rusher), fill),
+    iconGeometry(hollow(ALIEN_ICONS.breaker), fill),
+    iconGeometry(hollow(ALIEN_ICONS.saboteur), fill),
+  ];
+}
+
+/** Ghost marks: a tick (placement allowed) and a cross (not allowed), flat, unit radius. */
+export function ghostMarkGeometry(ok: boolean): BufferGeometry {
+  const tick: Pt[] = [[-0.9, 0.05], [-0.55, 0.4], [-0.25, 0.1], [0.55, 0.9], [0.9, 0.55], [-0.25, -0.6]];
+  const cross: Pt[] = [[-0.9, -0.6], [-0.6, -0.9], [0, -0.3], [0.6, -0.9], [0.9, -0.6], [0.3, 0], [0.9, 0.6], [0.6, 0.9], [0, 0.3], [-0.6, 0.9], [-0.9, 0.6], [-0.3, 0]];
+  return iconGeometry({ outer: ok ? tick : cross }, ok ? '#a8f5df' : '#ffd0a0');
+}
+
+/** Square outline round a unit footprint: solid (valid) or dashed (invalid). */
+export function ghostOutlineGeometry(ok: boolean): BufferGeometry {
+  if (!ok) return constructionFrameGeometry();
+  const t = 0.1;
+  const parts = [rect(-1, 1 - t, 1, 1), rect(-1, -1, 1, -1 + t), rect(-1, -1, -1 + t, 1), rect(1 - t, -1, 1, 1)].map((r) =>
+    paint(new ShapeGeometry(shapeFrom(r)).rotateX(-Math.PI / 2), '#a8f5df'),
+  );
+  return merge(parts);
+}
+
+/** Health bar: unit-length strip along +X (back plate and fill are separate meshes). */
+export function barGeometry(): BufferGeometry {
+  return merge([part(box(1, 0.06, 0.16), '#ffffff', { x: 0.5 })]);
 }

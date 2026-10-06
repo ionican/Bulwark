@@ -9,7 +9,7 @@ import { heightAt, type Terrain } from '../sim/terrain.ts';
 import { buildingSize } from '../sim/kinds.ts';
 import { worldPerPixel } from './cameraRig.ts';
 
-export type PickType = 'unit' | 'building' | 'alien';
+export type PickType = 'unit' | 'building' | 'alien' | 'wreck';
 
 export interface Pick {
   type: PickType;
@@ -34,6 +34,8 @@ export interface PickView {
   buildings: { count: number; id: Uint32Array; kind: Uint8Array; tx: Int16Array; ty: Int16Array };
   units: MobileRows;
   aliens: MobileRows;
+  /** Optional: wrecks (picked last, so a click on a building or alien wins). */
+  wrecks?: MobileRows;
 }
 
 export function buildOccupancy(b: PickView['buildings'], w: number, h: number, out: Int32Array): Int32Array {
@@ -121,6 +123,10 @@ export function pickAt(view: PickView, gx: number, gz: number, pad: number): Pic
   }
   const a = nearestMobile(view.aliens, gx, gz, pad, (k) => alienInfo(k).radius);
   if (a >= 0) return { type: 'alien', id: view.aliens.id[a]!, kind: view.aliens.kind[a]! };
+  if (view.wrecks) {
+    const r = nearestMobile(view.wrecks, gx, gz, pad, () => 0.6);
+    if (r >= 0) return { type: 'wreck', id: view.wrecks.id[r]!, kind: view.wrecks.kind[r]! };
+  }
   return null;
 }
 

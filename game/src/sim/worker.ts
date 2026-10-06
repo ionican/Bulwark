@@ -53,6 +53,7 @@ self.onmessage = (ev: MessageEvent<ToWorker>) => {
     case 'init':
       if (timer !== null) clearTimeout(timer);
       world = createWorld(msg.seed, msg.scenario);
+      if (msg.rich) world.pool.set([1e6, 1e6, 1e6]);
       // Send the starting state at once so the first frame has something to draw.
       post({ type: 'snapshot', buffer: encodeSnapshot(world), tickMs: 0, ticksRun: 0 });
       nextTickAt = performance.now() + TICK_MS;

@@ -30,7 +30,7 @@ function run(seed: number, scenario: ScenarioName, script: Script, ticks = 600):
 const same = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
 
 describe('simulation determinism', () => {
-  for (const scenario of ['demo', 'stress'] as const) {
+  for (const scenario of ['map1', 'stress'] as const) {
     it(`${scenario}: same seed and commands give identical snapshot bytes after 600 ticks`, () => {
       const a = run(42, scenario, SCRIPT);
       const b = run(42, scenario, SCRIPT);
@@ -53,15 +53,15 @@ describe('simulation determinism', () => {
   });
 
   it('commands change the outcome, and so does the tick they are stamped with', () => {
-    const none = run(42, 'demo', []);
-    const scripted = run(42, 'demo', SCRIPT);
-    const late = run(42, 'demo', SCRIPT.map((s) => ({ ...s, tick: s.tick + 1 })));
+    const none = run(42, 'map1', []);
+    const scripted = run(42, 'map1', SCRIPT);
+    const late = run(42, 'map1', SCRIPT.map((s) => ({ ...s, tick: s.tick + 1 })));
     expect(same(none, scripted)).toBe(false);
     expect(same(scripted, late)).toBe(false);
   });
 
   it('a move command walks the commander to the target', () => {
-    const w = createWorld(1, 'demo');
+    const w = createWorld(1, 'map1');
     const [cmdr] = unitIds(w);
     w.enqueue({ t: 'move', ids: [cmdr!], x: 30, z: 30 }, 0);
     for (let i = 0; i < 2000; i++) w.step();

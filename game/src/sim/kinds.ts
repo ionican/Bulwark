@@ -1,14 +1,25 @@
 // Entity kinds and their fixed properties. Numbers come from the W12 model (model/data/map1.ts);
-// footprints, sizes and speeds in tiles are new here because the W12 model is not spatial.
+// footprints, sizes, ranges in tiles and the belt pieces are new here because W12 is not spatial.
 //
-// Scale: 1 tile = 2 m. Map 1 is 128 × 128 tiles (256 m), so an alien entering at the north edge
-// walks about 64 tiles (128 m) to the base centre — W12's 100 m approach plus the base radius.
+// Scale: 1 tile = 2 m. Map 1 is 128 × 128 tiles (256 m). Every W12 distance in metres is halved
+// to get tiles; every W12 speed in m/s is halved and multiplied by the tick length.
 
 import { map1 } from '../../../model/data/map1.ts';
+import type { BuildingDef, WeaponDef } from '../../../model/src/types.ts';
 
 export const METRES_PER_TILE = 2;
 export const TICK_HZ = 10;
 export const TICK_SECONDS = 1 / TICK_HZ;
+const m2t = (metres: number) => metres / METRES_PER_TILE;
+
+export const RES_KEYS = ['mass', 'energy', 'rare'] as const;
+export type Cost = [mass: number, energy: number, rare: number];
+const costOf = (d: BuildingDef): Cost => [d.cost.mass, d.cost.energy, d.cost.rare];
+
+// ---- Aliens (kinds first: weapons refer to them) -------------------------------------------
+export const ALIEN_KINDS = ['rusher', 'hunter', 'breaker', 'saboteur'] as const;
+export type AlienKind = (typeof ALIEN_KINDS)[number];
+export const A = Object.fromEntries(ALIEN_KINDS.map((k, i) => [k, i])) as Record<AlienKind, number>;
 
 // ---- Buildings -----------------------------------------------------------------------------
 // Index = kind id stored in the entity table. Order is part of the snapshot format: append only.
@@ -28,41 +39,147 @@ export const BUILDING_KINDS = [
   'heavy',
   'shield',
   'tempTurret',
+  'belt',
+  'splitter',
+  'merger',
 ] as const;
 export type BuildingKind = (typeof BUILDING_KINDS)[number];
 export const B = Object.fromEntries(BUILDING_KINDS.map((k, i) => [k, i])) as Record<BuildingKind, number>;
+
+/** What an alien target category sees a building as. */
+export type BuildingRole = 'economy' | 'chain' | 'wall' | 'defence' | 'floor';
+
+export interface Weapon {
+  /** Tiles. */
+  range: number;
+  damage: number;
+  /** Seconds between shots. */
+  interval: number;
+  /** Extra aliens hit by each shot and the radius (tiles) they must be within. */
+  splashTargets: number;
+  splashRadius: number;
+  splashFactor: number;
+  energyPerSecond: number;
+  partsPerShot: number;
+  prefer: number; // alien kind id, -1 = none
+  /** Projectile speed in tiles per second; 0 = instant beam. */
+  shotSpeed: number;
+  /** Projectile kind drawn by the renderer (P_* below). */
+  shot: number;
+}
 
 export interface BuildingInfo {
   label: string;
   /** Footprint in tiles (square). */
   size: number;
   hp: number;
+  cost: Cost;
+  /** Build-power-seconds (commander builds at 10 BP, an engineer at 5). */
+  buildTime: number;
+  role: BuildingRole;
+  income?: Cost;
+  weapon?: Weapon;
+  /** Chain machine: input item kind, seconds per output, inputs per output, energy per second. */
+  machine?: { input: number; output: number; seconds: number; inputPerOutput: number; energyPerSecond: number };
+  /** Tier 2 and 3 (walls; other defences' tiers arrive with research in M3). */
+  tiers?: Array<{ hpMult: number; damageMult: number; cost: Cost; time: number }>;
+  /** Hotkey in the build bar. */
+  key: string;
 }
 
-const bdef = map1.buildings;
+// Projectile kinds.
+export const P_BULLET = 0;
+export const P_SHELL = 1;
+export const P_HEAVY = 2;
+export const P_ALIEN = 3;
+export const P_BEAM = 4;
+
+// Belt item kinds (0 = empty slot).
+export const ITEM_NONE = 0;
+export const ITEM_SALVAGE = 1;
+export const ITEM_SCRAP = 2;
+export const ITEM_ALLOY = 3;
+export const ITEM_PART = 4;
+export const ITEM_NAMES = ['', 'salvage', 'scrap', 'alloy', 'part'] as const;
+
+function weapon(w: WeaponDef, shot: number, shotSpeed: number): Weapon {
+  return {
+    range: m2t(w.range),
+    damage: w.damage,
+    interval: 1 / w.shotsPerSecond,
+    splashTargets: w.splashTargets,
+    splashRadius: m2t(w.splashRadius),
+    splashFactor: w.splashFactor,
+    energyPerSecond: w.energyPerSecond,
+    partsPerShot: w.partsPerShot,
+    prefer: w.prefer ? ALIEN_KINDS.indexOf(w.prefer) : -1,
+    shotSpeed,
+    shot,
+  };
+}
+
+const bd = map1.buildings;
+const tiersOf = (d: BuildingDef) =>
+  d.tiers?.map((t) => ({ hpMult: t.hpMult, damageMult: t.damageMult, cost: [t.upgradeCost.mass, t.upgradeCost.energy, t.upgradeCost.rare] as Cost, time: t.upgradeTime }));
+const machineOf = (d: BuildingDef, input: number, output: number) => ({
+  input,
+  output,
+  seconds: d.machine!.seconds,
+  inputPerOutput: d.machine!.inputPerOutput,
+  energyPerSecond: d.machine!.energyPerSecond,
+});
+
 export const BUILDING_INFO: Record<BuildingKind, BuildingInfo> = {
-  massExtractor: { label: bdef.massExtractor.label, size: 2, hp: bdef.massExtractor.hp },
-  generator: { label: bdef.generator.label, size: 2, hp: bdef.generator.hp },
-  rareExtractor: { label: bdef.rareExtractor.label, size: 2, hp: bdef.rareExtractor.hp },
-  lab: { label: 'Research station', size: 3, hp: bdef.lab.hp },
-  depot: { label: bdef.depot.label, size: 2, hp: bdef.depot.hp },
-  shredder: { label: bdef.shredder.label, size: 2, hp: bdef.shredder.hp },
-  smelter: { label: bdef.smelter.label, size: 2, hp: bdef.smelter.hp },
-  assembler: { label: bdef.assembler.label, size: 2, hp: bdef.assembler.hp },
-  wall: { label: bdef.wall.label, size: 1, hp: bdef.wall.hp },
-  gun: { label: bdef.gun.label, size: 2, hp: bdef.gun.hp },
-  area: { label: bdef.area.label, size: 2, hp: bdef.area.hp },
-  beam: { label: bdef.beam.label, size: 2, hp: bdef.beam.hp },
-  heavy: { label: bdef.heavy.label, size: 3, hp: bdef.heavy.hp },
-  shield: { label: bdef.shield.label, size: 2, hp: bdef.shield.hp },
-  tempTurret: { label: 'Temporary turret', size: 1, hp: map1.tempTurret.hp },
+  massExtractor: { label: bd.massExtractor.label, size: 2, hp: bd.massExtractor.hp, cost: costOf(bd.massExtractor), buildTime: bd.massExtractor.buildTime, role: 'economy', income: [1, 0, 0], key: 'm' },
+  generator: { label: bd.generator.label, size: 2, hp: bd.generator.hp, cost: costOf(bd.generator), buildTime: bd.generator.buildTime, role: 'economy', income: [0, bd.generator.income!.energy!, 0], key: 'g' },
+  rareExtractor: { label: bd.rareExtractor.label, size: 2, hp: bd.rareExtractor.hp, cost: costOf(bd.rareExtractor), buildTime: bd.rareExtractor.buildTime, role: 'economy', income: [0, 0, bd.rareExtractor.income!.rare!], key: 'k' },
+  lab: { label: 'Research station', size: 3, hp: bd.lab.hp, cost: costOf(bd.lab), buildTime: bd.lab.buildTime, role: 'economy', key: 'l' },
+  depot: { label: bd.depot.label, size: 2, hp: bd.depot.hp, cost: costOf(bd.depot), buildTime: bd.depot.buildTime, role: 'chain', key: 'p' },
+  shredder: { label: bd.shredder.label, size: 2, hp: bd.shredder.hp, cost: costOf(bd.shredder), buildTime: bd.shredder.buildTime, role: 'chain', machine: machineOf(bd.shredder, ITEM_SALVAGE, ITEM_SCRAP), key: '7' },
+  smelter: { label: bd.smelter.label, size: 2, hp: bd.smelter.hp, cost: costOf(bd.smelter), buildTime: bd.smelter.buildTime, role: 'chain', machine: machineOf(bd.smelter, ITEM_SCRAP, ITEM_ALLOY), key: '8' },
+  assembler: { label: bd.assembler.label, size: 2, hp: bd.assembler.hp, cost: costOf(bd.assembler), buildTime: bd.assembler.buildTime, role: 'chain', machine: machineOf(bd.assembler, ITEM_ALLOY, ITEM_PART), key: '9' },
+  wall: { label: bd.wall.label, size: 1, hp: bd.wall.hp, cost: costOf(bd.wall), buildTime: bd.wall.buildTime, role: 'wall', tiers: tiersOf(bd.wall), key: '1' },
+  gun: { label: bd.gun.label, size: 2, hp: bd.gun.hp, cost: costOf(bd.gun), buildTime: bd.gun.buildTime, role: 'defence', weapon: weapon(bd.gun.weapon!, P_BULLET, 30), key: '2' },
+  area: { label: bd.area.label, size: 2, hp: bd.area.hp, cost: costOf(bd.area), buildTime: bd.area.buildTime, role: 'defence', weapon: weapon(bd.area.weapon!, P_SHELL, 14), key: '3' },
+  beam: { label: bd.beam.label, size: 2, hp: bd.beam.hp, cost: costOf(bd.beam), buildTime: bd.beam.buildTime, role: 'defence', weapon: weapon(bd.beam.weapon!, P_BEAM, 0), key: '4' },
+  heavy: { label: bd.heavy.label, size: 3, hp: bd.heavy.hp, cost: costOf(bd.heavy), buildTime: bd.heavy.buildTime, role: 'defence', weapon: weapon(bd.heavy.weapon!, P_HEAVY, 18), key: '5' },
+  shield: { label: bd.shield.label, size: 2, hp: bd.shield.hp, cost: costOf(bd.shield), buildTime: bd.shield.buildTime, role: 'defence', key: '6' },
+  tempTurret: { label: 'Temporary turret', size: 1, hp: map1.tempTurret.hp, cost: [0, 0, 0], buildTime: 1, role: 'defence', weapon: weapon(map1.tempTurret.weapon, P_BULLET, 30), key: '' },
+  // Belt pieces: not in W12. First-pass numbers; cheap so a chain is a layout question, not a cost one.
+  belt: { label: 'Conveyor belt', size: 1, hp: 100, cost: [2, 0, 0], buildTime: 4, role: 'floor', key: 'b' },
+  splitter: { label: 'Splitter', size: 1, hp: 150, cost: [10, 20, 0], buildTime: 10, role: 'floor', key: 'v' },
+  merger: { label: 'Merger', size: 1, hp: 150, cost: [10, 20, 0], buildTime: 10, role: 'floor', key: 'n' },
 };
-export const buildingSize = (kind: number): number => BUILDING_INFO[BUILDING_KINDS[kind]!].size;
+export const buildingInfo = (kind: number): BuildingInfo => BUILDING_INFO[BUILDING_KINDS[kind]!];
+export const buildingSize = (kind: number): number => buildingInfo(kind).size;
+
+export const SHIELD = {
+  capacity: bd.shield.shield!.capacity,
+  regenPerSecond: bd.shield.shield!.regenPerSecond,
+  energyPerSecond: bd.shield.shield!.energyPerSecond,
+  /** Tiles. W12 shields covered a whole approach; here a radius round the generator. */
+  radius: 8,
+};
+export const TEMP_TURRET = { cooldown: map1.tempTurret.cooldown, lifetime: map1.tempTurret.lifetime };
+export const BELT_TILES_PER_SECOND = map1.beltItemsPerSecond;
+export const WRECK_DECAY_PER_SECOND = map1.wreckDecayPerSecond;
+export const START_STOCK: Cost = [map1.startStock.mass, map1.startStock.energy, map1.startStock.rare];
+export const COMMANDER_INCOME: Cost = [map1.commander.income.mass, map1.commander.income.energy, map1.commander.income.rare];
+export const RECLAIM_RATE = map1.engineer.reclaimRate;
+/** Salvage an engineer can carry before walking it to a depot (not in W12). */
+export const CARRY_CAPACITY = 20;
+export const START_ENGINEERS = map1.engineer.startCount;
+export const isBelt = (kind: number): boolean => kind === B.belt || kind === B.splitter || kind === B.merger;
 
 // ---- Aliens --------------------------------------------------------------------------------
-export const ALIEN_KINDS = ['rusher', 'hunter', 'breaker', 'saboteur'] as const;
-export type AlienKind = (typeof ALIEN_KINDS)[number];
-export const A = Object.fromEntries(ALIEN_KINDS.map((k, i) => [k, i])) as Record<AlienKind, number>;
+
+// Target categories: one flow field each.
+export const CAT_COMMANDER = 0;
+export const CAT_DEFENCES = 1;
+export const CAT_STRUCTURES = 2;
+export const CAT_ECONOMY = 3;
+export const CATEGORY_COUNT = 4;
+export const CATEGORY_NAMES = ['commander', 'defences', 'walls and turrets', 'economy'] as const;
 
 export interface MobileInfo {
   label: string;
@@ -73,13 +190,45 @@ export interface MobileInfo {
   radius: number;
 }
 
-const tilesPerTick = (metresPerSecond: number) => (metresPerSecond / METRES_PER_TILE) * TICK_SECONDS;
-const adef = map1.aliens;
-export const ALIEN_INFO: Record<AlienKind, MobileInfo> = {
-  rusher: { label: adef.rusher.label, hp: adef.rusher.hp, speed: tilesPerTick(adef.rusher.speed), radius: 0.35 },
-  hunter: { label: adef.hunter.label, hp: adef.hunter.hp, speed: tilesPerTick(adef.hunter.speed), radius: 0.4 },
-  breaker: { label: adef.breaker.label, hp: adef.breaker.hp, speed: tilesPerTick(adef.breaker.speed), radius: 0.8 },
-  saboteur: { label: adef.saboteur.label, hp: adef.saboteur.hp, speed: tilesPerTick(adef.saboteur.speed), radius: 0.45 },
+export interface AlienInfo extends MobileInfo {
+  armour: number;
+  dps: number;
+  structureMult: number;
+  salvage: number;
+  category: number;
+  /** Slips round walls: its field charges buildings four times as much. */
+  bypassWalls: boolean;
+  /** Attack reach in tiles beyond touching. */
+  reach: number;
+}
+
+const tilesPerTick = (metresPerSecond: number) => m2t(metresPerSecond) * TICK_SECONDS;
+const ad = map1.aliens;
+const alien = (k: AlienKind, radius: number, category: number): AlienInfo => ({
+  label: ad[k].label,
+  hp: ad[k].hp,
+  speed: tilesPerTick(ad[k].speed),
+  radius,
+  armour: ad[k].armour,
+  dps: ad[k].dps,
+  structureMult: ad[k].structureMult,
+  salvage: ad[k].salvage,
+  category,
+  bypassWalls: ad[k].bypassWalls,
+  reach: 0.6,
+});
+export const ALIEN_INFO: Record<AlienKind, AlienInfo> = {
+  rusher: alien('rusher', 0.35, CAT_DEFENCES),
+  hunter: alien('hunter', 0.4, CAT_COMMANDER),
+  breaker: alien('breaker', 0.8, CAT_STRUCTURES),
+  saboteur: alien('saboteur', 0.45, CAT_ECONOMY),
+};
+/** W12's spawn spacing within a group, in ticks. */
+export const SPAWN_INTERVAL_TICKS: Record<AlienKind, number> = {
+  rusher: Math.round(ad.rusher.spawnInterval * TICK_HZ),
+  hunter: Math.round(ad.hunter.spawnInterval * TICK_HZ),
+  breaker: Math.round(ad.breaker.spawnInterval * TICK_HZ),
+  saboteur: Math.round(ad.saboteur.spawnInterval * TICK_HZ),
 };
 
 // ---- Player units (commander and engineers) ------------------------------------------------
@@ -87,11 +236,28 @@ export const UNIT_KINDS = ['commander', 'engineer'] as const;
 export type UnitKind = (typeof UNIT_KINDS)[number];
 export const U = Object.fromEntries(UNIT_KINDS.map((k, i) => [k, i])) as Record<UnitKind, number>;
 
+export interface UnitInfo extends MobileInfo {
+  /** Build power (BP). */
+  buildRate: number;
+  /** Tiles from the footprint edge within which it can build. */
+  buildRange: number;
+  weapon?: Weapon;
+}
+
 // W12 has no walking speeds; these are first-pass values (commander 3 m/s, engineer 5 m/s).
-export const UNIT_INFO: Record<UnitKind, MobileInfo> = {
-  commander: { label: 'Commander', hp: map1.commander.hp, speed: tilesPerTick(3), radius: 0.9 },
-  engineer: { label: 'Engineer', hp: map1.engineer.hp, speed: tilesPerTick(5), radius: 0.45 },
+export const UNIT_INFO: Record<UnitKind, UnitInfo> = {
+  commander: {
+    label: 'Commander',
+    hp: map1.commander.hp,
+    speed: tilesPerTick(3),
+    radius: 0.9,
+    buildRate: map1.commander.buildRate,
+    buildRange: 4,
+    // W12's commander gun has range 0 (only aliens at the base); spatially it needs a reach: 16 m.
+    weapon: { ...weapon(map1.commander.weapon, P_BULLET, 30), range: 8 },
+  },
+  engineer: { label: 'Engineer', hp: map1.engineer.hp, speed: tilesPerTick(5), radius: 0.45, buildRate: map1.engineer.buildRate, buildRange: 3 },
 };
 
-export const alienInfo = (kind: number): MobileInfo => ALIEN_INFO[ALIEN_KINDS[kind]!];
-export const unitInfo = (kind: number): MobileInfo => UNIT_INFO[UNIT_KINDS[kind]!];
+export const alienInfo = (kind: number): AlienInfo => ALIEN_INFO[ALIEN_KINDS[kind]!];
+export const unitInfo = (kind: number): UnitInfo => UNIT_INFO[UNIT_KINDS[kind]!];

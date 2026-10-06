@@ -30,7 +30,7 @@ function mobileView(cap: number): MobileView {
   };
 }
 
-type MobileSection = Snapshot['aliens'] | Snapshot['units'];
+type MobileSection = Snapshot['aliens'] | Snapshot['units'] | Snapshot['projectiles'];
 
 export class Interpolator {
   prev: Snapshot | null = null;
@@ -38,8 +38,10 @@ export class Interpolator {
   private currAt = 0;
   readonly aliens = mobileView(CAPACITY.aliens);
   readonly units = mobileView(CAPACITY.units);
+  readonly projectiles = mobileView(CAPACITY.projectiles);
   private readonly prevRowAliens = new Int32Array(CAPACITY.aliens);
   private readonly prevRowUnits = new Int32Array(CAPACITY.units);
+  private readonly prevRowProjectiles = new Int32Array(CAPACITY.projectiles);
 
   /** Adds a snapshot; returns the snapshot that dropped out (its buffer can be recycled). */
   push(snap: Snapshot, now: number): Snapshot | null {
@@ -50,7 +52,11 @@ export class Interpolator {
     if (this.prev) {
       this.index(this.prev.aliens, this.prevRowAliens);
       this.index(this.prev.units, this.prevRowUnits);
+      this.index(this.prev.projectiles, this.prevRowProjectiles);
     }
+    // Re-point the views at the new snapshot now: the dropped one's buffer is about to be
+    // transferred back to the worker, and a view left on it would read a detached buffer.
+    this.update(now);
     return dropped;
   }
 
@@ -69,6 +75,7 @@ export class Interpolator {
     const a = this.alpha(now);
     this.fill(this.curr.aliens, this.prev?.aliens ?? null, this.prevRowAliens, this.aliens, a);
     this.fill(this.curr.units, this.prev?.units ?? null, this.prevRowUnits, this.units, a);
+    this.fill(this.curr.projectiles, this.prev?.projectiles ?? null, this.prevRowProjectiles, this.projectiles, a);
   }
 
   private fill(cur: MobileSection, prev: MobileSection | null, prevRows: Int32Array, out: MobileView, a: number) {
