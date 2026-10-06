@@ -1,0 +1,2 @@
+# Per-tick CSVs are ~2–4 MB each; regenerate with `npm run model`.
+out/*.csv
