@@ -254,8 +254,11 @@ export function fireTurrets(w: World): void {
         w.parts -= wpn.partsPerShot;
         w.partsUsed += wpn.partsPerShot;
       }
-      if (wpn.shotSpeed <= 0) damageAlien(w, t, wpn.damage);
-      else spawnProjectile(w, wpn.shot, x, z, T_ALIEN, w.aliens.id(t), ac.x[t]!, ac.z[t]!, wpn.damage, wpn.shotSpeed, wpn);
+      // Tier 2 (researched, then upgraded by engineers) multiplies damage (W12 damageMult).
+      const tierMult = c.tier[s]! > 1 ? (buildingInfo(kind).tiers?.[c.tier[s]! - 2]?.damageMult ?? 1) : 1;
+      const dmg = wpn.damage * tierMult;
+      if (wpn.shotSpeed <= 0) damageAlien(w, t, dmg);
+      else spawnProjectile(w, wpn.shot, x, z, T_ALIEN, w.aliens.id(t), ac.x[t]!, ac.z[t]!, dmg, wpn.shotSpeed, wpn);
       c.flags[s] = c.flags[s]! | BF_FIRING;
       cd += wpn.interval;
     }

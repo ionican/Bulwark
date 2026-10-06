@@ -31,6 +31,7 @@ import {
 import { BF_COMPLETE, BF_UPGRADING } from './sim/schema.ts';
 import {
   G_COMMANDER_HP,
+  G_COMMANDER_ID,
   G_DELIVERED,
   G_ENERGY,
   G_FIELD_BUILDS,
@@ -48,13 +49,30 @@ import {
   G_SHORT,
   G_SPEND,
   G_UPKEEP,
+  G_BONUS_ENERGY,
+  G_BONUS_MASS,
+  G_BUILDINGS_LOST,
+  G_END_TICK,
+  G_NEXT_WAVE,
+  G_NEXT_WAVE_TICK,
+  G_RESEARCH_CURRENT,
+  G_RESEARCH_DONE,
+  G_RESEARCH_PROGRESS,
+  G_RESEARCH_QUEUED,
+  G_RESEARCH_RATE,
+  G_SKIPPED_TICKS,
+  G_UNITS_LOST,
+  G_WAVE_COUNT,
   decodeSnapshot,
   type Snapshot,
 } from './sim/snapshot.ts';
 import { heightAt, map1Terrain } from './sim/terrain.ts';
 import { canPlaceOn } from './sim/world.ts';
 import type { Command } from './sim/commands.ts';
-import type { FromWorker, ToWorker } from './sim/protocol.ts';
+import type { FromWorker, RunnerInfo, ToWorker } from './sim/protocol.ts';
+import { BUILD_REQUIRES, RESEARCH, RESEARCH_INDEX } from './sim/balance.ts';
+import { alienKindIndex, buildingKindIndex, entryIndex as entryIndexOf, researchNodeId } from './sim/names.ts';
+import { EndScreen, ResearchPanel, Ticker, TimeControls, Toasts } from './ui/panels.ts';
 import type { ScenarioName } from './sim/scenarios.ts';
 import { Hud } from './ui/hud.ts';
 import { BuildBar, TEST_GROUP } from './ui/buildbar.ts';
@@ -118,9 +136,43 @@ const tickSamples: number[] = [];
 let consoleErrors = 0;
 window.addEventListener('error', () => consoleErrors++);
 
+let runnerInfo: RunnerInfo = { speed: 1, paused: false, checkpoints: [] };
+const rejected: Array<{ reason: string; cmd: Command }> = [];
+const notices: string[] = [];
+let lastSave: { bytes: number; tick: number; name: string } | null = null;
+let pendingDownload = false;
+let savedBlobUrl: string | null = null;
+
 worker.onmessage = (ev: MessageEvent<FromWorker>) => {
   const msg = ev.data;
-  if (msg.type !== 'snapshot') return;
+  if (msg.type === 'rejected') {
+    rejected.push({ reason: msg.reason, cmd: msg.cmd });
+    if (rejected.length > 50) rejected.shift();
+    console.warn('command refused:', msg.reason, msg.cmd);
+    toasts.show(`Refused: ${msg.reason}`, true);
+    return;
+  }
+  if (msg.type === 'notice' || msg.type === 'error') {
+    notices.push(msg.message);
+    if (notices.length > 50) notices.shift();
+    toasts.show(msg.message, msg.type === 'error');
+    return;
+  }
+  if (msg.type === 'saved') {
+    const name = `bulwark-map1-tick${msg.tick}.bulwark`;
+    lastSave = { bytes: msg.bytes.byteLength, tick: msg.tick, name };
+    if (savedBlobUrl) URL.revokeObjectURL(savedBlobUrl);
+    savedBlobUrl = URL.createObjectURL(new Blob([msg.bytes], { type: 'application/octet-stream' }));
+    if (pendingDownload) {
+      const a = document.createElement('a');
+      a.href = savedBlobUrl;
+      a.download = name;
+      a.click();
+    }
+    toasts.show(`Saved ${name} (${(msg.bytes.byteLength / 1024).toFixed(0)} KB)`);
+    return;
+  }
+  runnerInfo = msg.runner;
   const snap = decodeSnapshot(msg.buffer);
   const dropped = interp.push(snap, performance.now());
   if (dropped) send({ type: 'recycle', buffer: dropped.buffer }, [dropped.buffer]);
@@ -144,6 +196,54 @@ send({ type: 'init', seed, scenario, rich: params.get('rich') === '1' });
 
 function command(cmd: Command) {
   send({ type: 'command', cmd });
+}
+
+// ---- time, waves, research, saves -------------------------------------------------------------
+
+const toasts = new Toasts();
+const ticker = new Ticker();
+function togglePause() {
+  send({ type: 'pause', paused: !runnerInfo.paused });
+  runnerInfo = { ...runnerInfo, paused: !runnerInfo.paused };
+}
+function setSpeed(speed: number) {
+  send({ type: 'speed', speed });
+  runnerInfo = { ...runnerInfo, speed };
+}
+function callEarly() {
+  command({ t: 'callWave' });
+}
+function rewind() {
+  send({ type: 'rewind' });
+}
+function exportSave(download = true) {
+  pendingDownload = download;
+  send({ type: 'save' });
+}
+async function importSave(file: File | ArrayBuffer) {
+  const bytes = file instanceof ArrayBuffer ? file : await file.arrayBuffer();
+  send({ type: 'load', bytes }, [bytes]);
+}
+const research = new ResearchPanel((id) => command({ t: 'research', node: id }));
+const timeControls = new TimeControls({
+  pause: togglePause,
+  speed: setSpeed,
+  callEarly,
+  rewind,
+  research: () => research.toggle(),
+  exportSave: () => exportSave(true),
+  importSave: (f) => void importSave(f),
+});
+const endScreen = new EndScreen({ rewind, exportSave: () => exportSave(true), restart: () => location.reload() });
+
+function researchDoneMask(): number {
+  return interp.curr?.globals[G_RESEARCH_DONE] ?? 0;
+}
+/** Research label a building kind (or the upgrade tool) still needs, or null. */
+function lockedBy(kind: string): string | null {
+  const req = BUILD_REQUIRES[kind];
+  if (!req) return null;
+  return researchDoneMask() & (1 << RESEARCH_INDEX[req]!) ? null : RESEARCH[RESEARCH_INDEX[req]!]!.label;
 }
 
 function pickView(): PickView | null {
@@ -399,7 +499,29 @@ const KEY_TO_KIND = new Map<string, BuildingKind>();
 for (const k of BUILDING_KINDS) if (BUILDING_INFO[k].key) KEY_TO_KIND.set(BUILDING_INFO[k].key, k);
 
 window.addEventListener('keydown', (e) => {
+  if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
   const k = e.key.toLowerCase();
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (!e.repeat) togglePause();
+    return;
+  }
+  if (e.shiftKey && /^Digit[123]$/.test(e.code)) {
+    setSpeed(Number(e.code.slice(5)));
+    return;
+  }
+  if (k === 'c' && !e.repeat) {
+    callEarly();
+    return;
+  }
+  if (k === 'y' && !e.repeat) {
+    research.toggle();
+    return;
+  }
+  if (k === 'h' && !e.repeat) {
+    hud.toggleHelp();
+    return;
+  }
   if (e.key === 'Home') setView('far');
   if (e.key === 'Escape') setBuildMode(null);
   if (k === 'r' && buildMode) buildMode.dir = (buildMode.dir + 1) & 3;
@@ -431,6 +553,10 @@ const bar = new BuildBar(
   {
     build: (k) => setBuildMode(k),
     upgrade: startUpgrade,
+    produce: () => {
+      const c = selection.find((p) => p.type === 'unit' && p.kind === U.commander);
+      if (c) command({ t: 'produce', id: c.id, queue: true });
+    },
     dropTurret,
     stop: stopUnits,
     spawn: (kind, entry) => command({ t: 'spawn', kind, entry, count: TEST_GROUP[ALIEN_KINDS[kind]!]! }),
@@ -571,18 +697,56 @@ function frame(now: number) {
       kills: g[G_KILLS]!,
       upkeep: g[G_UPKEEP]!,
       lost: g[G_OUTCOME] === 1,
+      won: g[G_OUTCOME] === 2,
     });
     refreshSelectionPanel();
+    ticker.update({
+      tick: snap.tick,
+      nextWave: g[G_NEXT_WAVE]!,
+      nextWaveTick: g[G_NEXT_WAVE_TICK]!,
+      waveCount: g[G_WAVE_COUNT]!,
+      aliens: snap.aliens.count,
+      preview: g[G_RESEARCH_DONE]! & (1 << RESEARCH_INDEX.scanners!) ? 2 : 1,
+    });
+    timeControls.update({
+      paused: runnerInfo.paused,
+      speed: runnerInfo.speed,
+      canCall: g[G_NEXT_WAVE]! < g[G_WAVE_COUNT]! && g[G_OUTCOME] === 0,
+      checkpoints: runnerInfo.checkpoints.length,
+      time: snap.tick,
+      bonus: [g[G_BONUS_MASS]!, g[G_BONUS_ENERGY]!],
+    });
+    research.update({
+      done: g[G_RESEARCH_DONE]!,
+      queued: g[G_RESEARCH_QUEUED]!,
+      current: g[G_RESEARCH_CURRENT]!,
+      progress: g[G_RESEARCH_PROGRESS]!,
+      rate: g[G_RESEARCH_RATE]!,
+      pool: [g[G_MASS]!, g[G_ENERGY]!, g[G_RARE]!],
+    });
+    const cps = runnerInfo.checkpoints;
+    endScreen.update({
+      outcome: g[G_OUTCOME]!,
+      endTick: g[G_END_TICK]!,
+      wave: g[G_NEXT_WAVE]!,
+      waveCount: g[G_WAVE_COUNT]!,
+      kills: g[G_KILLS]!,
+      buildingsLost: g[G_BUILDINGS_LOST]!,
+      unitsLost: g[G_UNITS_LOST]!,
+      canRewind: cps.length > 0,
+      rewindWave: cps.length ? cps[cps.length - 1]!.wave : 0,
+    });
     const builders = selectedBuilders().length > 0;
     const active = buildMode ? BUILDING_KINDS[buildMode.kind]! : upgradeMode ? 'upgrade' : null;
     const hint = buildMode
       ? `Placing ${buildingInfo(buildMode.kind).label}${isBelt(buildMode.kind) ? ' — drag for a line, R rotates' : ''}. Esc cancels.`
       : upgradeMode
-        ? 'Click a wall to upgrade it.'
+        ? 'Click a wall or turret to upgrade it (tiers need research).'
         : builders
           ? ''
           : 'Select the commander or an engineer to build.';
-    bar.update(builders, selectedEngineers().length > 0, active, hint);
+    const hasCommander = selection.some((p) => p.type === 'unit' && p.kind === U.commander);
+    bar.update(builders, selectedEngineers().length > 0, hasCommander, active, hint, lockedBy);
   }
 }
 requestAnimationFrame(frame);
@@ -677,9 +841,8 @@ const median = (xs: number[]) => {
   return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
 };
 
-const kindIndex = (k: string | number, names: readonly string[]) => (typeof k === 'number' ? k : names.indexOf(k));
 const allUnitIds = () => Array.from(interp.units.id.subarray(0, interp.units.count));
-const entryIndex = (e: string | number | undefined) => (e === undefined ? 0 : typeof e === 'number' ? e : terrain.entries.findIndex((x) => x.name === e));
+const entryIndex = (e: string | number | undefined) => entryIndexOf(terrain.entries, e);
 
 const game = {
   get ready() {
@@ -751,7 +914,8 @@ const game = {
     return interp.curr?.globals[G_COMMANDER_HP] ?? 0;
   },
   get outcome() {
-    return interp.curr?.globals[G_OUTCOME] === 1 ? 'lost' : 'playing';
+    const o = interp.curr?.globals[G_OUTCOME];
+    return o === 2 ? 'won' : o === 1 ? 'lost' : 'playing';
   },
   get alienCounts() {
     const out: Record<string, number> = Object.fromEntries(ALIEN_KINDS.map((k) => [k, 0]));
@@ -819,19 +983,85 @@ const game = {
     return buildMode ? BUILDING_KINDS[buildMode.kind] : upgradeMode ? 'upgrade' : null;
   },
   selectAt: (x: number, y: number) => selectAt(x, y),
+  get speed() {
+    return runnerInfo.speed;
+  },
+  get paused() {
+    return runnerInfo.paused;
+  },
+  get checkpoints() {
+    return runnerInfo.checkpoints.map((c) => ({ ...c }));
+  },
+  /** Next wave (1-based), ticks until it arrives, and the bonus paid so far for calling waves early. */
+  get wave() {
+    const g = interp.curr?.globals;
+    if (!g) return null;
+    return {
+      next: g[G_NEXT_WAVE]! + 1,
+      of: g[G_WAVE_COUNT]!,
+      startsAtTick: g[G_NEXT_WAVE_TICK]!,
+      ticksToGo: g[G_NEXT_WAVE_TICK]! >= 0 ? g[G_NEXT_WAVE_TICK]! - (interp.curr?.tick ?? 0) : -1,
+      skippedTicks: g[G_SKIPPED_TICKS]!,
+      bonus: { mass: g[G_BONUS_MASS]!, energy: g[G_BONUS_ENERGY]! },
+    };
+  },
+  get research() {
+    const g = interp.curr?.globals;
+    if (!g) return null;
+    const done = g[G_RESEARCH_DONE]!;
+    return {
+      done: RESEARCH.filter((_, i) => done & (1 << i)).map((n) => n.id),
+      current: g[G_RESEARCH_CURRENT]! >= 0 ? RESEARCH[g[G_RESEARCH_CURRENT]!]!.id : null,
+      progress: g[G_RESEARCH_PROGRESS]!,
+      queued: RESEARCH.filter((_, i) => g[G_RESEARCH_QUEUED]! & (1 << i)).map((n) => n.id),
+      rpPerSecond: g[G_RESEARCH_RATE]!,
+      panelOpen: research.open,
+    };
+  },
+  get endState() {
+    const g = interp.curr?.globals;
+    if (!g) return null;
+    return { outcome: g[G_OUTCOME] === 2 ? 'won' : g[G_OUTCOME] === 1 ? 'lost' : 'playing', endTick: g[G_END_TICK]!, buildingsLost: g[G_BUILDINGS_LOST]!, unitsLost: g[G_UNITS_LOST]! };
+  },
+  /** Commands the worker refused, with the reason (most recent last). */
+  get rejected() {
+    return rejected.map((r) => ({ ...r }));
+  },
+  get notices() {
+    return [...notices];
+  },
+  get lastSave() {
+    return lastSave ? { ...lastSave } : null;
+  },
+  /** Time and save controls, for tests (the same calls the buttons and keys make). */
+  control: {
+    pause: () => togglePause(),
+    speed: (s: number) => setSpeed(s),
+    rewind: () => rewind(),
+    save: () => exportSave(false),
+    /** Loads the bytes of the last save made with save() (or export). */
+    loadLastSave: async () => {
+      if (!savedBlobUrl) throw new Error('no save made yet');
+      await importSave(await (await fetch(savedBlobUrl)).arrayBuffer());
+    },
+    loadBytes: (bytes: ArrayBuffer) => importSave(bytes),
+  },
   /** Test helpers: issue commands without the mouse. `ids` defaults to every commander and engineer. */
   cmd: {
     build: (kind: string | number, tx: number, ty: number, opts: { dir?: number; ids?: number[]; queue?: boolean } = {}) =>
-      command({ t: 'build', ids: opts.ids ?? allUnitIds(), kind: kindIndex(kind, BUILDING_KINDS), tx, ty, dir: opts.dir ?? 0, queue: opts.queue ?? true }),
+      command({ t: 'build', ids: opts.ids ?? allUnitIds(), kind: buildingKindIndex(kind), tx, ty, dir: opts.dir ?? 0, queue: opts.queue ?? true }),
     move: (ids: number[] | null, x: number, z: number) => command({ t: 'move', ids: ids ?? allUnitIds(), x, z }),
     reclaim: (ids: number[] | null, wreck: number) =>
       command({ t: 'reclaim', ids: ids ?? allUnitIds().filter((id) => interp.units.kind[Array.prototype.indexOf.call(interp.units.id, id)] === U.engineer), wreck }),
     assist: (ids: number[] | null, target: number) => command({ t: 'assist', ids: ids ?? allUnitIds(), target }),
     upgrade: (ids: number[] | null, target: number) => command({ t: 'upgrade', ids: ids ?? allUnitIds(), target }),
     dropTurret: (id: number) => command({ t: 'dropTurret', id }),
+    research: (node: string) => command({ t: 'research', node: researchNodeId(node) }),
+    produce: () => command({ t: 'produce', id: interp.curr?.globals[G_COMMANDER_ID] ?? -1, queue: true }),
+    callWave: () => callEarly(),
     stop: (ids: number[] | null) => command({ t: 'stop', ids: ids ?? allUnitIds() }),
     spawn: (kind: string | number, entry?: string | number, count?: number) => {
-      const k = kindIndex(kind, ALIEN_KINDS);
+      const k = alienKindIndex(kind);
       command({ t: 'spawn', kind: k, entry: entryIndex(entry), count: count ?? TEST_GROUP[ALIEN_KINDS[k]!]! });
     },
   },

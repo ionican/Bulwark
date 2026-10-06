@@ -6,6 +6,7 @@
 
 import { map1 } from '../../../model/data/map1.ts';
 import type { BuildingDef, WeaponDef } from '../../../model/src/types.ts';
+import { HEAVY_T2, RARE_EXTRACTOR_OUTPUT } from './balance.ts';
 
 export const METRES_PER_TILE = 2;
 export const TICK_HZ = 10;
@@ -81,7 +82,7 @@ export interface BuildingInfo {
   weapon?: Weapon;
   /** Chain machine: input item kind, seconds per output, inputs per output, energy per second. */
   machine?: { input: number; output: number; seconds: number; inputPerOutput: number; energyPerSecond: number };
-  /** Tier 2 and 3 (walls; other defences' tiers arrive with research in M3). */
+  /** Tier 2 (and 3 for walls), each gated by research (balance.ts TIER_REQUIRES). */
   tiers?: Array<{ hpMult: number; damageMult: number; cost: Cost; time: number }>;
   /** Hotkey in the build bar. */
   key: string;
@@ -132,17 +133,17 @@ const machineOf = (d: BuildingDef, input: number, output: number) => ({
 export const BUILDING_INFO: Record<BuildingKind, BuildingInfo> = {
   massExtractor: { label: bd.massExtractor.label, size: 2, hp: bd.massExtractor.hp, cost: costOf(bd.massExtractor), buildTime: bd.massExtractor.buildTime, role: 'economy', income: [1, 0, 0], key: 'm' },
   generator: { label: bd.generator.label, size: 2, hp: bd.generator.hp, cost: costOf(bd.generator), buildTime: bd.generator.buildTime, role: 'economy', income: [0, bd.generator.income!.energy!, 0], key: 'g' },
-  rareExtractor: { label: bd.rareExtractor.label, size: 2, hp: bd.rareExtractor.hp, cost: costOf(bd.rareExtractor), buildTime: bd.rareExtractor.buildTime, role: 'economy', income: [0, 0, bd.rareExtractor.income!.rare!], key: 'k' },
+  rareExtractor: { label: bd.rareExtractor.label, size: 2, hp: bd.rareExtractor.hp, cost: costOf(bd.rareExtractor), buildTime: bd.rareExtractor.buildTime, role: 'economy', income: [0, 0, RARE_EXTRACTOR_OUTPUT], key: 'k' },
   lab: { label: 'Research station', size: 3, hp: bd.lab.hp, cost: costOf(bd.lab), buildTime: bd.lab.buildTime, role: 'economy', key: 'l' },
   depot: { label: bd.depot.label, size: 2, hp: bd.depot.hp, cost: costOf(bd.depot), buildTime: bd.depot.buildTime, role: 'chain', key: 'p' },
   shredder: { label: bd.shredder.label, size: 2, hp: bd.shredder.hp, cost: costOf(bd.shredder), buildTime: bd.shredder.buildTime, role: 'chain', machine: machineOf(bd.shredder, ITEM_SALVAGE, ITEM_SCRAP), key: '7' },
   smelter: { label: bd.smelter.label, size: 2, hp: bd.smelter.hp, cost: costOf(bd.smelter), buildTime: bd.smelter.buildTime, role: 'chain', machine: machineOf(bd.smelter, ITEM_SCRAP, ITEM_ALLOY), key: '8' },
   assembler: { label: bd.assembler.label, size: 2, hp: bd.assembler.hp, cost: costOf(bd.assembler), buildTime: bd.assembler.buildTime, role: 'chain', machine: machineOf(bd.assembler, ITEM_ALLOY, ITEM_PART), key: '9' },
   wall: { label: bd.wall.label, size: 1, hp: bd.wall.hp, cost: costOf(bd.wall), buildTime: bd.wall.buildTime, role: 'wall', tiers: tiersOf(bd.wall), key: '1' },
-  gun: { label: bd.gun.label, size: 2, hp: bd.gun.hp, cost: costOf(bd.gun), buildTime: bd.gun.buildTime, role: 'defence', weapon: weapon(bd.gun.weapon!, P_BULLET, 30), key: '2' },
-  area: { label: bd.area.label, size: 2, hp: bd.area.hp, cost: costOf(bd.area), buildTime: bd.area.buildTime, role: 'defence', weapon: weapon(bd.area.weapon!, P_SHELL, 14), key: '3' },
+  gun: { label: bd.gun.label, size: 2, hp: bd.gun.hp, cost: costOf(bd.gun), buildTime: bd.gun.buildTime, role: 'defence', weapon: weapon(bd.gun.weapon!, P_BULLET, 30), tiers: tiersOf(bd.gun), key: '2' },
+  area: { label: bd.area.label, size: 2, hp: bd.area.hp, cost: costOf(bd.area), buildTime: bd.area.buildTime, role: 'defence', weapon: weapon(bd.area.weapon!, P_SHELL, 14), tiers: tiersOf(bd.area), key: '3' },
   beam: { label: bd.beam.label, size: 2, hp: bd.beam.hp, cost: costOf(bd.beam), buildTime: bd.beam.buildTime, role: 'defence', weapon: weapon(bd.beam.weapon!, P_BEAM, 0), key: '4' },
-  heavy: { label: bd.heavy.label, size: 3, hp: bd.heavy.hp, cost: costOf(bd.heavy), buildTime: bd.heavy.buildTime, role: 'defence', weapon: weapon(bd.heavy.weapon!, P_HEAVY, 18), key: '5' },
+  heavy: { label: bd.heavy.label, size: 3, hp: bd.heavy.hp, cost: costOf(bd.heavy), buildTime: bd.heavy.buildTime, role: 'defence', weapon: weapon(bd.heavy.weapon!, P_HEAVY, 18), tiers: [HEAVY_T2], key: '5' },
   shield: { label: bd.shield.label, size: 2, hp: bd.shield.hp, cost: costOf(bd.shield), buildTime: bd.shield.buildTime, role: 'defence', key: '6' },
   tempTurret: { label: 'Temporary turret', size: 1, hp: map1.tempTurret.hp, cost: [0, 0, 0], buildTime: 1, role: 'defence', weapon: weapon(map1.tempTurret.weapon, P_BULLET, 30), key: '' },
   // Belt pieces: not in W12. First-pass numbers; cheap so a chain is a layout question, not a cost one.

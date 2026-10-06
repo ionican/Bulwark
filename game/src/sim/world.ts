@@ -48,6 +48,13 @@ import { stepConveyors } from './conveyor.ts';
 import { acquireTargets, fireTurrets, stepProjectiles, stepShieldsAndTimers, AlienGrid } from './combat.ts';
 import { stepAliens } from './aliens.ts';
 import { stepUnits, type Order } from './units.ts';
+import { validateCommand, upgradeProblem } from './validate.ts';
+import { RESEARCH_INDEX, callEarlyBonus, EXTRACTOR_BOOST, FIELD_ENG_TURRET_COOLDOWN } from './balance.ts';
+import { map1 } from '../../../model/data/map1.ts';
+import { TICK_HZ } from './kinds.ts';
+
+/** Orders a unit can hold queued; more are refused (validate.ts) rather than dropped. */
+export const MAX_ORDERS = 64;
 
 export const CAPACITY = { buildings: 4096, aliens: 4096, units: 256, wrecks: 4096, projectiles: 4096 } as const;
 
@@ -63,7 +70,7 @@ export interface Route {
   cells: number[];
 }
 
-interface PendingGroup {
+export interface PendingGroup {
   kind: number;
   entry: number;
   left: number;
@@ -122,7 +129,7 @@ export class World {
   salvageDelivered = 0;
   partsMade = 0;
   partsUsed = 0;
-  /** 0 playing, 1 lost (commander destroyed). */
+  /** 0 playing, 1 lost (commander destroyed), 2 won (every wave destroyed). */
   outcome = 0;
   commanderId = -1;
 
@@ -135,6 +142,8 @@ export class World {
   /** Build power delivered to each building slot this tick, and builder count. */
   readonly buildPower: Float64Array;
   readonly builderCount: Uint8Array;
+  /** Engineers in production this tick (filled by units, drained by construction). */
+  readonly produceJobs: Array<{ order: { progress: number }; bp: number }> = [];
 
   // ---- grids, flow fields and routes ----
   /** Entering cost per tile for normal and wall-bypassing aliens; -1 = rock. */
@@ -150,9 +159,9 @@ export class World {
   gridsDirty = true;
   /** A building took damage since the last cost refresh. */
   costDrift = false;
-  private lastCostRefresh = 0;
-  private lastCommanderCell = -1;
-  private lastCommanderRebuild = -100;
+  lastCostRefresh = 0;
+  lastCommanderCell = -1;
+  lastCommanderRebuild = -100;
   routes: Route[] = [];
   routesVersion = 0;
   /** Flow-field rebuilds so far (diagnostics). */
@@ -163,17 +172,44 @@ export class World {
   beltsDirty = true;
 
   readonly alienGrid: AlienGrid;
-  private pending: PendingGroup[] = [];
+  pending: PendingGroup[] = [];
 
   /** Commands waiting for their tick, kept sorted by (tick, seq). */
-  private queue: StampedCommand[] = [];
-  private seq = 0;
+  queue: StampedCommand[] = [];
+  seq = 0;
   /** Every command applied so far, in order. The replay log for checkpoints and saves. */
   readonly log: StampedCommand[] = [];
 
-  readonly debug: DebugFlags = { allTiers: true, indestructible: false, respawnAliens: false };
+  readonly debug: DebugFlags = { allTiers: false, indestructible: false, respawnAliens: false };
 
-  constructor(seed: number, terrain: Terrain = map1Terrain()) {
+  // ---- waves (map 1's 20 fixed waves, W12 times) ----
+  /** Start tick of each wave; calling a wave early moves it and every later wave forward. */
+  readonly waveTicks: Int32Array;
+  /** Index of the next wave to start (0..20). */
+  nextWave = 0;
+  lastWaveTick = -1;
+  /** Ticks skipped by calling waves early, and the bonus paid for them. */
+  skippedTicks = 0;
+  readonly bonusPaid = new Float64Array(3);
+  /** Tick the run ended (win or loss), -1 while playing. */
+  endTick = -1;
+  buildingsLost = 0;
+  unitsLost = 0;
+
+  // ---- research ----
+  /** Bit i set: RESEARCH[i] done. Never cleared within a map. */
+  researchDone = 0;
+  researchQueue: number[] = [];
+  researchCurrent = -1;
+  /** Progress of the current node, 0..1. */
+  researchProgress = 0;
+  /** RP per second this tick (complete stations × W12 labRate). */
+  researchRate = 0;
+  /** Supply ratio the current research got last tick. */
+  researchEff = 1;
+
+  /** `waves: false` gives a world with no wave schedule (test maps). */
+  constructor(seed: number, terrain: Terrain = map1Terrain(), opts: { waves?: boolean } = {}) {
     this.seed = seed >>> 0;
     this.rng = new Rng(this.seed);
     this.terrain = terrain;
@@ -189,6 +225,7 @@ export class World {
     this.builderCount = new Uint8Array(CAPACITY.buildings);
     this.alienGrid = new AlienGrid(terrain.w, terrain.h, CAPACITY.aliens);
     this.pool.set(START_STOCK);
+    this.waveTicks = opts.waves === false ? new Int32Array(0) : Int32Array.from(map1.waves.map((wv) => Math.round(wv.at * TICK_HZ)));
   }
 
   get pendingSpawns(): number {
@@ -206,13 +243,43 @@ export class World {
     return s;
   }
 
+  /**
+   * Validates and queues a command. Returns the reason if it is refused (nothing is queued).
+   * Use this for anything that comes from a player; enqueue() skips validation (tests, replays).
+   */
+  submit(cmd: Command, atTick = this.tick): string | null {
+    const problem = validateCommand(this, cmd);
+    if (problem) return problem;
+    this.enqueue(cmd, atTick);
+    return null;
+  }
+
+  /** True when the next step() starts a wave (the runner takes a checkpoint first). */
+  waveDue(): boolean {
+    return this.outcome === 0 && this.nextWave < this.waveTicks.length && this.tick >= this.waveTicks[this.nextWave]!;
+  }
+
+  researched(id: string): boolean {
+    const i = RESEARCH_INDEX[id];
+    return i !== undefined && (this.researchDone & (1 << i)) !== 0;
+  }
+
+  /** Commands applied this tick that were refused at apply time (state changed since validation). */
+  readonly applyRejected: Array<{ tick: number; reason: string }> = [];
+
   step(): void {
+    if (this.outcome !== 0) return; // the run is over: the state stays as it ended
     while (this.queue.length && this.queue[0]!.tick <= this.tick) {
       const s = this.queue.shift()!;
-      this.apply(s.cmd);
+      const problem = validateCommand(this, s.cmd);
+      if (problem) {
+        this.applyRejected.push({ tick: this.tick, reason: problem });
+        if (this.applyRejected.length > 50) this.applyRejected.shift();
+      } else this.apply(s.cmd);
       this.log.push(s);
     }
     this.spendTick.fill(0);
+    this.stepWaves();
     this.stepSpawns();
     this.updateGridsAndFields();
     stepEconomyIncome(this);
@@ -227,7 +294,42 @@ export class World {
     this.removeDead();
     stepShieldsAndTimers(this);
     for (let k = 0; k < 3; k++) this.spendRate[k] = this.spendRate[k]! * 0.9 + this.spendTick[k]! * 10 * 0.1;
+    // Win: every wave has arrived and been destroyed (map 1 is survive-only).
+    if (this.outcome === 0 && this.waveTicks.length > 0 && this.nextWave >= this.waveTicks.length && this.pendingSpawns === 0 && this.aliens.count === 0) {
+      this.outcome = 2;
+      this.endTick = this.tick;
+    }
     this.tick++;
+  }
+
+  private stepWaves(): void {
+    if (!(this.nextWave < this.waveTicks.length && this.tick >= this.waveTicks[this.nextWave]!)) return;
+    const wave = map1.waves[this.nextWave]!;
+    for (const g of wave.groups) {
+      const entry = this.terrain.entries.findIndex((e) => e.name === g.entry);
+      this.pending.push({ kind: ALIEN_KINDS.indexOf(g.kind), entry: entry < 0 ? 0 : entry, left: g.count, nextTick: this.tick });
+    }
+    this.nextWave++;
+    this.lastWaveTick = this.tick;
+  }
+
+  /** Brings the next wave forward to the next tick and pays the bonus for the time skipped. */
+  private callWaveEarly(): void {
+    if (this.nextWave >= this.waveTicks.length) return;
+    const skipped = this.waveTicks[this.nextWave]! - (this.tick + 1);
+    if (skipped <= 0) return;
+    for (let i = this.nextWave; i < this.waveTicks.length; i++) this.waveTicks[i] = this.waveTicks[i]! - skipped;
+    const bonus = callEarlyBonus(skipped);
+    for (let k = 0; k < 3; k++) {
+      this.pool[k] = this.pool[k]! + bonus[k]!;
+      this.bonusPaid[k] = this.bonusPaid[k]! + bonus[k]!;
+    }
+    this.skippedTicks += skipped;
+  }
+
+  /** Mass extractor output per second (research can raise it). */
+  extractorOutput(): number {
+    return this.researched('extractors') ? EXTRACTOR_BOOST : 1;
   }
 
   // ---- commands ----------------------------------------------------------------------------
@@ -300,6 +402,17 @@ export class World {
       case 'spawn':
         this.pending.push({ kind: cmd.kind, entry: cmd.entry, left: cmd.count, nextTick: this.tick });
         break;
+      case 'research':
+        this.researchQueue.push(RESEARCH_INDEX[cmd.node]!);
+        break;
+      case 'produce': {
+        const slot = this.units.slotForId(cmd.id);
+        if (slot >= 0) this.giveOrder(slot, { t: 'produce', progress: 0 }, cmd.queue ?? true);
+        break;
+      }
+      case 'callWave':
+        this.callWaveEarly();
+        break;
       case 'place':
         this.placeBuilding(cmd.kind, cmd.tx, cmd.ty, true, cmd.dir ?? 0);
         break;
@@ -312,7 +425,8 @@ export class World {
       this.orders[slot] = [];
       this.paths[slot] = null;
     }
-    if (this.orders[slot]!.length < 32) this.orders[slot]!.push(order);
+    if (this.orders[slot]!.length < MAX_ORDERS) this.orders[slot]!.push(order);
+    else this.applyRejected.push({ tick: this.tick, reason: `unit ${this.units.id(slot)}: order queue full (${MAX_ORDERS})` });
   }
 
   clampX(x: number) {
@@ -368,14 +482,13 @@ export class World {
     this.fieldDirty.fill(1);
   }
 
-  /** Marks a complete wall for upgrade to the next tier. False if not allowed. */
+  /** Marks a finished building for upgrade to its next tier. False if not allowed (research, top tier). */
   startUpgrade(slot: number): boolean {
     const c = this.buildings.cols;
     const info = buildingInfo(c.kind[slot]!);
     if (!info.tiers || !(c.flags[slot]! & BF_COMPLETE)) return false;
     if (c.flags[slot]! & BF_UPGRADING) return true;
-    if (c.tier[slot]! > info.tiers.length) return false;
-    if (!this.debug.allTiers) return false; // research gating arrives in M3
+    if (upgradeProblem(this, slot)) return false;
     c.flags[slot] = c.flags[slot]! | BF_UPGRADING;
     c.progress[slot] = 0;
     return true;
@@ -402,7 +515,7 @@ export class World {
         for (let dx = -r; dx <= r; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
           if (this.placeBuilding(B.tempTurret, x0 + dx, z0 + dz, true) >= 0) {
-            this.units.cols.cooldown[u] = 75;
+            this.units.cols.cooldown[u] = this.researched('fieldEng') ? FIELD_ENG_TURRET_COOLDOWN : 75;
             return;
           }
         }
@@ -632,6 +745,7 @@ export class World {
         bc.hp[s] = 1;
         continue;
       }
+      if (bc.flags[s]! & BF_COMPLETE) this.buildingsLost++;
       this.removeBuilding(s);
     }
     const u = this.units;
@@ -641,7 +755,12 @@ export class World {
         u.cols.hp[s] = 1;
         continue;
       }
-      if (u.cols.kind[s] === U.commander) this.outcome = 1;
+      // Losing the commander loses the map (W2); nothing else ends the run.
+      if (u.cols.kind[s] === U.commander) {
+        this.outcome = 1;
+        this.endTick = this.tick;
+      }
+      this.unitsLost++;
       u.remove(s);
       this.orders[s] = [];
       this.paths[s] = null;

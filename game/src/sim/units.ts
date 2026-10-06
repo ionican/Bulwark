@@ -8,6 +8,7 @@
 
 import { BF_COMPLETE, BF_UPGRADING, US_BUILDING, US_IDLE, US_MOVING, US_RECLAIMING, US_UNLOADING, US_WAITING } from './schema.ts';
 import { B, CARRY_CAPACITY, RECLAIM_RATE, TICK_SECONDS, U, buildingInfo, unitInfo } from './kinds.ts';
+import { FIELD_ENG_BUILD_MULT } from './balance.ts';
 import { distToBuilding } from './combat.ts';
 import type { World } from './world.ts';
 
@@ -16,6 +17,8 @@ const DT = TICK_SECONDS;
 export type Order =
   | { t: 'move'; x: number; z: number }
   | { t: 'build'; id: number }
+  /** Commander only: produce an engineer (progress 0..1). */
+  | { t: 'produce'; progress: number }
   /** phase 0 collecting, 1 delivering; (x, z) where the last wreck was. */
   | { t: 'reclaim'; id: number; phase: number; x: number; z: number };
 
@@ -145,6 +148,22 @@ export function stepUnits(w: World): void {
       continue;
     }
     const info = unitInfo(c.kind[s]!);
+    const buildRate = c.kind[s] === U.engineer && w.researched('fieldEng') ? info.buildRate * FIELD_ENG_BUILD_MULT : info.buildRate;
+    if (order.t === 'produce') {
+      if (c.kind[s] !== U.commander) {
+        orders.shift();
+        continue;
+      }
+      if (order.progress >= 1 - 1e-9) {
+        // Out it walks, just south of the commander.
+        w.spawnUnit(U.engineer, w.clampX(c.x[s]! + 1.5), w.clampZ(c.z[s]! + 1.5));
+        orders.shift();
+        continue;
+      }
+      c.state[s] = US_BUILDING;
+      w.produceJobs.push({ order, bp: buildRate });
+      continue;
+    }
     if (order.t === 'move') {
       const gcell = Math.floor(order.z) * W + Math.floor(order.x);
       const reached = walk(w, s, `m${gcell}`, order.x, order.z, (cell) => cell === gcell || (!w.walk[gcell] && cellCentreDist(W, cell, order.x, order.z) < 1.6));
@@ -164,7 +183,7 @@ export function stepUnits(w: World): void {
       if (distToBuilding(w, b, c.x[s]!, c.z[s]!) <= range) {
         c.state[s] = US_BUILDING;
         c.work[s] = order.id + 1;
-        w.buildPower[b] = w.buildPower[b]! + info.buildRate;
+        w.buildPower[b] = w.buildPower[b]! + buildRate;
         w.builderCount[b] = Math.min(255, w.builderCount[b]! + 1);
         const half = buildingInfo(bc.kind[b]!).size / 2;
         const dx = bc.tx[b]! + half - c.x[s]!;

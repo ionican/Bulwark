@@ -16,6 +16,12 @@ export type Command =
   | { t: 'stop'; ids: number[] }
   /** An engineer drops a temporary turret where it stands (cooldown). */
   | { t: 'dropTurret'; id: number }
+  /** Queue a research node (balance.ts RESEARCH id). Research cannot be cancelled or refunded. */
+  | { t: 'research'; node: string }
+  /** The commander produces an engineer (W12 cost and build time), queued like a build. */
+  | { t: 'produce'; id: number; queue?: boolean }
+  /** Bring the next wave forward to the next tick and pay the call-early bonus. */
+  | { t: 'callWave' }
   /** Debug: spawn a group of `count` aliens of `kind` at entry index `entry`. */
   | { t: 'spawn'; kind: number; entry: number; count: number }
   /** Debug: place a finished building instantly. */

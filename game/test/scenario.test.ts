@@ -7,6 +7,7 @@ import { createWorld } from '../src/sim/scenarios.ts';
 import { A, B, U } from '../src/sim/kinds.ts';
 import { BF_COMPLETE } from '../src/sim/schema.ts';
 import type { World } from '../src/sim/world.ts';
+import { researchBit } from '../src/sim/balance.ts';
 
 const ids = (w: World, kind?: number) => {
   const out: number[] = [];
@@ -45,6 +46,9 @@ function reclaimAll(w: World) {
 describe('headless map 1 scenario', () => {
   it('builds, defends, reclaims, makes parts and fires them', () => {
     const w = createWorld(11, 'map1');
+    // This M2 scenario predates research and waves: grant the heavy cannon, push the waves away.
+    w.researchDone |= researchBit('heavy');
+    w.waveTicks.fill(1e9);
     const all = ids(w);
     expect(all.length).toBe(3); // commander + 2 engineers (W12 startCount)
     const build = (kind: number, tx: number, ty: number, dir = 0) => w.enqueue({ t: 'build', ids: all, kind, tx, ty, dir, queue: true });

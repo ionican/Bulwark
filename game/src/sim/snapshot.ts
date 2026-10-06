@@ -15,10 +15,10 @@ import { BYTES, makeArray, type AnyTypedArray, type ArrayFor, type FieldSpec, ty
 import type { World } from './world.ts';
 
 export const SNAPSHOT_MAGIC = 0x314b5742; // "BWK1"
-export const SNAPSHOT_VERSION = 2;
+export const SNAPSHOT_VERSION = 3;
 const HEADER_WORDS = 16;
 const HEADER_BYTES = HEADER_WORDS * 4;
-export const GLOBAL_COUNT = 32;
+export const GLOBAL_COUNT = 48;
 const GLOBAL_BYTES = GLOBAL_COUNT * 8;
 
 export const H_MAGIC = 0;
@@ -57,6 +57,21 @@ export const G_OUTCOME = 20;
 export const G_PENDING_SPAWNS = 21;
 export const G_COMMANDER_ID = 22;
 export const G_FIELD_BUILDS = 23;
+export const G_NEXT_WAVE = 24; // index of the next wave to arrive (0..20)
+export const G_NEXT_WAVE_TICK = 25; // its start tick (-1 when none left)
+export const G_LAST_WAVE_TICK = 26;
+export const G_END_TICK = 27;
+export const G_RESEARCH_DONE = 28; // bit mask over RESEARCH
+export const G_RESEARCH_CURRENT = 29; // node index or -1
+export const G_RESEARCH_PROGRESS = 30; // 0..1
+export const G_RESEARCH_RATE = 31; // RP per second
+export const G_RESEARCH_QUEUED = 32; // bit mask
+export const G_BUILDINGS_LOST = 33;
+export const G_UNITS_LOST = 34;
+export const G_SKIPPED_TICKS = 35;
+export const G_BONUS_MASS = 36;
+export const G_BONUS_ENERGY = 37;
+export const G_WAVE_COUNT = 38;
 
 type SnapFields<S extends readonly FieldSpec[]> = Exclude<S[number], { snap: false }>;
 export type SnapColumns<S extends readonly FieldSpec[]> = { [F in SnapFields<S> as F['name']]: ArrayFor<F['type']> };
@@ -162,6 +177,23 @@ function writeGlobals(world: World, g: Float64Array): void {
   g[G_PENDING_SPAWNS] = world.pendingSpawns;
   g[G_COMMANDER_ID] = world.commanderId;
   g[G_FIELD_BUILDS] = world.fieldBuilds;
+  g[G_NEXT_WAVE] = world.nextWave;
+  g[G_NEXT_WAVE_TICK] = world.nextWave < world.waveTicks.length ? world.waveTicks[world.nextWave]! : -1;
+  g[G_LAST_WAVE_TICK] = world.lastWaveTick;
+  g[G_END_TICK] = world.endTick;
+  g[G_RESEARCH_DONE] = world.researchDone;
+  g[G_RESEARCH_CURRENT] = world.researchCurrent;
+  g[G_RESEARCH_PROGRESS] = world.researchProgress;
+  g[G_RESEARCH_RATE] = world.researchRate;
+  let queued = 0;
+  for (const i of world.researchQueue) queued |= 1 << i;
+  g[G_RESEARCH_QUEUED] = queued;
+  g[G_BUILDINGS_LOST] = world.buildingsLost;
+  g[G_UNITS_LOST] = world.unitsLost;
+  g[G_SKIPPED_TICKS] = world.skippedTicks;
+  g[G_BONUS_MASS] = world.bonusPaid[0]!;
+  g[G_BONUS_ENERGY] = world.bonusPaid[1]!;
+  g[G_WAVE_COUNT] = world.waveTicks.length;
 }
 
 /**

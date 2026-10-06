@@ -26,7 +26,7 @@ function ticksToComplete(w: World, id: number, max = 20000): number {
 }
 
 /** A world on flat ground with no commander (so no commander income). */
-const flat = (w = 40, h = 40) => new World(1, flatTerrain(w, h));
+const flat = (w = 40, h = 40) => new World(1, flatTerrain(w, h), { waves: false });
 
 // ---- map 1 start --------------------------------------------------------------------------
 
@@ -161,7 +161,7 @@ describe('flow fields', () => {
   // 40 × 40 flat map, entry at the top centre, a gun turret (the rushers' goal) at the bottom.
   const W = 40;
   const setup = () => {
-    const w = new World(1, flatTerrain(W, W, { entries: [{ name: 'north', x: 20.5, z: 0.5, dirX: 0, dirZ: 1 }], base: { x: 20, z: 36 } }));
+    const w = new World(1, flatTerrain(W, W, { entries: [{ name: 'north', x: 20.5, z: 0.5, dirX: 0, dirZ: 1 }], base: { x: 20, z: 36 } }), { waves: false });
     w.placeBuilding(B.gun, 19, 34, true);
     return w;
   };
@@ -200,6 +200,7 @@ describe('flow fields', () => {
     const w = setup();
     const ids = wallLine(w, (x) => x === 0);
     const weakCost = crossing(w).cost;
+    w.debug.allTiers = true; // this test is about path cost, not research
     for (const id of ids) {
       const s = w.buildings.slotForId(id);
       w.startUpgrade(s);

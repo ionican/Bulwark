@@ -105,6 +105,40 @@ export class Table<S extends readonly FieldSpec[]> {
     return ((this.gen[slot]! << 16) | slot) >>> 0;
   }
 
+  /** Everything needed to rebuild this table exactly (slots up to highWater). */
+  exportState(): { count: number; highWater: number; free: Int32Array; alive: Uint8Array; gen: Uint16Array; cols: Record<string, AnyTypedArray> } {
+    const cols: Record<string, AnyTypedArray> = {};
+    for (const f of this.schema) cols[f.name] = (this.cols as Record<string, AnyTypedArray>)[f.name]!.slice(0, this.highWater);
+    return {
+      count: this.count,
+      highWater: this.highWater,
+      free: this.free.slice(0, this.freeTop),
+      alive: this.alive.slice(0, this.highWater),
+      gen: this.gen.slice(0, this.highWater),
+      cols,
+    };
+  }
+
+  importState(st: { count: number; highWater: number; free: ArrayLike<number>; alive: ArrayLike<number>; gen: ArrayLike<number>; cols: Record<string, ArrayLike<number>> }): void {
+    if (st.highWater > this.capacity) throw new Error('saved table larger than capacity');
+    this.count = st.count;
+    this.highWater = st.highWater;
+    this.freeTop = st.free.length;
+    this.free.fill(0);
+    this.free.set(st.free);
+    this.alive.fill(0);
+    this.alive.set(st.alive);
+    this.gen.fill(0);
+    this.gen.set(st.gen);
+    for (const f of this.schema) {
+      const dst = (this.cols as Record<string, AnyTypedArray>)[f.name]!;
+      dst.fill(0);
+      const src = st.cols[f.name];
+      if (!src) throw new Error(`saved table lacks column ${f.name}`);
+      dst.set(src);
+    }
+  }
+
   /** Slot for a live id, or -1 if the entity has gone. */
   slotForId(id: number): number {
     const slot = slotOf(id);

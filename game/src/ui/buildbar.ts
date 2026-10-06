@@ -13,13 +13,13 @@ padding:2px 5px;margin:1px;cursor:pointer;text-align:left}
 .bar button.on{outline:2px solid #fff3a0;outline-offset:1px;font-weight:700}
 .bar button:disabled{opacity:.4;cursor:default}
 .bar button small{font-size:10px;opacity:.7;margin-left:4px}
-.dbg{position:fixed;right:8px;top:56px;font:11px ui-monospace,Menlo,monospace;color:#f4efe6;background:rgba(18,15,13,.88);
+.dbg{position:fixed;right:8px;top:118px;font:11px ui-monospace,Menlo,monospace;color:#f4efe6;background:rgba(18,15,13,.88);
 border:1px dashed rgba(244,239,230,.45);border-radius:4px;padding:4px 6px;pointer-events:auto}
 .dbg button{font:inherit;color:#f4efe6;background:#2a2420;border:1px solid rgba(244,239,230,.4);border-radius:3px;padding:2px 5px;margin:1px;cursor:pointer}
 .dbg label{display:block;margin-top:3px}`;
 
 export const BUILD_GROUPS: Array<[string, BuildingKind[]]> = [
-  ['ECONOMY', ['massExtractor', 'generator', 'rareExtractor']],
+  ['ECONOMY', ['massExtractor', 'generator', 'rareExtractor', 'lab']],
   ['SALVAGE CHAIN', ['depot', 'belt', 'splitter', 'merger', 'shredder', 'smelter', 'assembler']],
   ['DEFENCE', ['wall', 'gun', 'area', 'beam', 'heavy', 'shield']],
 ];
@@ -35,6 +35,7 @@ const cost = (k: BuildingKind) => {
 export interface BuildBarHandlers {
   build(kind: BuildingKind): void;
   upgrade(): void;
+  produce(): void;
   dropTurret(): void;
   stop(): void;
   spawn(kind: number, entry: number): void;
@@ -57,11 +58,13 @@ export class BuildBar {
         const info = BUILDING_INFO[k];
         const b = this.button(g, `${info.label} [${info.key.toUpperCase()}]`, cost(k), () => h.build(k));
         b.dataset.kind = k;
+        b.dataset.cost = cost(k);
         this.buttons.set(k, b);
       }
     }
     const act = this.group(bar, 'ENGINEERS');
-    this.buttons.set('upgrade', this.button(act, 'Upgrade wall [U]', 'click a wall', () => h.upgrade()));
+    this.buttons.set('upgrade', this.button(act, 'Upgrade [U]', 'click a wall or turret', () => h.upgrade()));
+    this.buttons.set('produce', this.button(act, 'Produce engineer', 'commander: 60M 200E', () => h.produce()));
     this.buttons.set('turret', this.button(act, 'Drop turret [T]', '75 s cooldown', () => h.dropTurret()));
     this.buttons.set('stop', this.button(act, 'Stop [X]', 'clear orders', () => h.stop()));
     this.hint = document.createElement('div');
@@ -106,11 +109,16 @@ export class BuildBar {
     return b;
   }
 
-  /** Enables the bar for builders; marks the active tool. */
-  update(canBuild: boolean, hasEngineers: boolean, active: string | null, hint: string) {
+  /** Enables the bar for builders; marks the active tool; marks kinds still locked by research. */
+  update(canBuild: boolean, hasEngineers: boolean, hasCommander: boolean, active: string | null, hint: string, locked: (kind: string) => string | null) {
     for (const [k, b] of this.buttons) {
-      b.disabled = k === 'upgrade' || k === 'turret' ? !hasEngineers : !canBuild;
+      const lock = locked(k);
+      b.disabled = k === 'upgrade' || k === 'turret' ? !hasEngineers : k === 'produce' ? !hasCommander : !canBuild || lock !== null;
       b.classList.toggle('on', k === active);
+      b.title = lock ? `Locked: needs research "${lock}"` : '';
+      const small = b.querySelector('small');
+      if (small && lock && !small.textContent!.startsWith('✕')) small.textContent = `✕ needs ${lock}`;
+      if (small && !lock && small.textContent!.startsWith('✕')) small.textContent = b.dataset.cost ?? '';
     }
     this.hint.textContent = hint;
   }

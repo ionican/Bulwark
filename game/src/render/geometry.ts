@@ -382,7 +382,7 @@ function unitSimple(kind: UnitKind): BufferGeometry {
 
 // ---- icons ---------------------------------------------------------------------------------
 
-type Pt = [number, number];
+export type Pt = [number, number];
 
 const circlePts = (r: number, n = 20, cx = 0, cy = 0): Pt[] =>
   Array.from({ length: n }, (_, i) => [cx + r * Math.cos((i / n) * Math.PI * 2), cy + r * Math.sin((i / n) * Math.PI * 2)] as Pt);
@@ -397,7 +397,7 @@ const star = (ro: number, ri: number, n: number): Pt[] =>
   });
 const rev = (p: Pt[]) => [...p].reverse();
 
-interface IconSpec {
+export interface IconSpec {
   /** Silhouette; also the dark outline plate, drawn grown by the outline width. */
   outer: Pt[];
   holes?: Pt[][];
@@ -468,7 +468,7 @@ const BUILDING_ICONS: Record<BuildingKind, IconSpec> = {
   tempTurret: { outer: [[-0.25, 0.8], [0.25, 0.8], [0.25, 0.25], [0.8, 0.25], [0.8, -0.25], [0.25, -0.25], [0.25, -0.8], [-0.25, -0.8], [-0.25, -0.25], [-0.8, -0.25], [-0.8, 0.25], [-0.25, 0.25]] },
 };
 
-const ALIEN_ICONS: Record<AlienKind, IconSpec> = {
+export const ALIEN_ICONS: Record<AlienKind, IconSpec> = {
   rusher: { outer: [[0, 0.9], [0.75, -0.6], [-0.75, -0.6]] },
   hunter: { outer: [[0, 1], [0.85, -0.8], [0, -0.25], [-0.85, -0.8]] },
   // Heavy block with a pointed ram: reads differently from the hollow hexagon of a mass deposit.

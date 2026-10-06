@@ -7,7 +7,11 @@
 // slowed. Energy upkeep (beams, shields, machines) draws before construction.
 
 import { BF_ACTIVE, BF_COMPLETE, BF_STARVED, BF_UPGRADING } from './schema.ts';
-import { B, COMMANDER_INCOME, SHIELD, TICK_SECONDS, buildingInfo } from './kinds.ts';
+import { B, COMMANDER_INCOME, SHIELD, TICK_SECONDS, buildingInfo, type Cost } from './kinds.ts';
+import { ENGINEER_BUILD_TIME, ENGINEER_COST, RESEARCH } from './balance.ts';
+import { map1 } from '../../../model/data/map1.ts';
+
+const LAB_RATE = map1.labRate;
 import type { World } from './world.ts';
 
 const DT = TICK_SECONDS;
@@ -21,9 +25,10 @@ export function stepEconomyIncome(w: World): void {
   let r = 0;
   for (let s = 0; s < b.highWater; s++) {
     if (!b.alive[s] || !(c.flags[s]! & BF_COMPLETE)) continue;
-    const inc = buildingInfo(c.kind[s]!).income;
+    const kind = c.kind[s]!;
+    const inc = buildingInfo(kind).income;
     if (!inc) continue;
-    m += inc[0];
+    m += kind === B.massExtractor ? inc[0] * w.extractorOutput() : inc[0];
     e += inc[1];
     r += inc[2];
   }
@@ -78,12 +83,24 @@ export function stepUpkeep(w: World): void {
 const requested = new Float64Array(3);
 const ratio = new Float64Array(3);
 
+/** One piece of work this tick: a building site, an upgrade, an engineer in production, research. */
+interface Job {
+  cost: Cost;
+  /** Progress it could make at full supply. */
+  p: number;
+  done(progress: number, f: number): void;
+}
+
+/**
+ * Construction drain (W12, Forged Alliance): each job draws cost × progress; for each resource
+ * ratio = min(1, pool / total requested); each job then progresses at the worst ratio among the
+ * resources it actually draws.
+ */
 export function stepConstruction(w: World): void {
   const b = w.buildings;
   const c = b.cols;
   requested.fill(0);
-  // Pass 1: what each active build could do at full supply.
-  const want: number[] = [];
+  const jobs: Job[] = [];
   for (let s = 0; s < b.highWater; s++) {
     if (!b.alive[s]) continue;
     const site = !(c.flags[s]! & BF_COMPLETE) || (c.flags[s]! & BF_UPGRADING) !== 0;
@@ -97,11 +114,54 @@ export function stepConstruction(w: World): void {
     const { cost, time } = w.workOf(s);
     const p = Math.min(1 - c.progress[s]!, (bp * DT) / time);
     if (p <= 0) continue;
-    want.push(s, p);
-    for (let k = 0; k < 3; k++) requested[k] = requested[k]! + cost[k]! * p;
+    jobs.push({
+      cost,
+      p,
+      done: (done, f) => {
+        c.eff[s] = Math.round(f * 255);
+        c.progress[s] = c.progress[s]! + done;
+        const upgrading = (c.flags[s]! & BF_UPGRADING) !== 0;
+        if (!upgrading) c.hp[s] = Math.min(c.maxHp[s]!, c.hp[s]! + c.maxHp[s]! * 0.9 * done);
+        if (c.progress[s]! >= 1 - 1e-9) complete(w, s, upgrading);
+      },
+    });
   }
   w.buildPower.fill(0);
   w.builderCount.fill(0);
+  // Engineers in production (the commander's 'produce' orders).
+  for (const job of w.produceJobs) {
+    const order = job.order;
+    const p = Math.min(1 - order.progress, (job.bp * DT) / ENGINEER_BUILD_TIME);
+    if (p > 0) jobs.push({ cost: ENGINEER_COST, p, done: (done) => (order.progress += done) });
+  }
+  w.produceJobs.length = 0;
+  // Research: complete stations make RP at W12's labRate; the node drains its cost over its RP.
+  let stations = 0;
+  for (let s = 0; s < b.highWater; s++) if (b.alive[s] && c.kind[s] === B.lab && c.flags[s]! & BF_COMPLETE) stations++;
+  w.researchRate = stations * LAB_RATE;
+  if (w.researchCurrent < 0 && w.researchQueue.length) {
+    w.researchCurrent = w.researchQueue.shift()!;
+    w.researchProgress = 0;
+  }
+  if (w.researchCurrent >= 0 && stations > 0) {
+    const node = RESEARCH[w.researchCurrent]!;
+    const p = Math.min(1 - w.researchProgress, (w.researchRate * DT) / node.seconds);
+    if (p > 0)
+      jobs.push({
+        cost: node.cost,
+        p,
+        done: (done, f) => {
+          w.researchProgress += done;
+          w.researchEff = f;
+          if (w.researchProgress >= 1 - 1e-9) {
+            w.researchDone |= 1 << w.researchCurrent;
+            w.researchCurrent = -1;
+            w.researchProgress = 0;
+          }
+        },
+      });
+  }
+  for (const j of jobs) for (let k = 0; k < 3; k++) requested[k] = requested[k]! + j.cost[k]! * j.p;
   // Supply ratio per resource.
   let worst = 1;
   for (let k = 0; k < 3; k++) {
@@ -109,26 +169,19 @@ export function stepConstruction(w: World): void {
     if (ratio[k]! < 1 - EPS) w.shortMask |= 1 << k;
     if (ratio[k]! < worst) worst = ratio[k]!;
   }
-  w.buildEff = want.length ? worst : 1;
-  // Pass 2: each build progresses at its worst ratio among the resources it draws.
-  for (let i = 0; i < want.length; i += 2) {
-    const s = want[i]!;
-    const p = want[i + 1]!;
-    const { cost } = w.workOf(s);
+  w.buildEff = jobs.length ? worst : 1;
+  // Each job progresses at its worst ratio among the resources it draws.
+  for (const j of jobs) {
     let f = 1;
-    for (let k = 0; k < 3; k++) if (cost[k]! > 0 && ratio[k]! < f) f = ratio[k]!;
-    const done = p * f;
-    c.eff[s] = Math.round(f * 255);
+    for (let k = 0; k < 3; k++) if (j.cost[k]! > 0 && ratio[k]! < f) f = ratio[k]!;
+    const done = j.p * f;
     for (let k = 0; k < 3; k++) {
-      const draw = cost[k]! * done;
+      const draw = j.cost[k]! * done;
       w.pool[k] = w.pool[k]! - draw;
       w.spendTick[k] = w.spendTick[k]! + draw;
     }
     for (let k = 0; k < 3; k++) if (w.pool[k]! < 0 && w.pool[k]! > -1e-9) w.pool[k] = 0;
-    c.progress[s] = c.progress[s]! + done;
-    const upgrading = (c.flags[s]! & BF_UPGRADING) !== 0;
-    if (!upgrading) c.hp[s] = Math.min(c.maxHp[s]!, c.hp[s]! + c.maxHp[s]! * 0.9 * done);
-    if (c.progress[s]! >= 1 - 1e-9) complete(w, s, upgrading);
+    j.done(done, f);
   }
 }
 

@@ -1,69 +1,107 @@
-// Simulation worker: owns the World, steps it at a fixed 10 ticks per second and transfers a
-// snapshot buffer to the render thread after each step. Commands arrive as messages and are
-// stamped with the next tick. Returned buffers are reused, so steady state allocates nothing.
+// Simulation worker: owns a SimRunner (world + clock + checkpoints), steps it at 10 ticks per
+// second times the game speed and transfers a snapshot buffer to the render thread after each
+// batch of ticks. Commands arrive as messages, are validated, and are either queued for the next
+// tick or reported back as rejected. Returned buffers are reused.
 
 import { encodeSnapshot } from './snapshot.ts';
 import { createWorld } from './scenarios.ts';
-import { TICK_HZ } from './kinds.ts';
+import { SimRunner } from './runner.ts';
+import { SaveVersionError, serializeWorld } from './save.ts';
 import type { FromWorker, ToWorker } from './protocol.ts';
-import type { World } from './world.ts';
 
-const TICK_MS = 1000 / TICK_HZ;
-/** After a stall (tab in background, debugger) run at most this many ticks to catch up. */
-const MAX_CATCH_UP = 5;
-
-let world: World | null = null;
+let runner: SimRunner | null = null;
 const spare: ArrayBuffer[] = [];
-let nextTickAt = 0;
 let timer: ReturnType<typeof setTimeout> | null = null;
 
-function post(msg: FromWorker) {
-  self.postMessage(msg, { transfer: [msg.buffer] });
+function post(msg: FromWorker, transfer: Transferable[] = []) {
+  self.postMessage(msg, { transfer });
 }
 
-function takeBuffer(): ArrayBuffer | undefined {
-  return spare.pop();
+function sendSnapshot(tickMs: number, ticksRun: number) {
+  if (!runner) return;
+  const buffer = encodeSnapshot(runner.world, spare.pop());
+  post(
+    {
+      type: 'snapshot',
+      buffer,
+      tickMs,
+      ticksRun,
+      runner: { speed: runner.speed, paused: runner.paused, checkpoints: runner.checkpoints.map((c) => ({ wave: c.wave, tick: c.tick })) },
+    },
+    [buffer],
+  );
 }
 
 function loop() {
-  if (!world) return;
-  const now = performance.now();
-  let ran = 0;
-  let tickMs = 0;
-  while (now >= nextTickAt && ran < MAX_CATCH_UP) {
-    const t0 = performance.now();
-    world.step();
-    ran++;
-    nextTickAt += TICK_MS;
-    tickMs = performance.now() - t0;
-  }
-  if (now >= nextTickAt) nextTickAt = now + TICK_MS; // dropped ticks: resume from now
-  if (ran > 0) {
-    const t0 = performance.now();
-    const buffer = encodeSnapshot(world, takeBuffer());
-    tickMs += performance.now() - t0;
-    post({ type: 'snapshot', buffer, tickMs, ticksRun: ran });
-  }
-  timer = setTimeout(loop, Math.max(0, nextTickAt - performance.now()));
+  if (!runner) return;
+  const t0 = performance.now();
+  const ran = runner.advance(t0);
+  const tickMs = ran > 0 ? (performance.now() - t0) / ran : 0;
+  // While paused, keep sending (cheaply, 4 per second) so orders given show up in the HUD.
+  if (ran > 0 || runner.paused || runner.world.outcome !== 0) sendSnapshot(tickMs, ran);
+  const wait = runner.paused || runner.world.outcome !== 0 ? 250 : runner.delay(performance.now());
+  timer = setTimeout(loop, wait);
+}
+
+function restart() {
+  if (timer !== null) clearTimeout(timer);
+  sendSnapshot(0, 0);
+  timer = setTimeout(loop, runner!.delay(performance.now()));
 }
 
 self.onmessage = (ev: MessageEvent<ToWorker>) => {
   const msg = ev.data;
   switch (msg.type) {
-    case 'init':
-      if (timer !== null) clearTimeout(timer);
-      world = createWorld(msg.seed, msg.scenario);
+    case 'init': {
+      const world = createWorld(msg.seed, msg.scenario);
       if (msg.rich) world.pool.set([1e6, 1e6, 1e6]);
-      // Send the starting state at once so the first frame has something to draw.
-      post({ type: 'snapshot', buffer: encodeSnapshot(world), tickMs: 0, ticksRun: 0 });
-      nextTickAt = performance.now() + TICK_MS;
-      timer = setTimeout(loop, TICK_MS);
+      runner = new SimRunner(world, performance.now());
+      restart();
       break;
-    case 'command':
-      world?.enqueue(msg.cmd);
+    }
+    case 'command': {
+      if (!runner) return;
+      const problem = runner.submit(msg.cmd);
+      if (problem) post({ type: 'rejected', reason: problem, cmd: msg.cmd, ref: msg.ref });
       break;
+    }
     case 'recycle':
       if (spare.length < 4) spare.push(msg.buffer);
       break;
+    case 'speed':
+      runner?.setSpeed(msg.speed, performance.now());
+      break;
+    case 'pause':
+      runner?.setPaused(msg.paused, performance.now());
+      if (runner) sendSnapshot(0, 0);
+      break;
+    case 'rewind': {
+      if (!runner) return;
+      const r = runner.rewind();
+      if (typeof r === 'string') post({ type: 'notice', message: `Rewind refused: ${r}.` });
+      else {
+        post({ type: 'notice', message: `Rewound to the start of wave ${r.wave}.` });
+        restart();
+      }
+      break;
+    }
+    case 'save': {
+      if (!runner) return;
+      const bytes = serializeWorld(runner.world);
+      const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+      post({ type: 'saved', bytes: buf, tick: runner.world.tick }, [buf]);
+      break;
+    }
+    case 'load': {
+      if (!runner) return;
+      try {
+        runner.load(new Uint8Array(msg.bytes));
+        post({ type: 'notice', message: `Save loaded (tick ${runner.world.tick}).` });
+        restart();
+      } catch (e) {
+        post({ type: 'error', message: e instanceof SaveVersionError ? e.message : `Could not load the save: ${(e as Error).message}` });
+      }
+      break;
+    }
   }
 };
