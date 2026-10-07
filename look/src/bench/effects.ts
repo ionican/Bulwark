@@ -63,7 +63,7 @@ export class Shells {
   }
 
   fire(from: Vec3, vel: Vec3): void {
-    this.list.push({ p0: [...from] as Vec3, v0: [...vel] as Vec3, age: 0, prev: [...from] as Vec3, colour: new Color(10, 6.5, 2.8), len: 1.3, width: 0.05, gravity: GRAVITY, friendly: true });
+    this.list.push({ p0: [...from] as Vec3, v0: [...vel] as Vec3, age: 0, prev: [...from] as Vec3, colour: new Color(5, 2.9, 1.1), len: 1.1, width: 0.032, gravity: GRAVITY, friendly: true });
   }
 
   enemyBolt(from: Vec3, to: Vec3, speed: number, onEnd: (at: Vector3) => void): void {
@@ -224,11 +224,11 @@ export function muzzleBlast(fx: Particles, muzzle: Vector3, dir: Vector3, side: 
   const r = (a: number, b: number) => a + (b - a) * rnd();
   // forward cone of flash: three overlapping sprites stepping out along the bore
   const steps: Array<[number, number, number]> = [
-    [0.12, 0.55, 0.07],
-    [0.38, 0.45, 0.06],
-    [0.7, 0.3, 0.05],
+    [0.1, 0.36, 0.07],
+    [0.3, 0.3, 0.06],
+    [0.55, 0.2, 0.05],
   ];
-  for (const [d, s, life] of steps) fx.spawn({ type: PType.Flash, x: muzzle.x + dir.x * d, y: muzzle.y + dir.y * d, z: muzzle.z + dir.z * d, life, s0: s, s1: s * 1.4, r: 9, g: 5.6, b: 2.4, a: 1, drag: 0 });
+  for (const [d, s, life] of steps) fx.spawn({ type: PType.Flash, x: muzzle.x + dir.x * d, y: muzzle.y + dir.y * d, z: muzzle.z + dir.z * d, life, s0: s, s1: s * 1.3, r: 5.5, g: 2.9, b: 1.0, a: 1, drag: 0 });
   for (let i = 0; i < 6; i++) {
     const s = r(4, 9);
     fx.spawn({ type: PType.Spark, x: muzzle.x, y: muzzle.y, z: muzzle.z, vx: dir.x * s + r(-1, 1), vy: dir.y * s + r(-0.5, 1), vz: dir.z * s + r(-1, 1), life: r(0.1, 0.25), s0: 0.05, s1: 0.02, r: 9, g: 6, b: 2.5, a: 1, drag: 1 });
@@ -239,7 +239,7 @@ export function muzzleBlast(fx: Particles, muzzle: Vector3, dir: Vector3, side: 
       const sx = side.x * sg;
       const sy = side.y * sg;
       const sz = side.z * sg;
-      fx.spawn({ type: PType.Flash, x: p.x + sx * 0.12, y: p.y + sy * 0.12, z: p.z + sz * 0.12, vx: sx * 4, vy: sy * 4, vz: sz * 4, life: 0.06, s0: 0.2, s1: 0.32, r: 8, g: 4.6, b: 1.9, a: 1, drag: 0 });
+      fx.spawn({ type: PType.Flash, x: p.x + sx * 0.12, y: p.y + sy * 0.12, z: p.z + sz * 0.12, vx: sx * 4, vy: sy * 4, vz: sz * 4, life: 0.06, s0: 0.13, s1: 0.22, r: 5, g: 2.5, b: 0.9, a: 1, drag: 0 });
       fx.spawn({ type: PType.Smoke, x: p.x + sx * 0.15, y: p.y + sy * 0.15, z: p.z + sz * 0.15, vx: sx * r(2, 3.2) + dir.x * 0.6, vy: sy * 2 + r(0.2, 0.6), vz: sz * r(2, 3.2) + dir.z * 0.6, life: r(1.2, 2), s0: 0.14, s1: r(0.7, 1.0), r: 0.55, g: 0.51, b: 0.47, a: 0.55, drag: 2.6, buoy: 0.35 });
     }
   }

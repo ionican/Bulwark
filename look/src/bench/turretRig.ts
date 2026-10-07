@@ -188,7 +188,8 @@ export class TurretRig {
   /** Icon size: screen-constant (game) or fixed world radius (LOD line-up). */
   iconFixed = false;
   private helpers: AxesHelper[] = [];
-  private wireMats = new Map<Material, boolean>();
+  private wireMats = new Map<Material, MeshBasicMaterial>();
+  private solidMats = new Map<Mesh, Material | Material[]>();
 
   constructor(model: TurretModel, mats: TurretMats, readonly only?: Lod) {
     this.model = model;
@@ -231,13 +232,30 @@ export class TurretRig {
     this.icon.position.y = 0.4;
   }
 
+  /**
+   * Wireframe view. The lit materials cannot simply be switched to wireframe: their normal maps
+   * build a tangent frame from screen-space derivatives, which are degenerate on lines and give
+   * NaN that the bloom then spreads over the whole frame. So each mesh swaps to an unlit
+   * wireframe material in its material's base colour.
+   */
   setWireframe(on: boolean): void {
+    const tint: Record<string, string> = { ceramic: '#efe4cc', gunmetal: '#8c94a0', bronze: '#d4925a', dark: '#4a4a4a', glow: '#5ff0ff', brass: '#e8c070' };
+    const wire = (m: Material) => {
+      let w = this.wireMats.get(m);
+      if (!w) {
+        w = new MeshBasicMaterial({ color: tint[m.name] ?? '#cccccc', wireframe: true, fog: false });
+        this.wireMats.set(m, w);
+      }
+      return w;
+    };
     for (const p of Object.values(this.levels))
-      for (const m of p.meshes)
-        for (const mat of Array.isArray(m.material) ? m.material : [m.material]) {
-          if (!this.wireMats.has(mat)) this.wireMats.set(mat, (mat as MeshBasicMaterial).wireframe);
-          (mat as MeshBasicMaterial).wireframe = on;
-        }
+      for (const mesh of p.meshes) {
+        if (on) {
+          if (!this.solidMats.has(mesh)) this.solidMats.set(mesh, mesh.material);
+          const orig = this.solidMats.get(mesh)!;
+          mesh.material = Array.isArray(orig) ? orig.map(wire) : wire(orig);
+        } else if (this.solidMats.has(mesh)) mesh.material = this.solidMats.get(mesh)!;
+      }
   }
 
   setPivots(on: boolean): void {

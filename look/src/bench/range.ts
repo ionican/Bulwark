@@ -9,6 +9,7 @@ import {
   BufferAttribute,
   BufferGeometry,
   Color,
+  DoubleSide,
   Euler,
   Group,
   IcosahedronGeometry,
@@ -235,8 +236,9 @@ function rangeRing(range: number): Mesh {
   const m = new ShaderMaterial({
     transparent: true,
     depthWrite: false,
+    side: DoubleSide,
     blending: AdditiveBlending,
-    uniforms: { uCol: { value: new Color(0.25, 0.8, 1.0) }, uAlpha: { value: 0.55 } },
+    uniforms: { uCol: { value: new Color(0.2, 0.75, 1.0) }, uAlpha: { value: 0.22 } },
     vertexShader: /* glsl */ `attribute float aEdge; varying float vE; void main(){ vE = aEdge; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: /* glsl */ `uniform vec3 uCol; uniform float uAlpha; varying float vE; void main(){ float k = 0.12 + 0.88 * vE * vE * vE; gl_FragColor = vec4(uCol * k * uAlpha, 1.0); }`,
   });

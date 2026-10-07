@@ -31,7 +31,7 @@ const CONCEPT_URL = new URL('../../reference/02-gun-turret.png', import.meta.url
  * left, as the concept is lit; the turret is turned on its footing so a bolted foot faces the
  * viewer and the barrel points to the viewer's right and slightly towards them, as in the image.
  */
-const CONCEPT_POSE = { root: -25 * DEG, yaw: -128 * DEG, pitch: 4 * DEG };
+const CONCEPT_POSE = { root: -25 * DEG, yaw: -118 * DEG, pitch: 4 * DEG };
 const LOD_NAMES: Lod[] = ['full', 'simple', 'icon'];
 
 interface Measure {
@@ -96,8 +96,8 @@ async function main(): Promise<void> {
   const construction = new Construction(rig, fx);
   // line-up copies (simple, icon) for the detail-level comparison
   const lineup = [new TurretRig(model, tm, 'simple'), new TurretRig(model, tm, 'icon')];
-  lineup[0]!.root.position.set(3.4, 0, 0);
-  lineup[1]!.root.position.set(6.8, 0, 0);
+  lineup[0]!.root.position.set(3.1, 0, 0);
+  lineup[1]!.root.position.set(6.2, 0, 0);
   for (const l of lineup) {
     l.root.visible = false;
     l.iconFixed = true;
@@ -188,6 +188,7 @@ async function main(): Promise<void> {
     s.lineup = on;
     document.body.classList.toggle('lineup', on);
     for (const l of lineup) l.root.visible = on;
+    brain.enabled = !on && !construction.active;
     if (on) {
       if (s.compare) setCompare(false);
       setPreset('lineup');
@@ -324,10 +325,10 @@ async function main(): Promise<void> {
   });
 
   // ---- initial targets: a few already walking in
-  targets.spawn('rusher', 0, 40);
-  targets.spawn('hunter', 1, 55);
-  targets.spawn('breaker', 2, 34);
-  targets.spawn('saboteur', 0, 70);
+  targets.spawn('rusher', 0, 32);
+  targets.spawn('hunter', 1, 44);
+  targets.spawn('breaker', 2, 28);
+  targets.spawn('saboteur', 0, 52);
 
   loading.textContent = 'Compiling shaders…';
   setPreset('close', true);
@@ -349,6 +350,9 @@ async function main(): Promise<void> {
   const side = new Vector3();
   let killsAtStart = 0;
   const rnd = Math.random;
+  /** Screenshot helper: pause the simulation this many sim-seconds after the next shot. */
+  let pauseAfterShot: number | null = null;
+  let pauseAt: number | null = null;
 
   const tick = () => {
     requestAnimationFrame(tick);
@@ -370,15 +374,27 @@ async function main(): Promise<void> {
     if (over) {
       yaw = over.yaw;
       pitch = over.pitch;
-    } else if (!brain.enabled && !s.compare) brain.enabled = true;
+    } else if (!brain.enabled && !s.compare && !s.lineup) brain.enabled = true;
     if (s.compare) {
       yaw = CONCEPT_POSE.yaw;
       pitch = CONCEPT_POSE.pitch;
+    } else if (s.lineup) {
+      // line-up holds one pose so the three levels read side by side
+      yaw = -50 * DEG;
+      pitch = 6 * DEG;
     }
     rig.setPose(yaw, pitch, recoil.offset);
     for (const l of lineup) l.setPose(yaw, pitch, recoil.offset);
     rig.root.updateMatrixWorld(true);
 
+    if (shots.length && pauseAfterShot !== null) {
+      pauseAt = simT + pauseAfterShot;
+      pauseAfterShot = null;
+    }
+    if (pauseAt !== null && simT >= pauseAt) {
+      s.paused = true;
+      pauseAt = null;
+    }
     for (const shot of shots) {
       recoil.fire();
       shells.fire(shot.from, shot.vel);
@@ -489,6 +505,7 @@ async function main(): Promise<void> {
     };
     if (start - hudAt > 250) {
       hudAt = start;
+      ui.refresh();
       const st = bench.state;
       ui.setReadout(
         [
@@ -541,6 +558,7 @@ async function main(): Promise<void> {
       reticle.visible = brain.manual;
     }) as never,
     fire: fire as never,
+    pauseAfterShot: ((d: number) => (pauseAfterShot = d)) as never,
     lead: ((v: boolean) => (brain.lead = v)) as never,
     spawn: ((kind?: AlienKind, gully?: number, dist?: number) => targets.spawn(kind, gully, dist)?.id ?? null) as never,
     group: (() => targets.spawnGroup(5)) as never,

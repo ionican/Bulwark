@@ -17,12 +17,13 @@ export interface CamView {
 export type Preset = 'game' | 'close' | 'concept' | 'lineup';
 
 export const PRESETS: Record<Preset, CamView> = {
-  // the game's camera at its close zoom: 45° fov, pitch from game/src/render/cameraRig.ts pitchFor(30) ≈ 59°
-  game: { target: [7, 0, -2], distance: 34, elevation: 59, azimuth: -28, fov: 45 },
+  // the game's camera (game/src/render/cameraRig.ts): 45° fov, pitch eased with distance —
+  // pitchFor(60) = 71.9° — at a zoom that fits the 24-tile range ring
+  game: { target: [5, 0, -4], distance: 60, elevation: 71.9, azimuth: -30, fov: 45 },
   close: { target: [0.25, 0.72, 0], distance: 5.6, elevation: 17, azimuth: -38, fov: 30 },
   // the concept image's view: low, long lens, front-left three-quarter, barrel towards the camera
   concept: { target: [0.06, 0.62, 0.02], distance: 4.6, elevation: 17, azimuth: -100, fov: 27 },
-  lineup: { target: [0, 0.5, 0], distance: 10.5, elevation: 30, azimuth: -14, fov: 32 },
+  lineup: { target: [3.9, 0.4, 0.3], distance: 11.5, elevation: 26, azimuth: -4, fov: 34 },
 };
 
 export class BenchCamera {

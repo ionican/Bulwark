@@ -96,8 +96,8 @@ function patch(m: MeshStandardMaterial, noise: Texture, look: WearLook, key: str
         `#include <emissivemap_fragment>
         {
           float below = uBuildY - vBuildY;
-          float band = uBuildGlow * (smoothstep(0.09, 0.0, below) * 1.0 + smoothstep(0.35, 0.0, below) * 0.25);
-          totalEmissiveRadiance += vec3(0.25, 0.9, 1.0) * band * 6.0;
+          float band = uBuildGlow * (smoothstep(0.05, 0.0, below) * 1.0 + smoothstep(0.3, 0.0, below) * 0.15);
+          totalEmissiveRadiance += vec3(0.25, 0.9, 1.0) * band * 3.5;
         }`,
       );
   };
@@ -343,7 +343,7 @@ export function createTurretMats(bank: TextureBank): TurretMats {
     roughness: 0.62,
     metalness: 0.5,
   });
-  patch(gunmetal, noise, { colour: '#8f949b', metal: 0.85, rough: 0.38, threshold: 0.58, lighten: 0.35 }, 'gunmetal');
+  patch(gunmetal, noise, { colour: '#858a91', metal: 0.8, rough: 0.52, threshold: 0.6, lighten: 0.3 }, 'gunmetal');
 
   const cu = (k: string, r: number) => rep(bank.tex(`Metal047B/${k}`), r);
   const bronze = new MeshStandardMaterial({
