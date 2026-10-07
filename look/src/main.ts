@@ -1,5 +1,6 @@
 // W17 look test A — one vista of Bulwark map 1 built from code-made geometry, CC0 photographic
-// textures (Poly Haven, ambientCG) and the full lighting stack. See ../README.md.
+// textures (Poly Haven, ambientCG) and the full lighting stack. W18 look test B adds a gun turret
+// source toggle (code-built or a generated GLB; `?turretSource=`, key T). See ../README.md.
 
 import { NoToneMapping, Raycaster, SRGBColorSpace, Scene, Timer, WebGLRenderer } from 'three';
 import { TextureBank, type Quality } from './assets/textures.ts';
@@ -7,6 +8,8 @@ import { Particles } from './fx/particles.ts';
 import { Tracers } from './fx/tracers.ts';
 import { createMaterials, rebuildComposites, beltTextureRef } from './models/materials.ts';
 import { proceduralSource } from './models/procedural/index.ts';
+import { footprintWidth, loadGltfModel, turretSourceInfo, TURRET_SOURCES, withGun, type LoadedGltf, type TurretLod } from './models/gltf.ts';
+import type { ModelDef } from './models/types.ts';
 import { CameraRig, type View } from './render/camera.ts';
 import { Lighting } from './render/lighting.ts';
 import { Post } from './render/post.ts';
@@ -46,6 +49,10 @@ const look = {
   measure: async (_s: number): Promise<Measure> => ({ seconds: 0, frames: 0, fps: 0, cpuMsAvg: 0, cpuMsP95: 0, frameMsAvg: 0, frameMsP95: 0, gpuMsAvg: -1, gpuMsP95: -1, gpuSamples: 0 }),
   freeze: false,
   cam: (_v: View) => {},
+  /** W18: active gun turret source, its GLB stats, and the switch. */
+  turretSource: 'code',
+  turretInfo: null as null | { triangles: number; bytes: number; textureSize: number; lod: TurretLod },
+  setTurretSource: async (_id: string) => {},
 };
 (window as unknown as { __look: typeof look }).__look = look;
 window.addEventListener('error', (e) => look.errors.push(String(e.message)));
@@ -104,7 +111,27 @@ async function main(): Promise<void> {
   bank.derived.add(fx.atlas);
   const tracers = new Tracers();
   scene.add(fx.smokeMesh, fx.glowMesh, tracers.mesh);
-  const src = proceduralSource(mats);
+  const code = proceduralSource(mats);
+  // gun turret source: code-built (W17) or a generated GLB fitted to the same footprint
+  const params = new URLSearchParams(location.search);
+  const lod: TurretLod = params.get('turretLod') === '5k' ? '5k' : '20k';
+  const codeGun = code.building('gun');
+  const codeFootprint = footprintWidth(codeGun);
+  const gunCache = new Map<string, Promise<LoadedGltf>>();
+  const gunModel = async (id: string): Promise<{ def: ModelDef; loaded: LoadedGltf | null }> => {
+    const info = turretSourceInfo(id);
+    if (!info.urls) return { def: codeGun, loaded: null };
+    let p = gunCache.get(info.id);
+    if (!p) gunCache.set(info.id, (p = loadGltfModel(`gun:${info.id}`, info.urls[lod], codeFootprint, { yaw: info.yaw, anisotropy: bank.anisotropy })));
+    const loaded = await p;
+    return { def: loaded.def, loaded };
+  };
+  const first = turretSourceInfo(params.get('turretSource'));
+  loading.textContent = `Loading gun turret (${first.label})…`;
+  const firstGun = await gunModel(first.id);
+  look.turretSource = first.id;
+  look.turretInfo = firstGun.loaded ? { triangles: firstGun.loaded.triangles, bytes: firstGun.loaded.bytes, textureSize: firstGun.loaded.textureSize, lod } : null;
+  const src = withGun(code, firstGun.def, first.label);
   const base = new BaseScene(src, mats, fx, tracers);
   const wave = new Wave(src, mats, fx);
   scene.add(base.group, wave.group);
@@ -131,6 +158,19 @@ async function main(): Promise<void> {
     look.view = v;
     rig.go(v, instant);
   };
+  const setTurretSource = async (id: string) => {
+    const info = turretSourceInfo(id);
+    const g = await gunModel(info.id);
+    base.replaceModel('gun', g.def);
+    look.turretSource = info.id;
+    look.turretInfo = g.loaded ? { triangles: g.loaded.triangles, bytes: g.loaded.bytes, textureSize: g.loaded.textureSize, lod } : null;
+    const u = new URL(location.href);
+    u.searchParams.set('turretSource', info.id);
+    history.replaceState(null, '', u);
+    await renderer.compileAsync(scene, rig.camera);
+  };
+  look.setTurretSource = setTurretSource;
+  hud.onTurret.push((id) => void setTurretSource(id).catch((e) => look.errors.push(String(e))));
   look.setQuality = setQuality;
   look.setView = setView;
   look.cam = (v: View) => {
@@ -142,6 +182,10 @@ async function main(): Promise<void> {
   window.addEventListener('keydown', (e) => {
     if (e.key === 'v' || e.key === 'V') setView(look.view === 'reference' ? 'strategic' : 'reference');
     if (e.key === 'q' || e.key === 'Q') void setQuality(look.quality === 'high' ? 'medium' : 'high');
+    if (e.key === 't' || e.key === 'T') {
+      const i = TURRET_SOURCES.findIndex((s) => s.id === look.turretSource);
+      void setTurretSource(TURRET_SOURCES[(i + 1) % TURRET_SOURCES.length]!.id).catch((err) => look.errors.push(String(err)));
+    }
   });
   window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight, false);
@@ -262,6 +306,8 @@ async function main(): Promise<void> {
         quality: look.quality,
         view: look.view,
         particles: fx.count,
+        turretSource: look.turretSource,
+        turretSources: TURRET_SOURCES.map((s) => ({ id: s.id, label: s.label })),
       });
     }
     if (start - mmAt > 200) {

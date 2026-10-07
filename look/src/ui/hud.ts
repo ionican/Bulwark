@@ -20,6 +20,9 @@ export interface HudStats {
   quality: 'high' | 'medium';
   view: 'reference' | 'strategic';
   particles: number;
+  /** W18: active gun turret source and the available ones. */
+  turretSource: string;
+  turretSources: Array<{ id: string; label: string }>;
 }
 
 const ICON = (body: string) => `<svg viewBox="0 0 32 32" fill="none" stroke="#efe6d6" stroke-width="1.6" stroke-linejoin="round">${body}</svg>`;
@@ -42,6 +45,7 @@ export class Hud {
   private mmBg: ImageData | null = null;
   readonly onQuality: Array<(q: 'high' | 'medium') => void> = [];
   readonly onView: Array<(v: 'reference' | 'strategic') => void> = [];
+  readonly onTurret: Array<(id: string) => void> = [];
   private readonly X0 = -12;
   private readonly X1 = 140;
   private readonly Z0 = -12;
@@ -80,7 +84,7 @@ export class Hud {
     const hint = document.createElement('div');
     hint.id = 'hint';
     hint.className = 'panel';
-    hint.textContent = 'V: reference / strategic view · Q: quality · drag: orbit · wheel: zoom · right-drag: pan';
+    hint.textContent = 'V: reference / strategic view · Q: quality · T: gun turret source · drag: orbit · wheel: zoom · right-drag: pan';
     document.body.appendChild(hint);
   }
 
@@ -176,7 +180,7 @@ export class Hud {
   setStats(s: HudStats): void {
     const row = (k: string, v: string) => `<div class="row"><span class="k">${k}</span><span>${v}</span></div>`;
     this.stats.innerHTML =
-      `<div style="font-weight:600;margin-bottom:4px">W17 look test A — code-built + CC0 photo textures</div>` +
+      `<div style="font-weight:600;margin-bottom:4px">W18 look test B — gun turret source comparison</div>` +
       row('fps', s.fps.toFixed(1)) +
       row('frame CPU', `${s.cpuMs.toFixed(2)} ms`) +
       row('GPU timer (relative)', s.gpuMs < 0 ? 'n/a' : `${s.gpuMs.toFixed(1)} ms`) +
@@ -191,7 +195,11 @@ export class Hud {
       `<button class="tg" data-q="medium" aria-pressed="${s.quality === 'medium'}">Medium</button>` +
       `<button class="tg" data-v="reference" aria-pressed="${s.view === 'reference'}">Reference angle</button>` +
       `<button class="tg" data-v="strategic" aria-pressed="${s.view === 'strategic'}">Strategic</button>` +
+      `</div>` +
+      `<div class="btns" role="group" aria-label="Gun turret source (T)"><span class="k">Turret (T)</span>` +
+      s.turretSources.map((t) => `<button class="tg" data-t="${t.id}" aria-pressed="${s.turretSource === t.id}">${t.label}</button>`).join('') +
       `</div>`;
+    this.stats.querySelectorAll<HTMLButtonElement>('button[data-t]').forEach((b) => (b.onclick = () => this.onTurret.forEach((f) => f(b.dataset.t!))));
     this.stats.querySelectorAll<HTMLButtonElement>('button[data-q]').forEach((b) => (b.onclick = () => this.onQuality.forEach((f) => f(b.dataset.q as 'high' | 'medium'))));
     this.stats.querySelectorAll<HTMLButtonElement>('button[data-v]').forEach((b) => (b.onclick = () => this.onView.forEach((f) => f(b.dataset.v as 'reference' | 'strategic'))));
   }

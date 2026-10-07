@@ -17,7 +17,7 @@ import {
 } from 'three';
 import { Builder, cbox, tubeX } from '../models/kit.ts';
 import type { Mats } from '../models/materials.ts';
-import type { ModelSource } from '../models/types.ts';
+import type { ModelDef, ModelSource } from '../models/types.ts';
 import type { Particles } from '../fx/particles.ts';
 import type { Tracers } from '../fx/tracers.ts';
 import { heightAt } from '../world/heightfield.ts';
@@ -127,6 +127,25 @@ export class BaseScene {
     this.dome.position.set(sc.x, heightAt(sc.x, sc.z), sc.z);
     this.group.add(this.dome);
     for (const p of this.chimneys) fx.addEmitter('chimney', p, 0.7);
+  }
+
+  /**
+   * Swaps the model of one building layer (W18 turret source toggle). Instances keep their
+   * placement and turret state; turrets that pointed at the old layer move to the new one.
+   */
+  replaceModel(key: string, model: ModelDef): void {
+    const old = this.layers.get(key);
+    if (!old || old.model === model) return;
+    const layer = new ModelLayer(model, old.capacity);
+    for (const s of old.states) {
+      const i = layer.add(s.matrix, s.seed);
+      Object.assign(layer.states[i]!, { aim: s.aim, elev: s.elev, phase: s.phase, recoil: s.recoil, visible: s.visible });
+    }
+    this.group.remove(old.group);
+    for (const m of old.group.children) (m as InstancedMesh).dispose();
+    this.group.add(layer.group);
+    this.layers.set(key, layer);
+    for (const t of this.turrets) if (t.layer === old) t.layer = layer;
   }
 
   private buildConduits(mats: Mats): Mesh {

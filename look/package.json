@@ -5,7 +5,7 @@
   "description": "W17 look test A: code-built geometry + CC0 photographic textures + full lighting, one vista of map 1",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1 --port 8815 --strictPort",
+    "dev": "vite --host 127.0.0.1 --port 8816 --strictPort",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "fetch-assets": "node scripts/fetch-assets.mjs"
