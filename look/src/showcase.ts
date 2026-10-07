@@ -48,8 +48,10 @@ export async function showcase(renderer: WebGLRenderer, bank: TextureBank, canva
   const models = async (id: string) => {
     const info = turretSourceInfo(id);
     if (!info.urls) return { info, def: codeGun, note: `${Math.round(triangles(codeGun)).toLocaleString('en-GB')} triangles · code-built, no GLB` };
-    const g = await loadGltfModel(`gun:${info.id}`, info.urls[lod], codeFootprint, { yaw: info.yaw, anisotropy: bank.anisotropy });
-    return { info, def: g.def, note: `${Math.round(g.triangles).toLocaleString('en-GB')} triangles · ${g.textureSize}² texture · ${(g.bytes / 1048576).toFixed(2)} MB GLB (${lod} level)` };
+    const ivory = info.material === 'ivory';
+    const g = await loadGltfModel(`gun:${info.id}`, info.urls[lod], codeFootprint, { yaw: info.yaw, anisotropy: bank.anisotropy, override: ivory ? mats.ivory : undefined });
+    const surface = ivory ? 'W17 ivory material (generated texture not used)' : `${g.textureSize}² texture`;
+    return { info, def: g.def, note: `${Math.round(g.triangles).toLocaleString('en-GB')} triangles · ${surface} · ${(g.bytes / 1048576).toFixed(2)} MB GLB (${lod} level)` };
   };
 
   const single = params.get('turretSource');

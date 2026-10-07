@@ -197,6 +197,11 @@ const _t1 = new Vector3();
 const _t2 = new Vector3();
 
 /** Non-indexed copy with per-face box-projected UVs (tile units) and a per-face `wear` flag. */
+/** Box-projected UVs in tile units without edge wear, for imported meshes (W18 glTF source). */
+export function boxMapped(g: BufferGeometry): BufferGeometry {
+  return finish(g, false);
+}
+
 function finish(g: BufferGeometry, wearEdges: boolean): BufferGeometry {
   const chamfered = !!g.userData.chamfered;
   const ng = g.index ? g.toNonIndexed() : g;

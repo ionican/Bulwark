@@ -9,6 +9,7 @@
 import { Box3, BufferAttribute, BufferGeometry, Matrix4, Mesh, Vector3, type Material, type MeshStandardMaterial, type Texture } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { boxMapped } from './kit.ts';
 import type { ModelDef, ModelSource, PartDef } from './types.ts';
 import type { BuildingKind } from '../world/layout.ts';
 
@@ -22,6 +23,11 @@ export interface TurretSourceInfo {
   urls?: Record<TurretLod, string>;
   /** Barrel direction override, radians about +Y; by default the longest horizontal protrusion is the barrel. */
   yaw?: number;
+  /**
+   * 'ivory': draw the generated geometry with W17's ivory armour material (box-projected UVs)
+   * instead of the GLB's own base colour. Used when the generated texture is unusable.
+   */
+  material?: 'gltf' | 'ivory';
 }
 
 const BASE = import.meta.env.BASE_URL;
@@ -32,7 +38,10 @@ export const TURRET_SOURCES: TurretSourceInfo[] = [
   {
     id: 'step1x',
     label: 'Step1X-3D',
-    urls: { '20k': `${BASE}models/turret/step1x/turret-20k-2048.glb`, '5k': `${BASE}models/turret/step1x/turret-5k-1024.glb` },
+    urls: { '20k': `${BASE}models/turret/step1x/turret-20k.glb`, '5k': `${BASE}models/turret/step1x/turret-5k.glb` },
+    // Step1X-3D's texture stage produced noise on the Spark (see public/models/turret/README.md);
+    // the geometry is shown with W17's ivory armour material instead
+    material: 'ivory',
   },
 ];
 
@@ -77,7 +86,7 @@ export interface LoadedGltf {
 
 const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 
-export async function loadGltfModel(name: string, url: string, targetFootprint: number, opts: { yaw?: number; anisotropy?: number } = {}): Promise<LoadedGltf> {
+export async function loadGltfModel(name: string, url: string, targetFootprint: number, opts: { yaw?: number; anisotropy?: number; override?: Material } = {}): Promise<LoadedGltf> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   const buf = await res.arrayBuffer();
@@ -136,7 +145,13 @@ export async function loadGltfModel(name: string, url: string, targetFootprint: 
   // 3. scale so the footprint matches the code-built model's
   const s = targetFootprint / fp0.width;
   fit.premultiply(new Matrix4().makeScale(s, s, s));
-  for (const m of meshes) m.geometry.applyMatrix4(fit);
+  for (const m of meshes) {
+    m.geometry.applyMatrix4(fit);
+    if (opts.override) {
+      m.geometry = boxMapped(m.geometry);
+      m.material = opts.override;
+    }
+  }
 
   pts = positionsOf(meshes);
   box = new Box3().setFromPoints(pts);
@@ -154,6 +169,7 @@ export async function loadGltfModel(name: string, url: string, targetFootprint: 
     triangles += (m.geometry.index ? m.geometry.index.count : m.geometry.getAttribute('position').count) / 3;
     for (const mat of Array.isArray(m.material) ? m.material : [m.material]) {
       const sm = mat as MeshStandardMaterial;
+      if (opts.override) continue;
       for (const t of [sm.map, sm.normalMap, sm.roughnessMap, sm.metalnessMap, sm.emissiveMap] as Array<Texture | null>) {
         if (!t) continue;
         if (opts.anisotropy) t.anisotropy = opts.anisotropy;

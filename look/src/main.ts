@@ -122,7 +122,7 @@ async function main(): Promise<void> {
     const info = turretSourceInfo(id);
     if (!info.urls) return { def: codeGun, loaded: null };
     let p = gunCache.get(info.id);
-    if (!p) gunCache.set(info.id, (p = loadGltfModel(`gun:${info.id}`, info.urls[lod], codeFootprint, { yaw: info.yaw, anisotropy: bank.anisotropy })));
+    if (!p) gunCache.set(info.id, (p = loadGltfModel(`gun:${info.id}`, info.urls[lod], codeFootprint, { yaw: info.yaw, anisotropy: bank.anisotropy, override: info.material === 'ivory' ? mats.ivory : undefined })));
     const loaded = await p;
     return { def: loaded.def, loaded };
   };
