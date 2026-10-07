@@ -17,9 +17,9 @@ export interface CamView {
 export type Preset = 'game' | 'close' | 'concept' | 'lineup';
 
 export const PRESETS: Record<Preset, CamView> = {
-  // the game's camera (game/src/render/cameraRig.ts): 45° fov, pitch eased with distance —
-  // pitchFor(60) = 71.9° — at a zoom that fits the 24-tile range ring
-  game: { target: [5, 0, -4], distance: 60, elevation: 71.9, azimuth: -30, fov: 45 },
+  // the game's camera at its starting zoom (game/src/main.ts: distance 50; cameraRig.ts: 45° fov,
+  // pitchFor(50) = 68.9°)
+  game: { target: [4, 0, -2], distance: 50, elevation: 68.9, azimuth: -30, fov: 45 },
   close: { target: [0.25, 0.72, 0], distance: 5.6, elevation: 17, azimuth: -38, fov: 30 },
   // the concept image's view: low, long lens, front-left three-quarter, barrel towards the camera
   concept: { target: [0.06, 0.62, 0.02], distance: 4.6, elevation: 17, azimuth: -100, fov: 27 },

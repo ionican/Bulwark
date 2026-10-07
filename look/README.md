@@ -1,11 +1,12 @@
-# Bulwark — W17 look test A, W18 look test B
+# Bulwark — W17 look test A, W18 look test B, W20 gun-turret bench
 
 One vista of map 1 built from code-made geometry, CC0 photographic textures (Poly Haven, ambientCG) and a full lighting stack, to see how close that gets to `reference/01-mineral-war.jpg` (scene) and `reference/02-gun-turret.png` (building materials and the gun turret). Three.js 0.186, WebGL renderer.
 
 ```
 npm install
-npm run dev      # http://127.0.0.1:8816/          (turret showcase: /?turret=1)
-npm run build    # static build in dist/
+npm run dev      # http://127.0.0.1:8817/          (turret showcase: /?turret=1; W20 bench: /bench.html)
+npm test         # W20 fire-control unit tests (node:test)
+npm run build    # static build in dist/ (index.html and bench.html)
 npm run fetch-assets   # re-download the textures listed in scripts/fetch-assets.mjs (already committed)
 ```
 
@@ -48,3 +49,45 @@ Screens: `_screens/b-turret-compare.png` (20k level), `_screens/b-turret-compare
 Scale: 1 world unit = 1 tile = 2 m, as in the game. Aliens are drawn at 1.5× their simulation size so they read at RTS distance (`ALIEN_DISPLAY_SCALE` in `src/scene/wave.ts`).
 
 Credits and licences: `CREDITS.md`.
+
+## W20 gun-turret bench (`/bench.html`)
+
+One gun turret at full detail, built in code to `reference/02-gun-turret.png`, aiming, firing and killing alien machines on a small canyon range. Lighting, post-processing, haze, the terrain material, the aliens and the particle system are W17's. Code: `src/bench/`.
+
+### The turret (`src/bench/turretModel.ts`, `turretRig.ts`, `surface.ts`, `geo.ts`)
+
+A hierarchy of separately moving parts: **base** (static) → **pinion** (spins −yaw × 44/12, meshed with the ring) and **yaw pivot** → **slewing ring** + **head** → **cradle** (pitch about the trunnion axis, 0.95 tiles up) → **barrel** (recoil slide along −X). Turret space: +Y up, barrel along +X at yaw 0, 1 unit = 1 tile = 2 m; footprint 2 × 2 tiles.
+
+- Base: gunmetal octagon footing with a rivet line, four bolted feet (bronze hex bolts on washers), eight ivory armour sides of two panels each (vertical face, chamfer, top sloping up to the ring; wedge-cut so they tile the octagon), gunmetal pilasters with a dark channel at the corners, ivory deck, four bronze brackets with gunmetal latches, pinion housing, a cyan indicator light.
+- Slewing ring: bronze bearing band, 44-tooth gunmetal ring with chamfered trapezoid teeth, turntable and a bronze bolt circle (the bolts show it turning).
+- Head: two cheeks, each a gunmetal core plated with ivory edge plates and two raked side plates, with open seams onto the core; rear housing shell with a roof hatch; bronze hinges, latches and a clamp; cyan slits on the cheek fronts.
+- Cradle: bronze trunnion rings with gunmetal hubs and hub bolts, cradle block, ribbed gunmetal recoil housing with a bronze collar, bronze recuperator.
+- Barrel: breech block with an ejection port, ivory sleeve with dark slots, muzzle brake built from a rear ring, four bars and top/bottom spines so the five side ports are real openings, and a front ring whose bore runs 0.6 tiles back to a dark end.
+- Bolts are one instanced hex bolt (30 triangles) per part and material.
+- Surfaces: ivory ceramic-composite from Poly Haven `beige_wall_001` (normal and roughness grain; colour, hairline cracks, chips and grime mottling composed in code, matte, non-metallic); gunmetal and bronze from `metal_plate_02` and `Metal047B`, recoloured in code (photo grain kept, hue and rust blotches dropped). Edge wear is judged per piece before placement (thin chamfer faces): chipped ceramic over dark composite, bare steel on gunmetal, polished bronze on bronze. Metals have a roughness floor so the HDRI sun does not bloom on them.
+
+Triangles: full 22,640 (measured from the geometry, bolts included); simple 212; icon 32. The simple level keeps the pivots so it still aims; the icon is the game's gun icon (`game/src/render/geometry.ts`: round body, barrel bar, dark outline plate, pale fill) drawn on top at max(footprint, 9 px), turned to the aim. "By distance" uses the game's thresholds and hysteresis (`game/src/render/lod.ts`, 60 and 125 tiles).
+
+### Fire control (`src/bench/aim.ts`, `brain.ts`, `recoil.ts`; tests in `test/turret.test.ts`)
+
+- Traverse 60°/s, 240°/s² (continuous, short way round). Elevation 30°/s, 120°/s², −5° to +45°. Each axis commands the fastest rate from which it can still stop on the target (√(2·a·error)), capped at the turn rate, plus the target's own angular rate as feed-forward; the rate changes by at most a·dt per tick, so it eases in and out.
+- Leads the target: constant-velocity intercept with a ballistic low arc (shell 50 tiles/s = 100 m/s, gravity 9.81 m/s²), iterated on flight time; the shell starts at the muzzle, 1.493 tiles from the trunnion. **L** turns lead off to show the misses.
+- Fires when both axes are within 0.6° of the solution and the gun has cycled: 0.5 s between shots (120 rounds/min). The shell leaves along the barrel's actual direction and is flown on its exact arc and collision-tested against every alien each frame. Range 24 tiles (horizontal). A solution above +45° is followed to the limit but never fired at.
+- Recoil: 0.16 tiles (32 cm) back in 0.05 s, 0.04 s hold, 0.4 s return; the casing is ejected and the breech vents when the return starts.
+- With no target in range for 1.2 s the turret sweeps ±50° about its last heading at up to 12°/s, barrel at +4°.
+
+### Range and effects (`src/bench/range.ts`, `targets.ts`, `effects.ts`, `construction.ts`)
+
+Analytic heightfield: an arena of radius 31 tiles round the turret, three gullies leading in (bearings 0°, 52°, −58°), terraced walls up to about 9 tiles, boulders at the wall feet, W17's terrain material, and the range ring. Aliens (W17's four kinds, drawn 1.5×) enter at the far end of a gully, walk to its mouth and then straight to a stopping point 5.5–10 tiles out, firing harmless bolts at the turret once they stop. Hits spark; destroyed aliens explode and leave a burning wreck that smokes for 16 s and sinks; auto waves keep five on the range. Firing: forward flash and sparks, a flash and a smoke puff out of each brake port on both sides, a muzzle point light, an HDR tracer, the cyan slits pulsing, a brass casing that tumbles and bounces, a breech vent puff.
+
+Construction (**B**): footprint outline, wireframe ghost of the whole turret, the solid turret clipped above a rising build height (shadows clipped too) with a cyan band below the cut and sparks off it; at the top the lights come on, the head swings to its heading and the gun lifts; then fire control takes over.
+
+### Controls (buttons in the right panel; keys in brackets)
+
+Simulation: Pause (**Space**), 0.1× (**1**), 0.25× (**2**), 1× (**3**). Camera: Game camera (**G**: the game's starting camera — 45° lens, distance 50, pitch 68.9° from `pitchFor`), Close-up (**C**), Vs concept (**X**: left half live render at the concept's camera, right half the concept image; the turret is turned on its footing so W17's low sun lights it from the front left as in the image). Mouse: left-drag orbit, wheel zoom, right-drag pan. Turret: Manual aim (**M**: follows the mouse point on the ground; a click that is not a drag fires), Fire (**F**), Lead target (**L**), Construct (**B**). Targets: Spawn one (**T**), Spawn group (**Y**), Clear (**Delete**/**Backspace**), Auto waves (**A**). Display: Full (**D** cycles), Simple, Icon, By distance, Line-up (**U**: full, simple and icon side by side), Wireframe (**W**), Pivots (**P**).
+
+Readout: fps, frame CPU ms, draw calls, frame triangles, turret triangles at the current level, yaw/pitch and the wanted yaw/pitch, mode (idle, scan, track, manual, build) and lead, target (kind, id, distance, HP), shots/hits/kills, aliens/wrecks, time scale, renderer.
+
+Debug hook `window.__bench`: `ready`, `errors`, `renderer`, `stats`, `state`, and `api` (`preset`, `cam`, `timeScale`, `pause`, `manual`, `aimAt`, `fire`, `pauseAfterShot`, `lead`, `spawn`, `spawnPath`, `group`, `clear`, `auto`, `lod`, `wire`, `pivots`, `construct`, `compare`, `lineup`, `measure`, `triangles`, `parts`).
+
+Screens: `_screens/w20-closeup.png`, `w20-vs-concept.png`, `w20-firing-slowmo.png`, `w20-range.png`, `w20-lod.png`, `w20-construction.png`, `w20-track-1..3.png`.

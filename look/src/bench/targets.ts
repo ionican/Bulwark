@@ -148,6 +148,17 @@ export class Targets {
     return al;
   }
 
+  /** Spawns an alien that walks the given ground points (x, z) and holds at the last one. */
+  spawnPath(kind: AlienKind, pts: Array<[number, number]>): Alien | null {
+    const a = this.spawn(kind, 0, 60);
+    if (!a) return null;
+    a.path = pts.map(([x, z]) => new Vector3(x, rangeHeight(x, z), z));
+    a.leg = 0;
+    a.pos.copy(a.path[0]!);
+    this.place(a, 0);
+    return a;
+  }
+
   spawnGroup(n = 5): void {
     const gi = this.rnd.int(GULLIES.length);
     for (let i = 0; i < n; i++) this.spawn(undefined, gi, 60 + i * 3.5);

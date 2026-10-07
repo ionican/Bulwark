@@ -148,7 +148,7 @@ async function main(): Promise<void> {
     pivots: false,
     compare: false,
     lineup: false,
-    preset: 'close' as Preset,
+    preset: 'close' as Preset | 'free',
     lights: 1,
     flash: 0,
   };
@@ -167,6 +167,8 @@ async function main(): Promise<void> {
   };
   window.addEventListener('resize', resize);
 
+  // orbiting, zooming or panning by hand leaves every preset
+  cam.controls.addEventListener('start', () => (s.preset = 'free'));
   const setPreset = (p: Preset, instant = false) => {
     s.preset = p;
     cam.go(PRESETS[p], instant);
@@ -418,6 +420,7 @@ async function main(): Promise<void> {
 
     targets.update(simT, sdt);
     const tlist = targets.alive.map((a) => ({ id: a.id, pos: [a.aim.x, a.aim.y, a.aim.z] as [number, number, number], radius: a.radius }));
+    const wppd = (2 * Math.tan((cam.camera.fov * DEG) / 2)) / Math.max(1, canvas.clientHeight);
     shells.update(sdt, tlist, (h, friendly) => {
       if (!friendly) return;
       if (h.id !== null) {
@@ -427,7 +430,7 @@ async function main(): Promise<void> {
         fx.sparks(h.at.x, h.at.y, h.at.z, 5, 4);
         fx.explosion(h.at.x, h.at.y - 0.2, h.at.z, 0.25);
       }
-    });
+    }, { pos: cam.camera.position, wppd, minPx: 2.2 });
     casings.update(sdt);
 
     // detail level: fixed, or by camera distance with the game's thresholds and hysteresis
@@ -548,7 +551,10 @@ async function main(): Promise<void> {
   (bench as unknown as { scene: Scene }).scene = scene;
   bench.api = {
     preset: ((p: Preset, instant = false) => setPreset(p, instant)) as never,
-    cam: ((v: (typeof PRESETS)['close']) => cam.go(v, true)) as never,
+    cam: ((v: (typeof PRESETS)['close']) => {
+      s.preset = 'free';
+      cam.go(v, true);
+    }) as never,
     timeScale: ((v: number) => (s.timeScale = v)) as never,
     pause: ((v: boolean) => (s.paused = v)) as never,
     manual: ((v: boolean) => setManual(v)) as never,
@@ -562,6 +568,7 @@ async function main(): Promise<void> {
     lead: ((v: boolean) => (brain.lead = v)) as never,
     spawn: ((kind?: AlienKind, gully?: number, dist?: number) => targets.spawn(kind, gully, dist)?.id ?? null) as never,
     group: (() => targets.spawnGroup(5)) as never,
+    spawnPath: ((kind: AlienKind, pts: Array<[number, number]>) => targets.spawnPath(kind, pts)?.id ?? null) as never,
     clear: (() => targets.clear()) as never,
     auto: ((v: boolean) => (targets.auto = v)) as never,
     lod: ((l: Lod | 'auto') => setLod(l)) as never,

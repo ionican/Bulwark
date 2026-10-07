@@ -46,6 +46,11 @@ interface WearLook {
   threshold: number;
   /** Fraction of the remaining edge lightened slightly (paint worn thin). */
   lighten: number;
+  /**
+   * Roughness floor. The HDRI's sun is a tiny, very bright spot; glossy metal facing its
+   * reflection throws a streak into the bloom, which reads as a light source, not as metal.
+   */
+  minRough?: number;
 }
 
 function patch(m: MeshStandardMaterial, noise: Texture, look: WearLook, key: string): void {
@@ -89,7 +94,11 @@ function patch(m: MeshStandardMaterial, noise: Texture, look: WearLook, key: str
           diffuseColor.rgb = mix(diffuseColor.rgb, uWearCol * (0.75 + 0.5 * wn), gEdge);
         }`,
       )
-      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, ${look.rough.toFixed(3)}, gEdge);`)
+      // chamfer strips are a pixel or two wide on screen; the normal map's derivative-built
+      // tangent frame is unreliable there and can throw a sun glint into the bloom, so the
+      // strips keep the geometric normal
+      .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nnormal = normalize(mix(normal, nonPerturbedNormal, vWear));')
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\nroughnessFactor = max(mix(roughnessFactor, ${look.rough.toFixed(3)}, gEdge), ${(look.minRough ?? 0).toFixed(3)});`)
       .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>\nmetalnessFactor = mix(metalnessFactor, ${look.metal.toFixed(3)}, gEdge);`)
       .replace(
         '#include <emissivemap_fragment>',
@@ -329,7 +338,7 @@ export function createTurretMats(bank: TextureBank): TurretMats {
 
   const mp = (k: string, r: number) => rep(bank.tex(`metal_plate_02/${k}`), r);
   const gunTex = recolour(bank, 'metal_plate_02/diff', [96, 99, 106], 0.9);
-  const bronzeTex = recolour(bank, 'Metal047B/diff', [178, 116, 66], 0.75);
+  const bronzeTex = recolour(bank, 'Metal047B/diff', [176, 118, 70], 0.5);
   bank.derived.add(gunTex);
   bank.derived.add(bronzeTex);
   const gunmetal = new MeshStandardMaterial({
@@ -343,7 +352,7 @@ export function createTurretMats(bank: TextureBank): TurretMats {
     roughness: 0.62,
     metalness: 0.5,
   });
-  patch(gunmetal, noise, { colour: '#858a91', metal: 0.8, rough: 0.52, threshold: 0.6, lighten: 0.3 }, 'gunmetal');
+  patch(gunmetal, noise, { colour: '#858a91', metal: 0.8, rough: 0.55, threshold: 0.6, lighten: 0.3, minRough: 0.5 }, 'gunmetal');
 
   const cu = (k: string, r: number) => rep(bank.tex(`Metal047B/${k}`), r);
   const bronze = new MeshStandardMaterial({
@@ -353,16 +362,18 @@ export function createTurretMats(bank: TextureBank): TurretMats {
     normalScale: new Vector2(0.7, 0.7),
     roughnessMap: cu('rough', 1.6),
     // the photo's roughness is low (polished copper); scale it up to worn, weathered bronze
-    roughness: 1.45,
+    roughness: 1.3,
     metalness: 1,
+    // grazing-angle reflections of the bright sunset horizon otherwise bloom on bronze edges
+    envMapIntensity: 0.7,
   });
-  patch(bronze, noise, { colour: '#e0a46c', metal: 1, rough: 0.48, threshold: 0.55, lighten: 0.3 }, 'bronze');
+  patch(bronze, noise, { colour: '#c08656', metal: 0.5, rough: 0.7, threshold: 0.55, lighten: 0.15, minRough: 0.58 }, 'bronze');
 
   const dark = new MeshStandardMaterial({ name: 'dark', color: '#0c0c0d', roughness: 0.85, metalness: 0.3 });
   patch(dark, noise, { colour: '#0c0c0d', metal: 0.3, rough: 0.85, threshold: 2, lighten: 0 }, 'dark');
   const glow = new MeshStandardMaterial({ name: 'glow', color: '#0a1416', emissive: new Color('#36e6ff'), emissiveIntensity: 5, roughness: 0.35 });
   patch(glow, noise, { colour: '#0a1416', metal: 0, rough: 0.35, threshold: 2, lighten: 0 }, 'glow');
   const brass = new MeshStandardMaterial({ name: 'brass', map: cu('diff', 3), color: new Color().setRGB(1.6, 1.25, 0.6), roughness: 0.38, metalness: 1 });
-  patch(brass, noise, { colour: '#ffd890', metal: 1, rough: 0.25, threshold: 2, lighten: 0 }, 'brass');
+  patch(brass, noise, { colour: '#ffd890', metal: 1, rough: 0.4, threshold: 2, lighten: 0, minRough: 0.4 }, 'brass');
   return { ceramic, gunmetal, bronze, dark, glow, brass, all: [ceramic, gunmetal, bronze, dark, glow, brass] };
 }

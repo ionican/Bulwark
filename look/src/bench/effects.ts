@@ -76,7 +76,11 @@ export class Shells {
    * Advances every shell by dt. `targets` are tested along the segment flown this frame; the
    * first hit (or the ground) ends the shell.
    */
-  update(dt: number, targets: Array<{ id: number; pos: Vec3; radius: number }>, onHit: (h: ShellHit, friendly: boolean) => void): void {
+  /**
+   * `view` keeps tracers at least `minPx` pixels wide at any zoom: `wppd` is world units per
+   * pixel per unit of distance from the camera.
+   */
+  update(dt: number, targets: Array<{ id: number; pos: Vec3; radius: number }>, onHit: (h: ShellHit, friendly: boolean) => void, view?: { pos: Vector3; wppd: number; minPx: number }): void {
     const keep: Shell[] = [];
     let n = 0;
     for (const s of this.list) {
@@ -109,10 +113,13 @@ export class Shells {
       // streak from the tail (len behind, clipped to the distance flown) to the head
       _b.set(...p);
       _d.set(s.v0[0], s.v0[1] - s.gravity * s.age, s.v0[2]).normalize();
-      const flown = Math.min(s.len, Math.hypot(p[0] - s.p0[0], p[1] - s.p0[1], p[2] - s.p0[2]));
+      const dist = Math.hypot(p[0] - s.p0[0], p[1] - s.p0[1], p[2] - s.p0[2]);
+      const w = view ? Math.max(s.width, view.minPx * view.wppd * _b.distanceTo(view.pos)) : s.width;
+      // a wider (zoomed-out) streak is drawn longer too, never longer than the distance flown
+      const flown = Math.min(Math.max(s.len, w * 25), dist);
       if (flown > 0.02) {
         _q.setFromUnitVectors(X, _d);
-        _m.compose(_b, _q, _s.set(flown, s.width, s.width));
+        _m.compose(_b, _q, _s.set(flown, w, w));
         this.mesh.setMatrixAt(n, _m);
         this.colours.setXYZ(n, s.colour.r, s.colour.g, s.colour.b);
         n++;

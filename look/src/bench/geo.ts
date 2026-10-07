@@ -44,11 +44,46 @@ function wearFlags(g: BufferGeometry, mode: WearMode): Float32Array {
   return out;
 }
 
+/**
+ * Removes zero-area triangles and triangles with a zero normal. Bevelled extrusions of concave
+ * outlines produce a few; their normals normalise to NaN in the shader and the bloom turns the
+ * NaN into a bright streak.
+ */
+function dropDegenerate(g: BufferGeometry): BufferGeometry {
+  const p = g.getAttribute('position') as BufferAttribute;
+  const n = g.getAttribute('normal') as BufferAttribute;
+  const keep: number[] = [];
+  for (let i = 0; i < p.count; i += 3) {
+    _a.fromBufferAttribute(p, i);
+    _b.fromBufferAttribute(p, i + 1);
+    _c.fromBufferAttribute(p, i + 2);
+    const area = _t1.subVectors(_b, _a).cross(_t2.subVectors(_c, _a)).length() / 2;
+    let ok = area > 1e-9;
+    for (let k = 0; k < 3 && ok; k++) {
+      _n.fromBufferAttribute(n, i + k);
+      if (!(_n.lengthSq() > 1e-8) || !Number.isFinite(_n.x + _n.y + _n.z)) ok = false;
+    }
+    if (ok) keep.push(i);
+  }
+  if (keep.length * 3 === p.count) return g;
+  const out = new BufferGeometry();
+  for (const name of Object.keys(g.attributes)) {
+    const src = g.getAttribute(name) as BufferAttribute;
+    const s = src.itemSize;
+    const arr = new Float32Array(keep.length * 3 * s);
+    keep.forEach((i, j) => arr.set((src.array as Float32Array).subarray(i * s, (i + 3) * s), j * 3 * s));
+    out.setAttribute(name, new BufferAttribute(arr, s));
+  }
+  out.userData = g.userData;
+  return out;
+}
+
 /** Non-indexed, placed, with box-projected UVs (tile units) and the `wear` attribute. */
 export function finishPiece(src: BufferGeometry, m: Matrix4, mode: WearMode): BufferGeometry {
-  const g = src.index ? src.toNonIndexed() : src.clone();
+  let g = src.index ? src.toNonIndexed() : src.clone();
   g.userData.chamfered = src.userData.chamfered;
   if (!g.getAttribute('normal')) g.computeVertexNormals();
+  g = dropDegenerate(g);
   const wear = wearFlags(g, mode);
   g.applyMatrix4(m);
   const p = g.getAttribute('position') as BufferAttribute;
