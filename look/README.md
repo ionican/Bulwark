@@ -1,10 +1,10 @@
-# Bulwark — W17 look test A
+# Bulwark — W17 look test A, W18 look test B
 
 One vista of map 1 built from code-made geometry, CC0 photographic textures (Poly Haven, ambientCG) and a full lighting stack, to see how close that gets to `reference/01-mineral-war.jpg` (scene) and `reference/02-gun-turret.png` (building materials and the gun turret). Three.js 0.186, WebGL renderer.
 
 ```
 npm install
-npm run dev      # http://127.0.0.1:8815/          (turret showcase: /?turret=1)
+npm run dev      # http://127.0.0.1:8816/          (turret showcase: /?turret=1)
 npm run build    # static build in dist/
 npm run fetch-assets   # re-download the textures listed in scripts/fetch-assets.mjs (already committed)
 ```
@@ -28,9 +28,20 @@ Everything mesh-related goes through `ModelSource` (`src/models/types.ts`): `bui
 
 Skinned animation is not part of the contract yet; a glTF with skeletal walk cycles would need a second layer type.
 
+## W18 look test B: generated gun turret
+
+W18 asks whether open image-to-3D models run on our own DGX Spark beat W17's code-built gun turret. Provenance, settings, timings and what failed: `public/models/turret/README.md`. Scripts run on the Spark: `scripts/w18-spark/`.
+
+- `?turretSource=code|step1x` picks the gun turret for the vista; **T** or the *Turret* buttons in the readout switch it live (`BaseScene.replaceModel` swaps the gun layer and keeps placement and aim). `?turretLod=20k|5k` picks the GLB level (default 20k).
+- `?turret=1` renders every source in turn under the same sun, image-based light, post stack, camera and aim (−66°), and lays the frames out beside the reference image. `?turret=1&turretSource=<id>` shows one source live, as W17 did.
+- `src/models/gltf.ts` is the glTF source: GLTFLoader with the meshopt decoder, every mesh flattened into a part, fitted to the W17 frame (ground at y = 0, footprint centre at the origin, footprint width equal to the code-built turret's, barrel turned to +X by finding the point of the upper 60 % farthest from the vertical axis, muzzle at the barrel tip). The generated mesh is one piece, so the whole model, base included, turns to aim; there is no separate head or recoiling barrel.
+- Step1X-3D's generated texture was noise (see the models README), so its geometry is drawn with W17's ivory material (`material: 'ivory'` in `TURRET_SOURCES`).
+
+Screens: `_screens/b-turret-compare.png` (20k level), `_screens/b-turret-compare-5k.png`, `_screens/b-vista-code.png`, `_screens/b-vista-step1x.png`.
+
 ## Debug hook
 
-`window.__look`: `ready`, `errors`, `renderer`, `quality`, `view`, `stats` (`fps`, `cpuMs`, `gpuMs`, `calls`, `triangles`, `texMB`, `rtMB`, `particles`), `setQuality('high'|'medium')`, `setView('reference'|'strategic', instant?)`, `cam({target, distance, elevation, azimuth})`, `measure(seconds)` → frames, fps, CPU and frame-time averages and 95th percentiles, GPU timer averages, `freeze` (stops the simulation clock).
+`window.__look`: `ready`, `errors`, `turretSource`, `turretInfo`, `setTurretSource(id)`, `renderer`, `quality`, `view`, `stats` (`fps`, `cpuMs`, `gpuMs`, `calls`, `triangles`, `texMB`, `rtMB`, `particles`), `setQuality('high'|'medium')`, `setView('reference'|'strategic', instant?)`, `cam({target, distance, elevation, azimuth})`, `measure(seconds)` → frames, fps, CPU and frame-time averages and 95th percentiles, GPU timer averages, `freeze` (stops the simulation clock).
 
 `gpuMs` comes from `EXT_disjoint_timer_query_webgl2`. On ANGLE-Metal (Apple GPUs) it reads higher than the frame interval while frames hold 60 fps, so it is shown as a relative figure only.
 
