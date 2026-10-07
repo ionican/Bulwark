@@ -23,6 +23,7 @@ const ASSETS = [
   { id: 'metal_plate_02', source: 'polyhaven', res: '1k', role: 'buildings: dark trim; aliens: gunmetal hulls' },
   { id: 'Metal016', source: 'ambientcg', res: '1K-JPG', role: 'buildings: ivory painted panels (tinted)' },
   { id: 'Metal047B', source: 'ambientcg', res: '1K-JPG', role: 'buildings: copper/bronze fittings (bolts, gear rings, hinges)', maps: ['Color', 'NormalGL', 'Roughness'] },
+  { id: 'beige_wall_001', source: 'polyhaven', res: '1k', role: 'W20 turret: matte ivory ceramic-composite surface grain (tinted, with code-made cracks and chips)' },
   { id: 'rogland_sunset', source: 'polyhaven-hdri', res: '1k', role: 'image-based lighting (environment), low warm sun' },
 ];
 

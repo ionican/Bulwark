@@ -1,5 +1,5 @@
 {
-  "generated": "2026-10-06T10:17:13.497Z",
+  "generated": "2026-10-07T20:47:21.212Z",
   "assets": [
     {
       "id": "cliff_side",
@@ -221,6 +221,36 @@
       }
     },
     {
+      "id": "beige_wall_001",
+      "source": "polyhaven",
+      "res": "1k",
+      "role": "W20 turret: matte ivory ceramic-composite surface grain (tinted, with code-made cracks and chips)",
+      "licence": "CC0 1.0",
+      "files": {
+        "diff": {
+          "path": "assets/beige_wall_001/beige_wall_001_diff_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/beige_wall_001/beige_wall_001_diff_1k.jpg",
+          "bytes": 33074
+        },
+        "nor": {
+          "path": "assets/beige_wall_001/beige_wall_001_nor_gl_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/beige_wall_001/beige_wall_001_nor_gl_1k.jpg",
+          "bytes": 153434
+        },
+        "arm": {
+          "path": "assets/beige_wall_001/beige_wall_001_arm_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/beige_wall_001/beige_wall_001_arm_1k.jpg",
+          "bytes": 87358
+        }
+      },
+      "name": "Beige Wall 001",
+      "authors": [
+        "Dimitrios Savva",
+        "Rico Cilliers"
+      ],
+      "page": "https://polyhaven.com/a/beige_wall_001"
+    },
+    {
       "id": "rogland_sunset",
       "source": "polyhaven-hdri",
       "res": "1k",
@@ -240,5 +270,5 @@
       "page": "https://polyhaven.com/a/rogland_sunset"
     }
   ],
-  "totalBytes": 36472618
+  "totalBytes": 36746484
 }
