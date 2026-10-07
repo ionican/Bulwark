@@ -13,8 +13,8 @@ export interface RecoilSpec {
   returnTime: number;
 }
 
-/** 0.16 tiles (32 cm) in 0.05 s, 0.04 s hold, 0.42 s return. */
-export const RECOIL: RecoilSpec = { travel: 0.16, kickTime: 0.05, holdTime: 0.04, returnTime: 0.42 };
+/** 0.16 tiles (32 cm) in 0.05 s, 0.04 s hold, 0.4 s return: back in battery 0.49 s after the shot, inside the 0.5 s firing interval. */
+export const RECOIL: RecoilSpec = { travel: 0.16, kickTime: 0.05, holdTime: 0.04, returnTime: 0.4 };
 
 export class Recoil {
   readonly spec: RecoilSpec;

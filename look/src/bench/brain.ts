@@ -51,7 +51,7 @@ export interface GunSpec {
   gravity: number;
 }
 
-export const GUN: GunSpec = { range: 24, interval: 0.5, trunnionHeight: 0.9, barrelLength: 1.62, speed: SHELL_SPEED, gravity: GRAVITY };
+export const GUN: GunSpec = { range: 24, interval: 0.5, trunnionHeight: 0.95, barrelLength: 1.493, speed: SHELL_SPEED, gravity: GRAVITY };
 
 export const FIRE_TOLERANCE = 0.6 * DEG;
 export const IDLE_DELAY = 1.2;
