@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PerspectiveCamera, Vector3 } from 'three';
 import { World } from '../src/sim/world.ts';
-import { B, U, buildingSize } from '../src/sim/kinds.ts';
+import { B, U, buildingFootprint } from '../src/sim/kinds.ts';
 import { decodeSnapshot, encodeSnapshot } from '../src/sim/snapshot.ts';
 import { heightAt, map1Terrain } from '../src/sim/terrain.ts';
 import { applyRig, type Rig } from '../src/render/cameraRig.ts';
@@ -28,7 +28,7 @@ const ids = placements.map((p) => {
 const engineer = w.spawnUnit(U.engineer, 31.5, 97.5);
 const snap = decodeSnapshot(encodeSnapshot(w));
 const occ = buildOccupancy(
-  { count: snap.buildings.count, id: snap.buildings.id, kind: snap.buildings.cols.kind, tx: snap.buildings.cols.tx, ty: snap.buildings.cols.ty },
+  { count: snap.buildings.count, id: snap.buildings.id, kind: snap.buildings.cols.kind, tx: snap.buildings.cols.tx, ty: snap.buildings.cols.ty, fw: snap.buildings.cols.fw, fh: snap.buildings.cols.fh },
   terrain.w,
   terrain.h,
   new Int32Array(terrain.w * terrain.h),
@@ -37,7 +37,7 @@ const view: PickView = {
   mapW: terrain.w,
   mapH: terrain.h,
   occupancy: occ,
-  buildings: { count: snap.buildings.count, id: snap.buildings.id, kind: snap.buildings.cols.kind, tx: snap.buildings.cols.tx, ty: snap.buildings.cols.ty },
+  buildings: { count: snap.buildings.count, id: snap.buildings.id, kind: snap.buildings.cols.kind, tx: snap.buildings.cols.tx, ty: snap.buildings.cols.ty, fw: snap.buildings.cols.fw, fh: snap.buildings.cols.fh },
   units: { count: snap.units.count, id: snap.units.id, kind: snap.units.cols.kind, x: snap.units.cols.x, z: snap.units.cols.z },
   aliens: { count: snap.aliens.count, id: snap.aliens.id, kind: snap.aliens.cols.kind, x: snap.aliens.cols.x, z: snap.aliens.cols.z },
 };
@@ -83,9 +83,9 @@ describe('ground-ray picking', () => {
 
       it('returns the building on the clicked tile, for every footprint tile', () => {
         placements.forEach((p, i) => {
-          const size = buildingSize(p.kind);
-          for (let j = 0; j < size; j++) {
-            for (let k = 0; k < size; k++) {
+          const [fw, fh] = buildingFootprint(p.kind); // W24: rectangular footprints (square for these kinds)
+          for (let j = 0; j < fh; j++) {
+            for (let k = 0; k < fw; k++) {
               const s = toScreen(cam, p.tx + k + 0.5, p.ty + j + 0.5);
               expect(s.onScreen).toBe(true);
               const hit = pickScreen(cam, s.sx, s.sy, VW, VH, terrain, view, 0);

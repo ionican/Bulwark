@@ -5,7 +5,7 @@
   "description": "W13: Bulwark greybox playable slice (browser, Three.js, simulation in a Web Worker)",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1 --port 8813 --strictPort",
+    "dev": "vite --host 127.0.0.1 --port 8822 --strictPort",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "tsc --noEmit && vitest run"

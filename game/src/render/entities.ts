@@ -4,6 +4,10 @@
 // depends on the number of kinds, not the number of entities.
 // Each frame every entity is frustum-tested, given its own LOD by camera distance (with hysteresis,
 // see lod.ts) and written straight into its mesh's instance matrix array.
+// W24 construction states are drawn by shape: a reserved site as a dotted outline only, a started
+// site as the scaffold frame round its growing model, a complete building as its model. A gate is
+// its 3 × depth footprint box with the centre column open (the corridor), turned to its axis.
+// Sandbox spawn-origin routes are drawn with the same markers as the entry routes.
 
 import {
   DoubleSide,
@@ -19,8 +23,8 @@ import {
   type PerspectiveCamera,
   type Scene,
 } from 'three';
-import { B, BUILDING_KINDS, CATEGORY_COUNT, ITEM_PART, SHIELD, U, UNIT_KINDS, ALIEN_KINDS, alienInfo, buildingSize, isBelt, unitInfo } from '../sim/kinds.ts';
-import { BF_COMPLETE, BF_FIRING, BF_UPGRADING } from '../sim/schema.ts';
+import { B, BUILDING_KINDS, CATEGORY_COUNT, ITEM_PART, SHIELD, U, UNIT_KINDS, ALIEN_KINDS, alienInfo, isBelt, unitInfo } from '../sim/kinds.ts';
+import { BF_COMPLETE, BF_FIRING, BF_STARTED, BF_UPGRADING } from '../sim/schema.ts';
 import { CAPACITY } from '../sim/world.ts';
 import { heightAt, type Terrain } from '../sim/terrain.ts';
 import { slotOf } from '../sim/table.ts';
@@ -34,6 +38,7 @@ import {
   itemGeometries,
   lineGeometry,
   projectileGeometries,
+  reservedOutlineGeometry,
   routeMarkerGeometries,
   selectionMarkerGeometry,
   shieldDomeGeometry,
@@ -166,6 +171,7 @@ export class EntityRenderer {
   private readonly lines: Batch; // 0 beam, 1 work line
   private readonly shields: Batch; // 0 dome, 1 ring
   private readonly frames: Batch;
+  private readonly reserved: Batch;
   private readonly bars: Batch; // 0 back, 1 fill
   private readonly routes: Batch;
   private readonly markers: Batch;
@@ -206,6 +212,7 @@ export class EntityRenderer {
     const dome = new MeshBasicMaterial({ color: '#cfe6ff', transparent: true, opacity: 0.12, depthWrite: false, side: DoubleSide });
     this.shields = new Batch(scene, [shieldDomeGeometry(), dashedRingGeometry()], [dome, flat], 128);
     this.frames = new Batch(scene, [constructionFrameGeometry()], [icon], 512, 14);
+    this.reserved = new Batch(scene, [reservedOutlineGeometry()], [icon], 1024, 14);
     const back = new MeshBasicMaterial({ color: '#120f0d', depthTest: false, depthWrite: false });
     const fill = new MeshBasicMaterial({ color: '#f4efe6', depthTest: false, depthWrite: false });
     this.bars = new Batch(scene, [barGeometry(), barGeometry()], [back, fill], 1024, 13);
@@ -272,7 +279,7 @@ export class EntityRenderer {
     const yc = Math.cos(f.yaw);
     const ys = Math.sin(f.yaw);
     this.counts.full = this.counts.simple = this.counts.icon = this.counts.culled = 0;
-    for (const b of [this.buildings, this.aliens, this.units, this.wrecks, this.items, this.shots, this.lines, this.shields, this.frames, this.bars, this.routes, this.markers]) b.reset();
+    for (const b of [this.buildings, this.aliens, this.units, this.wrecks, this.items, this.shots, this.lines, this.shields, this.frames, this.reserved, this.bars, this.routes, this.markers]) b.reset();
 
     // Row lookups for this frame.
     this.alienRow.fill(-1);
@@ -301,7 +308,7 @@ export class EntityRenderer {
     this.drawShots(f.projectiles);
     if (f.showRoutes) this.drawRoutes(snap);
     this.drawSelection(f, wppd);
-    for (const b of [this.buildings, this.aliens, this.units, this.wrecks, this.items, this.shots, this.lines, this.shields, this.frames, this.bars, this.routes, this.markers]) b.commit();
+    for (const b of [this.buildings, this.aliens, this.units, this.wrecks, this.items, this.shots, this.lines, this.shields, this.frames, this.reserved, this.bars, this.routes, this.markers]) b.commit();
     void t;
   }
 
@@ -313,9 +320,11 @@ export class EntityRenderer {
     const wppd = this.wppPerDist;
     for (let r = 0; r < B_.count; r++) {
       const kind = c.kind[r]!;
-      const size = buildingSize(kind);
-      const x = c.tx[r]! + size / 2;
-      const z = c.ty[r]! + size / 2;
+      const fw = c.fw[r]!;
+      const fh = c.fh[r]!;
+      const size = Math.max(fw, fh);
+      const x = c.tx[r]! + fw / 2;
+      const z = c.ty[r]! + fh / 2;
       const y = heightAt(t, x, z);
       const flags = c.flags[r]!;
       const shieldUp = kind === B.shield && c.shield[r]! > 0 && flags & BF_COMPLETE;
@@ -327,22 +336,32 @@ export class EntityRenderer {
       const lod = this.lodFor(this.lod.b, this.lod.bId, B_.id[r]!, dist);
       this.count(lod);
       const belt = isBelt(kind);
-      const rc = belt ? BDX[c.dir[r]!]! : 1;
-      const rs = belt ? -BDZ[c.dir[r]!]! : 0;
+      const gate = kind === B.gate;
+      // Gates: modelled along x, 1 deep; axis z turns local x onto world +z. Depth stretches local z.
+      const rc = belt ? BDX[c.dir[r]!]! : gate && c.dir[r] === 1 ? 0 : 1;
+      const rs = belt ? -BDZ[c.dir[r]!]! : gate && c.dir[r] === 1 ? -1 : 0;
+      const depth = gate ? (c.dir[r] === 1 ? fw : fh) : 1;
       const complete = (flags & BF_COMPLETE) !== 0;
+      const reserved = (flags & (BF_COMPLETE | BF_STARTED)) === 0;
       const k = kind * LOD_LEVELS + lod;
+      // Reserved: no build power yet, so nothing stands there: a dotted outline only.
+      if (reserved) {
+        const pad = Math.max(0, (ICON_PX.building + 3) * wppd * dist - size / 2) * (lod === LOD_ICON ? 1 : 0);
+        this.reserved.push(0, 1, 0, fw / 2 + pad, 1, fh / 2 + pad, x, y + 0.1, z);
+        continue;
+      }
       if (lod === LOD_ICON) {
         const s = Math.max(size * 0.45, (belt ? ICON_PX.belt : ICON_PX.building) * wppd * dist) * (complete ? 1 : 0.7);
         if (belt) this.buildings.push(k, rc, rs, s, 1, s, x, y + 0.3, z);
         else this.buildings.push(k, yc, ys, s, 1, s, x, y + 0.3, z);
       } else {
         const sy = complete ? 1 : 0.15 + 0.85 * c.progress[r]!;
-        this.buildings.push(k, rc, rs, 1, sy, 1, x, y, z);
+        this.buildings.push(k, rc, rs, 1, sy, depth, x, y, z);
       }
       // Construction or upgrade under way: a scaffold frame round the footprint.
       if (!complete || flags & BF_UPGRADING) {
-        const s = Math.max(size / 2 + 0.15, (ICON_PX.building + 3) * wppd * dist);
-        this.frames.push(0, 1, 0, s, 1, s, x, y + 0.12, z);
+        const pad = Math.max(0.15, (ICON_PX.building + 3) * wppd * dist - size / 2);
+        this.frames.push(0, 1, 0, fw / 2 + pad, 1, fh / 2 + pad, x, y + 0.12, z);
       }
       if (lod !== LOD_ICON) {
         // Belt item.
@@ -422,9 +441,8 @@ export class EntityRenderer {
       const br = this.buildingRow[slotOf(target)]!;
       const B_ = f.snapshot.buildings;
       if (br >= 0 && B_.id[br] === target) {
-        const half = buildingSize(B_.cols.kind[br]!) / 2;
-        const bx = B_.cols.tx[br]! + half;
-        const bz = B_.cols.ty[br]! + half;
+        const bx = B_.cols.tx[br]! + B_.cols.fw[br]! / 2;
+        const bz = B_.cols.ty[br]! + B_.cols.fh[br]! / 2;
         this.line(1, x, y, z, bx, heightAt(t, bx, bz) + 0.5, bz);
         continue;
       }
@@ -482,11 +500,11 @@ export class EntityRenderer {
     const wppd = this.wppPerDist;
     if (this.routeCatsVersion !== snap.routesVersion) {
       this.routeCats.clear();
-      for (const r of snap.routes) for (const c of r.cells) this.routeCats.set(c, (this.routeCats.get(c) ?? 0) | (1 << r.category));
+      for (const r of [...snap.routes, ...snap.originRoutes]) for (const c of r.cells) this.routeCats.set(c, (this.routeCats.get(c) ?? 0) | (1 << r.category));
       this.routeCatsVersion = snap.routesVersion;
     }
     const cats: number[] = [];
-    for (const route of snap.routes) {
+    for (const route of [...snap.routes, ...snap.originRoutes]) {
       const cells = route.cells;
       if (cells.length < 2) continue;
       let i = 1;
@@ -532,8 +550,9 @@ export class EntityRenderer {
       if (p.type === 'building') {
         const r = this.buildingRow[slotOf(p.id)]!;
         if (r < 0 || B_.id[r] !== p.id) continue;
-        const size = buildingSize(B_.cols.kind[r]!);
-        add(B_.cols.tx[r]! + size / 2, B_.cols.ty[r]! + size / 2, size / 2 + 0.25, ICON_PX.building);
+        const fw = B_.cols.fw[r]!;
+        const fh = B_.cols.fh[r]!;
+        add(B_.cols.tx[r]! + fw / 2, B_.cols.ty[r]! + fh / 2, Math.max(fw, fh) / 2 + 0.25, ICON_PX.building);
       } else if (p.type === 'wreck') {
         const r = this.wreckRow[slotOf(p.id)]!;
         if (r < 0 || f.snapshot.wrecks.id[r] !== p.id) continue;

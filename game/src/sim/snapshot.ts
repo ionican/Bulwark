@@ -2,20 +2,30 @@
 //
 // Layout (little-endian):
 //   header    16 × u32 (H_* indices)
-//   globals   32 × f64 (G_* indices): pool, rates, parts, commander, counters
+//   globals   48 × f64 (G_* indices): pool, rates, parts, commander, counters, scenario
+//   stats     STAT_COUNT × f64: the per-kind combat counters (stats.ts), every snapshot (W24)
+//   tuning    SNAPSHOT_TUNE_COUNT × f64: the sandbox multipliers, building, alien, unit (tuning.ts; W24)
+//   runs      RUN_CAPACITY × 4 × i32: per run-table slot [run id (0 = free), tiles, complete, skipped]
 //   buildings id u32[n], then each snapshot column of BUILDING_FIELDS in schema order
 //   aliens, units, wrecks, projectiles: the same, from their schemas
 //   routes    u16 words: per route [entry, category, n, cell × n]
+//   origins   u16 words: per sandbox spawn origin [tile x, tile z, alien kind, category, n, cell × n]
 // Every column starts 4-byte aligned. Only live entities are written, in ascending slot order.
 // The bytes depend on simulation state only (no timings), so equal state gives byte-identical
 // snapshots — the determinism tests compare them.
 
 import { ALIEN_FIELDS, BUILDING_FIELDS, PROJECTILE_FIELDS, UNIT_FIELDS, WRECK_FIELDS } from './schema.ts';
 import { BYTES, makeArray, type AnyTypedArray, type ArrayFor, type FieldSpec, type Table } from './table.ts';
-import type { World } from './world.ts';
+import { SCENARIO_NAMES, type World } from './world.ts';
+import { STAT_COUNT } from './stats.ts';
+import { Tuning } from './tuning.ts';
+import { RUN_CAPACITY, runProgress } from './runs.ts';
+
+const RUN_WORDS = RUN_CAPACITY * 4;
 
 export const SNAPSHOT_MAGIC = 0x314b5742; // "BWK1"
-export const SNAPSHOT_VERSION = 3;
+/** 4 (W24): footprints, construction states, projectile attribution, scenario, stats, tuning, origins. */
+export const SNAPSHOT_VERSION = 4;
 const HEADER_WORDS = 16;
 const HEADER_BYTES = HEADER_WORDS * 4;
 export const GLOBAL_COUNT = 48;
@@ -36,6 +46,7 @@ export const H_N_WRECKS = 11;
 export const H_N_PROJECTILES = 12;
 export const H_ROUTE_WORDS = 13;
 export const H_ROUTES_VERSION = 14;
+export const H_ORIGIN_WORDS = 15;
 
 export const G_MASS = 0;
 export const G_ENERGY = 1;
@@ -72,6 +83,17 @@ export const G_SKIPPED_TICKS = 35;
 export const G_BONUS_MASS = 36;
 export const G_BONUS_ENERGY = 37;
 export const G_WAVE_COUNT = 38;
+export const G_SCENARIO = 39; // index into world.ts SCENARIO_NAMES
+export const G_UNLIMITED = 40; // 1 while sandbox spending is free
+export const G_RUNS = 41; // wall runs in the run table
+export const G_RESPAWN_TICK = 42; // sandbox: tick the next commander appears, -1 when none is due
+export const G_COMMANDER_DEATHS = 43; // sandbox: commanders lost so far
+
+/** Sandbox multipliers in the snapshot: building, then alien, then unit tables (tuning.ts). */
+export const SNAPSHOT_TUNE_COUNT = (() => {
+  const t = new Tuning();
+  return t.building.length + t.alien.length + t.unit.length;
+})();
 
 type SnapFields<S extends readonly FieldSpec[]> = Exclude<S[number], { snap: false }>;
 export type SnapColumns<S extends readonly FieldSpec[]> = { [F in SnapFields<S> as F['name']]: ArrayFor<F['type']> };
@@ -84,6 +106,15 @@ export interface Section<S extends readonly FieldSpec[]> {
 
 export interface RouteView {
   entry: number;
+  category: number;
+  cells: Uint16Array;
+}
+
+export interface OriginRouteView {
+  /** Spawn origin tile. */
+  x: number;
+  z: number;
+  kind: number;
   category: number;
   cells: Uint16Array;
 }
@@ -104,6 +135,13 @@ export interface Snapshot {
   projectiles: Section<typeof PROJECTILE_FIELDS>;
   routes: RouteView[];
   routesVersion: number;
+  /** Per-kind combat counters (stats.ts statsReport reads it). */
+  stats: Float64Array;
+  /** Sandbox multipliers: building, alien, unit tables concatenated (tuning.ts). */
+  tuning: Float64Array;
+  /** Wall run table: per slot [id (0 = free), tiles, complete, skipped]. */
+  runs: Int32Array;
+  originRoutes: OriginRouteView[];
 }
 
 const align4 = (n: number) => (n + 3) & ~3;
@@ -121,16 +159,28 @@ function routeWords(world: World): number {
   return n;
 }
 
+function originWords(world: World): number {
+  let n = 0;
+  for (const r of world.originRoutes) n += 5 + r.cells.length;
+  return n;
+}
+
+const tuneCount = (world: World) => world.tuning.building.length + world.tuning.alien.length + world.tuning.unit.length;
+
 export function snapshotSize(world: World): number {
   return (
     HEADER_BYTES +
     GLOBAL_BYTES +
+    STAT_COUNT * 8 +
+    tuneCount(world) * 8 +
+    RUN_WORDS * 4 +
     sectionBytes(BUILDING_FIELDS, world.buildings.count) +
     sectionBytes(ALIEN_FIELDS, world.aliens.count) +
     sectionBytes(UNIT_FIELDS, world.units.count) +
     sectionBytes(WRECK_FIELDS, world.wrecks.count) +
     sectionBytes(PROJECTILE_FIELDS, world.projectiles.count) +
-    align4(routeWords(world) * 2)
+    align4(routeWords(world) * 2) +
+    align4(originWords(world) * 2)
   );
 }
 
@@ -194,6 +244,13 @@ function writeGlobals(world: World, g: Float64Array): void {
   g[G_BONUS_MASS] = world.bonusPaid[0]!;
   g[G_BONUS_ENERGY] = world.bonusPaid[1]!;
   g[G_WAVE_COUNT] = world.waveTicks.length;
+  g[G_SCENARIO] = SCENARIO_NAMES.indexOf(world.scenario);
+  g[G_UNLIMITED] = world.unlimited ? 1 : 0;
+  let runs = 0;
+  for (const r of world.runs) if (r) runs++;
+  g[G_RUNS] = runs;
+  g[G_RESPAWN_TICK] = world.commanderRespawnTick;
+  g[G_COMMANDER_DEATHS] = world.commanderDeaths;
 }
 
 /**
@@ -221,8 +278,26 @@ export function encodeSnapshot(world: World, out?: ArrayBuffer): ArrayBuffer {
   h[H_N_PROJECTILES] = world.projectiles.count;
   h[H_ROUTE_WORDS] = words;
   h[H_ROUTES_VERSION] = world.routesVersion;
+  const owords = originWords(world);
+  h[H_ORIGIN_WORDS] = owords;
   writeGlobals(world, new Float64Array(buf, HEADER_BYTES, GLOBAL_COUNT));
   let off = HEADER_BYTES + GLOBAL_BYTES;
+  new Float64Array(buf, off, STAT_COUNT).set(world.stats);
+  off += STAT_COUNT * 8;
+  const tn = new Float64Array(buf, off, tuneCount(world));
+  tn.set(world.tuning.building, 0);
+  tn.set(world.tuning.alien, world.tuning.building.length);
+  tn.set(world.tuning.unit, world.tuning.building.length + world.tuning.alien.length);
+  off += tn.length * 8;
+  const rw = new Int32Array(buf, off, RUN_WORDS);
+  world.runs.forEach((run, i) => {
+    if (!run) return;
+    rw[i * 4] = run.id;
+    rw[i * 4 + 1] = run.sites.length;
+    rw[i * 4 + 2] = runProgress(world, run).complete;
+    rw[i * 4 + 3] = run.skipped;
+  });
+  off += RUN_WORDS * 4;
   off = writeSection(world.buildings as unknown as AnyTable, buf, off);
   off = writeSection(world.aliens as unknown as AnyTable, buf, off);
   off = writeSection(world.units as unknown as AnyTable, buf, off);
@@ -237,6 +312,18 @@ export function encodeSnapshot(world: World, out?: ArrayBuffer): ArrayBuffer {
     for (const c of route.cells) r[k++] = c;
   }
   off += align4(words * 2);
+  const o = new Uint16Array(buf, off, owords);
+  k = 0;
+  for (const route of world.originRoutes) {
+    const origin = world.spawnOrigins[route.origin]!;
+    o[k++] = Math.max(0, Math.min(world.terrain.w - 1, Math.floor(origin.x)));
+    o[k++] = Math.max(0, Math.min(world.terrain.h - 1, Math.floor(origin.z)));
+    o[k++] = origin.kind;
+    o[k++] = route.category;
+    o[k++] = route.cells.length;
+    for (const c of route.cells) o[k++] = c;
+  }
+  off += align4(owords * 2);
   if (off !== size) throw new Error(`snapshot size mismatch: wrote ${off}, expected ${size}`);
   return buf;
 }
@@ -258,7 +345,10 @@ export function decodeSnapshot(buf: ArrayBuffer): Snapshot {
   if (h[H_MAGIC] !== SNAPSHOT_MAGIC) throw new Error('not a Bulwark snapshot');
   if (h[H_VERSION] !== SNAPSHOT_VERSION) throw new Error(`snapshot version ${h[H_VERSION]} not supported`);
   const globals = new Float64Array(buf, HEADER_BYTES, GLOBAL_COUNT);
-  const off = HEADER_BYTES + GLOBAL_BYTES;
+  const stats = new Float64Array(buf, HEADER_BYTES + GLOBAL_BYTES, STAT_COUNT);
+  const tuning = new Float64Array(buf, HEADER_BYTES + GLOBAL_BYTES + STAT_COUNT * 8, SNAPSHOT_TUNE_COUNT);
+  const runs = new Int32Array(buf, HEADER_BYTES + GLOBAL_BYTES + STAT_COUNT * 8 + SNAPSHOT_TUNE_COUNT * 8, RUN_WORDS);
+  const off = HEADER_BYTES + GLOBAL_BYTES + STAT_COUNT * 8 + SNAPSHOT_TUNE_COUNT * 8 + RUN_WORDS * 4;
   const [buildings, o1] = readSection(BUILDING_FIELDS, h[H_N_BUILDINGS]!, buf, off);
   const [aliens, o2] = readSection(ALIEN_FIELDS, h[H_N_ALIENS]!, buf, o1);
   const [units, o3] = readSection(UNIT_FIELDS, h[H_N_UNITS]!, buf, o2);
@@ -272,7 +362,16 @@ export function decodeSnapshot(buf: ArrayBuffer): Snapshot {
     routes.push({ entry: r[k]!, category: r[k + 1]!, cells: r.subarray(k + 3, k + 3 + n) });
     k += 3 + n;
   }
-  const end = o5 + align4(words * 2);
+  const o6 = o5 + align4(words * 2);
+  const owords = h[H_ORIGIN_WORDS]!;
+  const or = new Uint16Array(buf, o6, owords);
+  const originRoutes: OriginRouteView[] = [];
+  for (let k = 0; k < owords; ) {
+    const n = or[k + 4]!;
+    originRoutes.push({ x: or[k]!, z: or[k + 1]!, kind: or[k + 2]!, category: or[k + 3]!, cells: or.subarray(k + 5, k + 5 + n) });
+    k += 5 + n;
+  }
+  const end = o6 + align4(owords * 2);
   if (end !== h[H_BYTES]) throw new Error('snapshot length mismatch');
   return {
     buffer: buf,
@@ -290,6 +389,10 @@ export function decodeSnapshot(buf: ArrayBuffer): Snapshot {
     projectiles,
     routes,
     routesVersion: h[H_ROUTES_VERSION]!,
+    stats,
+    tuning,
+    runs,
+    originRoutes,
   };
 }
 

@@ -6,7 +6,7 @@
 
 import { map1 } from '../../../model/data/map1.ts';
 import type { BuildingDef, WeaponDef } from '../../../model/src/types.ts';
-import { HEAVY_T2, RARE_EXTRACTOR_OUTPUT } from './balance.ts';
+import { BUILD_RATE, GATE_COST_MULT, HEAVY_T2, RARE_EXTRACTOR_OUTPUT } from './balance.ts';
 
 export const METRES_PER_TILE = 2;
 export const TICK_HZ = 10;
@@ -43,6 +43,8 @@ export const BUILDING_KINDS = [
   'belt',
   'splitter',
   'merger',
+  // W24: appended (the order is part of the snapshot format).
+  'gate',
 ] as const;
 export type BuildingKind = (typeof BUILDING_KINDS)[number];
 export const B = Object.fromEntries(BUILDING_KINDS.map((k, i) => [k, i])) as Record<BuildingKind, number>;
@@ -71,11 +73,16 @@ export interface Weapon {
 
 export interface BuildingInfo {
   label: string;
-  /** Footprint in tiles (square). */
-  size: number;
+  /**
+   * Default footprint in tiles, fw along x by fh along z, from the anchor tile (tx, ty). Every kind
+   * but the gate is square (fw = fh = W13's `size`); a gate's footprint is set per building from
+   * its depth and axis (gate.ts) and stored in the fw and fh columns.
+   */
+  fw: number;
+  fh: number;
   hp: number;
   cost: Cost;
-  /** Build-power-seconds (commander builds at 10 BP, an engineer at 5). */
+  /** Build-power-seconds (commander builds at 8 BP, an engineer at 5: balance.ts BUILD_RATE). */
   buildTime: number;
   role: BuildingRole;
   income?: Cost;
@@ -130,29 +137,55 @@ const machineOf = (d: BuildingDef, input: number, output: number) => ({
   energyPerSecond: d.machine!.energyPerSecond,
 });
 
-export const BUILDING_INFO: Record<BuildingKind, BuildingInfo> = {
-  massExtractor: { label: bd.massExtractor.label, size: 2, hp: bd.massExtractor.hp, cost: costOf(bd.massExtractor), buildTime: bd.massExtractor.buildTime, role: 'economy', income: [1, 0, 0], key: 'm' },
-  generator: { label: bd.generator.label, size: 2, hp: bd.generator.hp, cost: costOf(bd.generator), buildTime: bd.generator.buildTime, role: 'economy', income: [0, bd.generator.income!.energy!, 0], key: 'g' },
-  rareExtractor: { label: bd.rareExtractor.label, size: 2, hp: bd.rareExtractor.hp, cost: costOf(bd.rareExtractor), buildTime: bd.rareExtractor.buildTime, role: 'economy', income: [0, 0, RARE_EXTRACTOR_OUTPUT], key: 'k' },
-  lab: { label: 'Research station', size: 3, hp: bd.lab.hp, cost: costOf(bd.lab), buildTime: bd.lab.buildTime, role: 'economy', key: 'l' },
-  depot: { label: bd.depot.label, size: 2, hp: bd.depot.hp, cost: costOf(bd.depot), buildTime: bd.depot.buildTime, role: 'chain', key: 'p' },
-  shredder: { label: bd.shredder.label, size: 2, hp: bd.shredder.hp, cost: costOf(bd.shredder), buildTime: bd.shredder.buildTime, role: 'chain', machine: machineOf(bd.shredder, ITEM_SALVAGE, ITEM_SCRAP), key: '7' },
-  smelter: { label: bd.smelter.label, size: 2, hp: bd.smelter.hp, cost: costOf(bd.smelter), buildTime: bd.smelter.buildTime, role: 'chain', machine: machineOf(bd.smelter, ITEM_SCRAP, ITEM_ALLOY), key: '8' },
-  assembler: { label: bd.assembler.label, size: 2, hp: bd.assembler.hp, cost: costOf(bd.assembler), buildTime: bd.assembler.buildTime, role: 'chain', machine: machineOf(bd.assembler, ITEM_ALLOY, ITEM_PART), key: '9' },
-  wall: { label: bd.wall.label, size: 1, hp: bd.wall.hp, cost: costOf(bd.wall), buildTime: bd.wall.buildTime, role: 'wall', tiers: tiersOf(bd.wall), key: '1' },
-  gun: { label: bd.gun.label, size: 2, hp: bd.gun.hp, cost: costOf(bd.gun), buildTime: bd.gun.buildTime, role: 'defence', weapon: weapon(bd.gun.weapon!, P_BULLET, 30), tiers: tiersOf(bd.gun), key: '2' },
-  area: { label: bd.area.label, size: 2, hp: bd.area.hp, cost: costOf(bd.area), buildTime: bd.area.buildTime, role: 'defence', weapon: weapon(bd.area.weapon!, P_SHELL, 14), tiers: tiersOf(bd.area), key: '3' },
-  beam: { label: bd.beam.label, size: 2, hp: bd.beam.hp, cost: costOf(bd.beam), buildTime: bd.beam.buildTime, role: 'defence', weapon: weapon(bd.beam.weapon!, P_BEAM, 0), key: '4' },
-  heavy: { label: bd.heavy.label, size: 3, hp: bd.heavy.hp, cost: costOf(bd.heavy), buildTime: bd.heavy.buildTime, role: 'defence', weapon: weapon(bd.heavy.weapon!, P_HEAVY, 18), tiers: [HEAVY_T2], key: '5' },
-  shield: { label: bd.shield.label, size: 2, hp: bd.shield.hp, cost: costOf(bd.shield), buildTime: bd.shield.buildTime, role: 'defence', key: '6' },
-  tempTurret: { label: 'Temporary turret', size: 1, hp: map1.tempTurret.hp, cost: [0, 0, 0], buildTime: 1, role: 'defence', weapon: weapon(map1.tempTurret.weapon, P_BULLET, 30), key: '' },
+const INFO: Record<BuildingKind, BuildingInfo> = {
+  massExtractor: { label: bd.massExtractor.label, fw: 2, fh: 2, hp: bd.massExtractor.hp, cost: costOf(bd.massExtractor), buildTime: bd.massExtractor.buildTime, role: 'economy', income: [1, 0, 0], key: 'm' },
+  generator: { label: bd.generator.label, fw: 2, fh: 2, hp: bd.generator.hp, cost: costOf(bd.generator), buildTime: bd.generator.buildTime, role: 'economy', income: [0, bd.generator.income!.energy!, 0], key: 'g' },
+  rareExtractor: { label: bd.rareExtractor.label, fw: 2, fh: 2, hp: bd.rareExtractor.hp, cost: costOf(bd.rareExtractor), buildTime: bd.rareExtractor.buildTime, role: 'economy', income: [0, 0, RARE_EXTRACTOR_OUTPUT], key: 'k' },
+  lab: { label: 'Research station', fw: 3, fh: 3, hp: bd.lab.hp, cost: costOf(bd.lab), buildTime: bd.lab.buildTime, role: 'economy', key: 'l' },
+  depot: { label: bd.depot.label, fw: 2, fh: 2, hp: bd.depot.hp, cost: costOf(bd.depot), buildTime: bd.depot.buildTime, role: 'chain', key: 'p' },
+  shredder: { label: bd.shredder.label, fw: 2, fh: 2, hp: bd.shredder.hp, cost: costOf(bd.shredder), buildTime: bd.shredder.buildTime, role: 'chain', machine: machineOf(bd.shredder, ITEM_SALVAGE, ITEM_SCRAP), key: '7' },
+  smelter: { label: bd.smelter.label, fw: 2, fh: 2, hp: bd.smelter.hp, cost: costOf(bd.smelter), buildTime: bd.smelter.buildTime, role: 'chain', machine: machineOf(bd.smelter, ITEM_SCRAP, ITEM_ALLOY), key: '8' },
+  assembler: { label: bd.assembler.label, fw: 2, fh: 2, hp: bd.assembler.hp, cost: costOf(bd.assembler), buildTime: bd.assembler.buildTime, role: 'chain', machine: machineOf(bd.assembler, ITEM_ALLOY, ITEM_PART), key: '9' },
+  wall: { label: bd.wall.label, fw: 1, fh: 1, hp: bd.wall.hp, cost: costOf(bd.wall), buildTime: bd.wall.buildTime, role: 'wall', tiers: tiersOf(bd.wall), key: '1' },
+  gun: { label: bd.gun.label, fw: 2, fh: 2, hp: bd.gun.hp, cost: costOf(bd.gun), buildTime: bd.gun.buildTime, role: 'defence', weapon: weapon(bd.gun.weapon!, P_BULLET, 30), tiers: tiersOf(bd.gun), key: '2' },
+  area: { label: bd.area.label, fw: 2, fh: 2, hp: bd.area.hp, cost: costOf(bd.area), buildTime: bd.area.buildTime, role: 'defence', weapon: weapon(bd.area.weapon!, P_SHELL, 14), tiers: tiersOf(bd.area), key: '3' },
+  beam: { label: bd.beam.label, fw: 2, fh: 2, hp: bd.beam.hp, cost: costOf(bd.beam), buildTime: bd.beam.buildTime, role: 'defence', weapon: weapon(bd.beam.weapon!, P_BEAM, 0), key: '4' },
+  heavy: { label: bd.heavy.label, fw: 3, fh: 3, hp: bd.heavy.hp, cost: costOf(bd.heavy), buildTime: bd.heavy.buildTime, role: 'defence', weapon: weapon(bd.heavy.weapon!, P_HEAVY, 18), tiers: [HEAVY_T2], key: '5' },
+  shield: { label: bd.shield.label, fw: 2, fh: 2, hp: bd.shield.hp, cost: costOf(bd.shield), buildTime: bd.shield.buildTime, role: 'defence', key: '6' },
+  tempTurret: { label: 'Temporary turret', fw: 1, fh: 1, hp: map1.tempTurret.hp, cost: [0, 0, 0], buildTime: 1, role: 'defence', weapon: weapon(map1.tempTurret.weapon, P_BULLET, 30), key: '' },
   // Belt pieces: not in W12. First-pass numbers; cheap so a chain is a layout question, not a cost one.
-  belt: { label: 'Conveyor belt', size: 1, hp: 100, cost: [2, 0, 0], buildTime: 4, role: 'floor', key: 'b' },
-  splitter: { label: 'Splitter', size: 1, hp: 150, cost: [10, 20, 0], buildTime: 10, role: 'floor', key: 'v' },
-  merger: { label: 'Merger', size: 1, hp: 150, cost: [10, 20, 0], buildTime: 10, role: 'floor', key: 'n' },
+  belt: { label: 'Conveyor belt', fw: 1, fh: 1, hp: 100, cost: [2, 0, 0], buildTime: 4, role: 'floor', key: 'b' },
+  splitter: { label: 'Splitter', fw: 1, fh: 1, hp: 150, cost: [10, 20, 0], buildTime: 10, role: 'floor', key: 'v' },
+  merger: { label: 'Merger', fw: 1, fh: 1, hp: 150, cost: [10, 20, 0], buildTime: 10, role: 'floor', key: 'n' },
+  // W24 gate: converted from finished walls only (gate.ts), never placed from the build bar. Its
+  // footprint, hit points, cost and build time scale with the footprint (balance.ts gateWork);
+  // these per-kind values are the depth-1 gate (3 wall tiles). Tiers follow the wall's tiers.
+  gate: {
+    label: 'Gate',
+    fw: 3,
+    fh: 1,
+    hp: bd.wall.hp * 3,
+    cost: [bd.wall.cost.mass * 3 * GATE_COST_MULT, bd.wall.cost.energy * 3 * GATE_COST_MULT, bd.wall.cost.rare * 3 * GATE_COST_MULT],
+    buildTime: bd.wall.buildTime * 3 * GATE_COST_MULT,
+    role: 'wall',
+    tiers: tiersOf(bd.wall),
+    key: '',
+  },
 };
+/**
+ * Every kind's fixed properties. `size` is W13's square footprint side, kept only because look/
+ * (the W17 vista, layout.ts sizeOf) reads it; the game itself uses fw and fh (W24).
+ */
+export const BUILDING_INFO = Object.fromEntries(Object.entries(INFO).map(([k, v]) => [k, { ...v, size: v.fw }])) as Record<
+  BuildingKind,
+  BuildingInfo & { readonly size: number }
+>;
 export const buildingInfo = (kind: number): BuildingInfo => BUILDING_INFO[BUILDING_KINDS[kind]!];
-export const buildingSize = (kind: number): number => buildingInfo(kind).size;
+/** Default footprint of a kind, [fw, fh] (a placed gate's own footprint is in its fw, fh columns). */
+export const buildingFootprint = (kind: number): [number, number] => {
+  const i = buildingInfo(kind);
+  return [i.fw, i.fh];
+};
 
 export const SHIELD = {
   capacity: bd.shield.shield!.capacity,
@@ -252,12 +285,12 @@ export const UNIT_INFO: Record<UnitKind, UnitInfo> = {
     hp: map1.commander.hp,
     speed: tilesPerTick(3),
     radius: 0.9,
-    buildRate: map1.commander.buildRate,
+    buildRate: BUILD_RATE.commander,
     buildRange: 4,
     // W12's commander gun has range 0 (only aliens at the base); spatially it needs a reach: 16 m.
     weapon: { ...weapon(map1.commander.weapon, P_BULLET, 30), range: 8 },
   },
-  engineer: { label: 'Engineer', hp: map1.engineer.hp, speed: tilesPerTick(5), radius: 0.45, buildRate: map1.engineer.buildRate, buildRange: 3 },
+  engineer: { label: 'Engineer', hp: map1.engineer.hp, speed: tilesPerTick(5), radius: 0.45, buildRate: BUILD_RATE.engineer, buildRange: 3 },
 };
 
 export const alienInfo = (kind: number): AlienInfo => ALIEN_INFO[ALIEN_KINDS[kind]!];

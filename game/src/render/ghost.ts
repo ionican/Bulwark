@@ -3,7 +3,7 @@
 // Validity is shown by shape (outline style and mark), not by colour.
 
 import { Group, Mesh, MeshBasicMaterial, MeshLambertMaterial, type Scene } from 'three';
-import { BUILDING_KINDS, buildingSize, isBelt } from '../sim/kinds.ts';
+import { BUILDING_KINDS, buildingFootprint, isBelt } from '../sim/kinds.ts';
 import { heightAt, type Terrain } from '../sim/terrain.ts';
 import { buildingGeometries, ghostMarkGeometry, ghostOutlineGeometry } from './geometry.ts';
 
@@ -42,9 +42,9 @@ export class Ghost {
 
   show(kind: number, tx: number, ty: number, dir: number, ok: boolean, wpp: number, yaw: number): void {
     this.hide();
-    const size = buildingSize(kind);
-    const x = tx + size / 2;
-    const z = ty + size / 2;
+    const [fw, fh] = buildingFootprint(kind);
+    const x = tx + fw / 2;
+    const z = ty + fh / 2;
     const y = heightAt(this.terrain, x, z);
     const m = this.models[kind]!;
     m.visible = true;
@@ -53,7 +53,7 @@ export class Ghost {
     const o = this.outline[ok ? 1 : 0];
     o.visible = true;
     o.position.set(x, y + 0.1, z);
-    o.scale.set(size / 2, 1, size / 2);
+    o.scale.set(fw / 2, 1, fh / 2);
     const mk = this.mark[ok ? 1 : 0];
     mk.visible = true;
     const s = Math.max(0.5, 10 * wpp);

@@ -114,14 +114,19 @@ function offer(w: World, srcCell: number, cell: number, item: number, carry: num
 /** Puts `item` on a belt whose back faces building s (round-robin). */
 function output(w: World, s: number, item: number): boolean {
   const c = w.buildings.cols;
-  const size = buildingInfo(c.kind[s]!).size;
+  const fw = c.fw[s]!;
+  const fh = c.fh[s]!;
   const tx = c.tx[s]!;
   const ty = c.ty[s]!;
   const W = w.terrain.w;
-  // Perimeter cells with the direction pointing away from the footprint.
+  // Perimeter cells with the direction pointing away from the footprint (for a square footprint
+  // the same order as W13's: east, south, west, north for each i).
   const ring: Array<[number, number, number]> = [];
-  for (let i = 0; i < size; i++) {
-    ring.push([tx + size, ty + i, 0], [tx + i, ty + size, 1], [tx - 1, ty + i, 2], [tx + i, ty - 1, 3]);
+  for (let i = 0; i < Math.max(fw, fh); i++) {
+    if (i < fh) ring.push([tx + fw, ty + i, 0]);
+    if (i < fw) ring.push([tx + i, ty + fh, 1]);
+    if (i < fh) ring.push([tx - 1, ty + i, 2]);
+    if (i < fw) ring.push([tx + i, ty - 1, 3]);
   }
   const n = ring.length;
   for (let k = 0; k < n; k++) {

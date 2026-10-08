@@ -2,6 +2,8 @@
 // so a replay of (seed, scenario, stamped commands) reproduces a game exactly.
 // `queue: true` appends the order to the units' queues instead of replacing them.
 
+import type { TuneTarget } from './tuning.ts';
+
 export type Command =
   /** Move player units (commander, engineers) to a world point. Ids are unit-table ids. */
   | { t: 'move'; ids: number[]; x: number; z: number; queue?: boolean }
@@ -25,7 +27,52 @@ export type Command =
   /** Debug: spawn a group of `count` aliens of `kind` at entry index `entry`. */
   | { t: 'spawn'; kind: number; entry: number; count: number }
   /** Debug: place a finished building instantly. */
-  | { t: 'place'; kind: number; tx: number; ty: number; dir?: number };
+  | { t: 'place'; kind: number; tx: number; ty: number; dir?: number }
+  // ---- W24 ----
+  /**
+   * Lay a straight wall run (runs.ts) and give each unit one order to work through it. `from` and
+   * `to` are tiles; `depth` 1..4 rows. Always tier 1.
+   */
+  | { t: 'buildRun'; ids: number[]; from: [number, number]; to: [number, number]; depth: number; queue?: boolean }
+  /** Remove a run's remaining reserved tiles (started tiles stay as sites). */
+  | { t: 'cancelRun'; run: number }
+  /**
+   * Convert finished walls into a gate site centred on (tx, ty) (gate.ts) and send the units to
+   * build it. `axis` forces the run axis; without it the axis is picked as W23 does.
+   */
+  | { t: 'gate'; ids: number[]; tx: number; ty: number; axis?: 'x' | 'z'; queue?: boolean }
+  // Sandbox only (sandbox.ts): refused with a reason in any other scenario.
+  /** Spawn `count` (1..50) aliens of `kind` round world point (x, z). */
+  | { t: 'spawnAt'; kind: number; x: number; z: number; count: number }
+  /** Multiply one field of one kind by `mult` (0.1..10) on top of tiers and research (tuning.ts). */
+  | { t: 'tune'; target: TuneTarget; kind: number; field: string; mult: number }
+  /** Multipliers back to 1: all, one target, or one kind of one target. */
+  | { t: 'tuneReset'; target?: TuneTarget; kind?: number }
+  /** Free spending: construction, upgrades, research, engineers, energy upkeep and parts cost nothing. */
+  | { t: 'setUnlimited'; on: boolean }
+  /** Complete research without cost: every node, or one. */
+  | { t: 'grantResearch'; all?: boolean; node?: string }
+  /** Send map 1 wave `index` (0-based) now, at its entry points. Does not start the schedule. */
+  | { t: 'startWave'; index: number }
+  | { t: 'clearAliens' }
+  | { t: 'clearWrecks' }
+  | { t: 'resetStats' }
+  /** Back to the sandbox start state; tuning and unlimited are kept unless `full`. */
+  | { t: 'resetSandbox'; full?: boolean };
+
+/** Commands refused outside the sandbox scenario. */
+export const SANDBOX_COMMANDS: ReadonlySet<Command['t']> = new Set([
+  'spawnAt',
+  'tune',
+  'tuneReset',
+  'setUnlimited',
+  'grantResearch',
+  'startWave',
+  'clearAliens',
+  'clearWrecks',
+  'resetStats',
+  'resetSandbox',
+]);
 
 export interface StampedCommand {
   tick: number;

@@ -402,6 +402,16 @@ export const wallTower: Make = (m) => {
 
 const tempTurret: Make = (m) => gun(m);
 
+// W24 placeholder so look/ keeps compiling against the game's BuildingKind: a plain box per pylon
+// either side of an open centre. The real gate (W23 walls/gate.ts) is ported in W24 run 2.
+const gatePlaceholder: Make = (m) => {
+  const b = new Builder(m);
+  b.add('ivory', cbox(1, 1.3, 1, 0.02), { x: -1 });
+  b.add('ivory', cbox(1, 1.3, 1, 0.02), { x: 1 });
+  b.add('trim', cbox(3, 0.2, 0.6, 0.02), { y: 1.4 });
+  return { name: 'gate', parts: [part('base', b)], radius: 1.6, height: 1.6 };
+};
+
 export const BUILDING_MAKERS: Record<BuildingKind, Make> = {
   massExtractor,
   generator,
@@ -421,4 +431,5 @@ export const BUILDING_MAKERS: Record<BuildingKind, Make> = {
   belt,
   splitter: belt,
   merger: belt,
+  gate: gatePlaceholder,
 };

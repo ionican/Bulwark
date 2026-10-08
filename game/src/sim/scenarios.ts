@@ -1,33 +1,26 @@
 // Starting states. 'map1' is the real map 1 start (commander, the W12 starting engineers, empty
 // base, W12 start stock). 'stress' is the debug scene behind /?stress=1: 300 buildings, 500 aliens
 // on their flow fields with combat running; buildings and units cannot fall below 1 hp and killed aliens
-// respawn at an entry, so the counts hold while it is measured.
+// respawn at an entry, so the counts hold while it is measured. 'sandbox' (W24, /?sandbox=1) is
+// map 1's start with no wave schedule, no end state and the sandbox commands (sandbox.ts).
+// The scenario is stored on the world (World.scenario), so saves and snapshots carry it.
 
-import { ALIEN_KINDS, B, BUILDING_KINDS, START_ENGINEERS, U } from './kinds.ts';
+import { ALIEN_KINDS, B, BUILDING_KINDS } from './kinds.ts';
 import { TILE_ROCK, tileAt } from './terrain.ts';
-import { World } from './world.ts';
+import { World, type ScenarioName } from './world.ts';
 
-export type ScenarioName = 'map1' | 'stress' | 'empty';
+export type { ScenarioName };
 
 export const STRESS_ALIENS = 500;
 export const STRESS_BUILDINGS = 300;
 
 export function createWorld(seed: number, scenario: ScenarioName): World {
-  const w = new World(seed);
-  if (scenario === 'map1') setupMap1(w);
+  const w = new World(seed, undefined, { waves: scenario !== 'sandbox' });
+  w.scenario = scenario;
+  if (scenario === 'map1' || scenario === 'sandbox') w.spawnStartUnits();
   else if (scenario === 'stress') setupStress(w);
   w.computeRoutes();
   return w;
-}
-
-function startUnits(w: World) {
-  const { base } = w.terrain;
-  w.spawnUnit(U.commander, base.x + 0.5, base.z + 0.5);
-  for (let i = 0; i < START_ENGINEERS; i++) w.spawnUnit(U.engineer, base.x - 2.5 + i * 5 / Math.max(1, START_ENGINEERS - 1), base.z + 3.5);
-}
-
-function setupMap1(w: World) {
-  startUnits(w);
 }
 
 function setupStress(w: World) {
@@ -35,14 +28,15 @@ function setupStress(w: World) {
   w.debug.respawnAliens = true;
   w.pool.set([1e9, 1e9, 1e9]);
   w.parts = 1e6;
-  startUnits(w);
+  w.spawnStartUnits();
   const t = w.terrain;
   let placed = 0;
   for (const d of t.deposits) {
     if (w.placeBuilding(d.kind === 'mass' ? B.massExtractor : B.rareExtractor, d.tx, d.ty, true) >= 0) placed++;
   }
-  // Mixed kinds, excluding the extractors (they need deposits). Walls get extra weight.
-  const pool = BUILDING_KINDS.map((_, i) => i).filter((k) => k !== B.massExtractor && k !== B.rareExtractor && k !== B.tempTurret);
+  // Mixed kinds, excluding the extractors (they need deposits), the temporary turret and the gate
+  // (made from walls). Walls get extra weight.
+  const pool = BUILDING_KINDS.map((_, i) => i).filter((k) => k !== B.massExtractor && k !== B.rareExtractor && k !== B.tempTurret && k !== B.gate);
   pool.push(B.wall, B.wall, B.wall);
   let attempts = 0;
   while (placed < STRESS_BUILDINGS && attempts++ < 20000) {

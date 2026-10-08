@@ -1,15 +1,20 @@
-// Commander and engineer orders: move, build (or assist, or upgrade), reclaim.
+// Commander and engineer orders: move, build (or assist, or upgrade), work on a wall run, reclaim.
 //
 // Units path with A* on the tile grid round solid buildings (they walk over belts). A builder in
 // range adds its build power to the site; the drain and progress are worked out in economy.ts.
 // Reclaim: an engineer pulls salvage from a wreck at RECLAIM_RATE into its own load, carries the
 // load to the nearest finished salvage depot and unloads it there (salvage is credited only on
 // delivery), then goes back for more, moving on to the nearest wreck within 12 tiles when one runs out.
+// Wall run (W24, runs.ts): one order per builder; it claims the next unclaimed tile of the run in
+// build order, builds it like a build order, then claims the next, until none is left unclaimed.
+// Speed and build power include the sandbox tuning multipliers (tuning.ts).
 
 import { BF_COMPLETE, BF_UPGRADING, US_BUILDING, US_IDLE, US_MOVING, US_RECLAIMING, US_UNLOADING, US_WAITING } from './schema.ts';
-import { B, CARRY_CAPACITY, RECLAIM_RATE, TICK_SECONDS, U, buildingInfo, unitInfo } from './kinds.ts';
+import { B, CARRY_CAPACITY, RECLAIM_RATE, TICK_SECONDS, U, unitInfo } from './kinds.ts';
 import { FIELD_ENG_BUILD_MULT } from './balance.ts';
-import { distToBuilding } from './combat.ts';
+import { centreOf, distToBuilding } from './combat.ts';
+import { TU_BUILD_RATE, TU_SPEED } from './tuning.ts';
+import { claimNext, runById } from './runs.ts';
 import type { World } from './world.ts';
 
 const DT = TICK_SECONDS;
@@ -17,6 +22,8 @@ const DT = TICK_SECONDS;
 export type Order =
   | { t: 'move'; x: number; z: number }
   | { t: 'build'; id: number }
+  /** Work through wall run `run` (runs.ts); `site` is the tile currently claimed (-1 = none). */
+  | { t: 'run'; run: number; site: number }
   /** Commander only: produce an engineer (progress 0..1). */
   | { t: 'produce'; progress: number }
   /** phase 0 collecting, 1 delivering; (x, z) where the last wreck was. */
@@ -54,7 +61,7 @@ function walk(w: World, s: number, key: string, gx: number, gz: number, isGoal: 
   const next = path[w.pathPos[s]!]!;
   const nx = (next % W) + 0.5;
   const nz = Math.floor(next / W) + 0.5;
-  const speed = unitInfo(c.kind[s]!).speed;
+  const speed = unitSpeed(w, s);
   const dx = nx - c.x[s]!;
   const dz = nz - c.z[s]!;
   const d = Math.sqrt(dx * dx + dz * dz);
@@ -75,7 +82,7 @@ function walk(w: World, s: number, key: string, gx: number, gz: number, isGoal: 
 /** Straight-line step to an exact point (the last part of a move order). */
 function stepTo(w: World, s: number, x: number, z: number): boolean {
   const c = w.units.cols;
-  const speed = unitInfo(c.kind[s]!).speed;
+  const speed = unitSpeed(w, s);
   const dx = x - c.x[s]!;
   const dz = z - c.z[s]!;
   const d = Math.sqrt(dx * dx + dz * dz);
@@ -91,6 +98,50 @@ function stepTo(w: World, s: number, x: number, z: number): boolean {
   c.state[s] = US_MOVING;
   return false;
 }
+
+/** Tiles per tick, tuned. */
+function unitSpeed(w: World, s: number): number {
+  const kind = w.units.cols.kind[s]!;
+  return unitInfo(kind).speed * w.tuning.u(kind, TU_SPEED);
+}
+
+/**
+ * Builder s works on site slot b (id `id`): adds its build power when in range, otherwise walks
+ * there. Returns false when the site cannot be reached (the caller drops the order).
+ */
+function workOnSite(w: World, s: number, b: number, id: number, range: number, buildRate: number): boolean {
+  const c = w.units.cols;
+  const W = w.terrain.w;
+  const [bx, bz] = centreOf(w, b);
+  if (distToBuilding(w, b, c.x[s]!, c.z[s]!) <= range) {
+    c.state[s] = US_BUILDING;
+    c.work[s] = id + 1;
+    w.buildPower[b] = w.buildPower[b]! + buildRate;
+    w.builderCount[b] = Math.min(255, w.builderCount[b]! + 1);
+    const dx = bx - c.x[s]!;
+    const dz = bz - c.z[s]!;
+    const d = Math.sqrt(dx * dx + dz * dz);
+    if (d > 1e-6) {
+      c.fx[s] = dx / d;
+      c.fz[s] = dz / d;
+    }
+    return true;
+  }
+  const ok = walk(w, s, `b${id}`, bx, bz, (cell) => {
+    const cx = (cell % W) + 0.5;
+    const cz = Math.floor(cell / W) + 0.5;
+    return distToBuilding(w, b, cx, cz) <= range - 0.2;
+  });
+  // In a goal cell but not yet in reach from where it stands: close the last bit directly.
+  if (ok) stepTo(w, s, bx, bz);
+  else if (!w.paths[s]) return false; // cannot reach the site
+  return true;
+}
+
+const unfinished = (w: World, b: number) => {
+  const f = w.buildings.cols.flags[b]!;
+  return (f & BF_COMPLETE) === 0 || (f & BF_UPGRADING) !== 0;
+};
 
 function cellCentreDist(W: number, cell: number, x: number, z: number): number {
   const cx = (cell % W) + 0.5;
@@ -148,7 +199,8 @@ export function stepUnits(w: World): void {
       continue;
     }
     const info = unitInfo(c.kind[s]!);
-    const buildRate = c.kind[s] === U.engineer && w.researched('fieldEng') ? info.buildRate * FIELD_ENG_BUILD_MULT : info.buildRate;
+    const baseRate = c.kind[s] === U.engineer && w.researched('fieldEng') ? info.buildRate * FIELD_ENG_BUILD_MULT : info.buildRate;
+    const buildRate = baseRate * w.tuning.u(c.kind[s]!, TU_BUILD_RATE);
     if (order.t === 'produce') {
       if (c.kind[s] !== U.commander) {
         orders.shift();
@@ -173,37 +225,33 @@ export function stepUnits(w: World): void {
     }
     if (order.t === 'build') {
       const b = w.buildings.slotForId(order.id);
-      const bc = w.buildings.cols;
-      if (b < 0 || ((bc.flags[b]! & BF_COMPLETE) !== 0 && (bc.flags[b]! & BF_UPGRADING) === 0)) {
+      if (b < 0 || !unfinished(w, b)) {
         orders.shift();
         w.paths[s] = null;
         continue;
       }
-      const range = info.buildRange;
-      if (distToBuilding(w, b, c.x[s]!, c.z[s]!) <= range) {
-        c.state[s] = US_BUILDING;
-        c.work[s] = order.id + 1;
-        w.buildPower[b] = w.buildPower[b]! + buildRate;
-        w.builderCount[b] = Math.min(255, w.builderCount[b]! + 1);
-        const half = buildingInfo(bc.kind[b]!).size / 2;
-        const dx = bc.tx[b]! + half - c.x[s]!;
-        const dz = bc.ty[b]! + half - c.z[s]!;
-        const d = Math.sqrt(dx * dx + dz * dz);
-        if (d > 1e-6) {
-          c.fx[s] = dx / d;
-          c.fz[s] = dz / d;
-        }
+      if (!workOnSite(w, s, b, order.id, info.buildRange, buildRate)) orders.shift();
+      continue;
+    }
+    if (order.t === 'run') {
+      const run = runById(w, order.run);
+      if (!run) {
+        orders.shift();
+        w.paths[s] = null;
         continue;
       }
-      const half = buildingInfo(bc.kind[b]!).size / 2;
-      const ok = walk(w, s, `b${order.id}`, bc.tx[b]! + half, bc.ty[b]! + half, (cell) => {
-        const cx = (cell % W) + 0.5;
-        const cz = Math.floor(cell / W) + 0.5;
-        return distToBuilding(w, b, cx, cz) <= range - 0.2;
-      });
-      // In a goal cell but not yet in reach from where it stands: close the last bit directly.
-      if (ok) stepTo(w, s, bc.tx[b]! + half, bc.ty[b]! + half);
-      else if (!w.paths[s]) orders.shift(); // cannot reach the site
+      let b = order.site >= 0 ? w.buildings.slotForId(order.site) : -1;
+      if (b < 0 || !unfinished(w, b)) {
+        order.site = claimNext(w, run, s);
+        w.paths[s] = null;
+        if (order.site < 0) {
+          orders.shift(); // every tile is built or held by another builder
+          continue;
+        }
+        b = w.buildings.slotForId(order.site);
+      }
+      // An unreachable tile ends the order, as for a single build (the tiles stay reserved).
+      if (!workOnSite(w, s, b, order.site, info.buildRange, buildRate)) orders.shift();
       continue;
     }
     // Reclaim.
@@ -266,14 +314,13 @@ export function stepUnits(w: World): void {
       order.phase = 0;
       continue;
     }
-    const half = 1;
-    const bc = w.buildings.cols;
-    const ok = walk(w, s, `d${w.buildings.id(depot)}`, bc.tx[depot]! + half, bc.ty[depot]! + half, (cell) => {
+    const [dx0, dz0] = centreOf(w, depot);
+    const ok = walk(w, s, `d${w.buildings.id(depot)}`, dx0, dz0, (cell) => {
       const cx = (cell % W) + 0.5;
       const cz = Math.floor(cell / W) + 0.5;
       return distToBuilding(w, depot, cx, cz) <= UNLOAD_REACH - 0.2;
     });
-    if (ok) stepTo(w, s, bc.tx[depot]! + half, bc.ty[depot]! + half);
+    if (ok) stepTo(w, s, dx0, dz0);
     else if (!w.paths[s]) c.state[s] = US_WAITING;
   }
 }

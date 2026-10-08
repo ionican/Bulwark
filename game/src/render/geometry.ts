@@ -150,10 +150,31 @@ function beltModel(kind: 'belt' | 'splitter' | 'merger', full: boolean): BufferG
 }
 
 // ---- buildings: full models ----------------------------------------------------------------
-// Built centred on the footprint at y = 0, footprint side `f` tiles.
+// Built centred on the footprint at y = 0, footprint side `f` tiles (the kind's default fw; every
+// kind but the gate is square). The gate is modelled 3 tiles wide along x and 1 tile deep; the
+// renderer stretches it to its depth and turns it to its axis.
+
+/** Gate (W24): two solid pylons, an open centre column (the corridor) under a lintel. */
+function gateModel(full: boolean): BufferGeometry {
+  const P = PALETTE;
+  const parts = [
+    part(box(1, 1.3, 1), P.metal, { x: -1, y: 0.65 }),
+    part(box(1, 1.3, 1), P.metal, { x: 1, y: 0.65 }),
+    part(box(3, 0.22, 0.6), P.ink, { y: 1.5 }),
+    // A low sill across the corridor: the gap reads as a way through, not a missing tile.
+    part(box(0.9, 0.05, 1), P.plate, { y: 0.025 }),
+  ];
+  if (full) {
+    parts.push(part(box(1.04, 0.14, 1.04), P.ink, { x: -1, y: 1.3 }));
+    parts.push(part(box(1.04, 0.14, 1.04), P.ink, { x: 1, y: 1.3 }));
+    parts.push(part(box(0.08, 1.1, 0.08), P.pale, { x: -0.45, y: 0.55 }));
+    parts.push(part(box(0.08, 1.1, 0.08), P.pale, { x: 0.45, y: 0.55 }));
+  }
+  return merge(parts);
+}
 
 function buildingFull(kind: BuildingKind): BufferGeometry {
-  const f = BUILDING_INFO[kind].size;
+  const f = BUILDING_INFO[kind].fw;
   const P = PALETTE;
   const pad = (h = 0.2, hex: string = P.plate) => part(box(f * 0.92, h, f * 0.92), hex, { y: h / 2 });
   switch (kind) {
@@ -259,11 +280,13 @@ function buildingFull(kind: BuildingKind): BufferGeometry {
         part(box(0.35, 0.25, 0.35), P.friend, { y: 0.42 }),
         part(cyl(0.05, 0.05, 0.5, 4), P.ink, { y: 0.42, z: -0.35, rx: Math.PI / 2 }),
       ]);
+    case 'gate':
+      return gateModel(true);
   }
 }
 
 function buildingSimple(kind: BuildingKind): BufferGeometry {
-  const f = BUILDING_INFO[kind].size;
+  const f = BUILDING_INFO[kind].fw;
   const P = PALETTE;
   switch (kind) {
     case 'massExtractor':
@@ -300,6 +323,8 @@ function buildingSimple(kind: BuildingKind): BufferGeometry {
     case 'splitter':
     case 'merger':
       return beltModel(kind, false);
+    case 'gate':
+      return gateModel(false);
   }
 }
 
@@ -466,6 +491,8 @@ const BUILDING_ICONS: Record<BuildingKind, IconSpec> = {
   splitter: { outer: [[0, 0.95], [0.5, 0.45], [0.2, 0.45], [0.2, -0.45], [0.5, -0.45], [0, -0.95], [-0.5, -0.45], [-0.2, -0.45], [-0.2, 0.45], [-0.5, 0.45]] },
   merger: { outer: [[0.95, 0], [0.4, 0.55], [0.4, 0.25], [-0.9, 0.9], [-0.9, -0.9], [0.4, -0.25], [0.4, -0.55]] },
   tempTurret: { outer: [[-0.25, 0.8], [0.25, 0.8], [0.25, 0.25], [0.8, 0.25], [0.8, -0.25], [0.25, -0.25], [0.25, -0.8], [-0.25, -0.8], [-0.25, -0.25], [-0.8, -0.25], [-0.8, 0.25], [-0.25, 0.25]] },
+  // Gate: two pylons and a lintel round an open centre (the corridor).
+  gate: { outer: rect(-0.95, -0.75, -0.35, 0.75), extra: [rect(0.35, -0.75, 0.95, 0.75), rect(-0.95, 0.45, 0.95, 0.75)] },
 };
 
 export const ALIEN_ICONS: Record<AlienKind, IconSpec> = {
@@ -683,6 +710,21 @@ export function ghostOutlineGeometry(ok: boolean): BufferGeometry {
   const parts = [rect(-1, 1 - t, 1, 1), rect(-1, -1, 1, -1 + t), rect(-1, -1, -1 + t, 1), rect(1 - t, -1, 1, 1)].map((r) =>
     paint(new ShapeGeometry(shapeFrom(r)).rotateX(-Math.PI / 2), '#a8f5df'),
   );
+  return merge(parts);
+}
+
+/**
+ * Reserved site (W24): a dotted outline round a unit footprint (scaled to the footprint). Dots, not
+ * the construction frame's dashes or the ghost's solid line, so the three states differ by shape.
+ */
+export function reservedOutlineGeometry(): BufferGeometry {
+  const parts: BufferGeometry[] = [];
+  const n = 8;
+  const d = 0.07;
+  for (let i = 0; i <= n; i++) {
+    const a = -1 + (2 * i) / n;
+    for (const [x, y] of [[a, 1], [a, -1], [1, a], [-1, a]] as Pt[]) parts.push(paint(new ShapeGeometry(shapeFrom(rect(x - d, y - d, x + d, y + d))).rotateX(-Math.PI / 2), '#a8f5df'));
+  }
   return merge(parts);
 }
 

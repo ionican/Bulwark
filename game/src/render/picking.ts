@@ -6,7 +6,6 @@
 import { Vector3, type PerspectiveCamera } from 'three';
 import { alienInfo, unitInfo } from '../sim/kinds.ts';
 import { heightAt, type Terrain } from '../sim/terrain.ts';
-import { buildingSize } from '../sim/kinds.ts';
 import { worldPerPixel } from './cameraRig.ts';
 
 export type PickType = 'unit' | 'building' | 'alien' | 'wreck';
@@ -31,7 +30,8 @@ export interface PickView {
   mapH: number;
   /** Building row + 1 per tile (0 = no building). Built by buildOccupancy. */
   occupancy: Int32Array;
-  buildings: { count: number; id: Uint32Array; kind: Uint8Array; tx: Int16Array; ty: Int16Array };
+  /** Footprint fw × fh tiles from the anchor (tx, ty), from the snapshot columns (W24). */
+  buildings: { count: number; id: Uint32Array; kind: Uint8Array; tx: Int16Array; ty: Int16Array; fw: Uint8Array; fh: Uint8Array };
   units: MobileRows;
   aliens: MobileRows;
   /** Optional: wrecks (picked last, so a click on a building or alien wins). */
@@ -41,11 +41,10 @@ export interface PickView {
 export function buildOccupancy(b: PickView['buildings'], w: number, h: number, out: Int32Array): Int32Array {
   out.fill(0);
   for (let r = 0; r < b.count; r++) {
-    const size = buildingSize(b.kind[r]!);
     const tx = b.tx[r]!;
     const ty = b.ty[r]!;
-    for (let j = 0; j < size; j++) {
-      for (let i = 0; i < size; i++) {
+    for (let j = 0; j < b.fh[r]!; j++) {
+      for (let i = 0; i < b.fw[r]!; i++) {
         const x = tx + i;
         const y = ty + j;
         if (x >= 0 && y >= 0 && x < w && y < h) out[y * w + x] = r + 1;
@@ -190,8 +189,7 @@ export function boxSelect(
   if (out.length) return out;
   const b = view.buildings;
   for (let r = 0; r < b.count; r++) {
-    const half = buildingSize(b.kind[r]!) / 2;
-    if (insideQuad(q, b.tx[r]! + half, b.ty[r]! + half)) out.push({ type: 'building', id: b.id[r]!, kind: b.kind[r]! });
+    if (insideQuad(q, b.tx[r]! + b.fw[r]! / 2, b.ty[r]! + b.fh[r]! / 2)) out.push({ type: 'building', id: b.id[r]!, kind: b.kind[r]! });
   }
   if (out.length) return out;
   const a = view.aliens;

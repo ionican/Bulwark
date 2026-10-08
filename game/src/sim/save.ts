@@ -10,8 +10,13 @@
 // on history (flow fields and cost grids are rebuilt on a schedule, unit paths are planned once),
 // so a restored world steps exactly as the original would have. The belt processing order is the
 // one derived value recomputed on load; it depends only on the buildings present.
+// Version 2 (W24) adds the scenario, wall runs, sandbox tuning and unlimited spending, spawn
+// origins, the combat counters, the commander respawn, and (through the projectile table)
+// projectile attribution.
 
-import { World, type PendingGroup, type Route } from './world.ts';
+import { World, type PendingGroup, type Route, type ScenarioName } from './world.ts';
+import type { WallRun } from './runs.ts';
+import type { SpawnOrigin } from './sandbox.ts';
 import { SNAPSHOT_VERSION } from './snapshot.ts';
 import { map1Terrain, type Terrain } from './terrain.ts';
 import type { AnyTypedArray, FieldSpec, Table } from './table.ts';
@@ -19,7 +24,7 @@ import type { StampedCommand } from './commands.ts';
 import type { Order } from './units.ts';
 
 export const SAVE_MAGIC = 0x534b5742; // "BWKS"
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 
 export class SaveVersionError extends Error {}
 
@@ -92,6 +97,10 @@ export function serializeWorld(w: World): Uint8Array {
     ['walk', w.walk],
     ['fieldGoal', w.fieldGoal],
     ['fieldDirty', w.fieldDirty],
+    ['stats', w.stats],
+    ['tuning.building', w.tuning.building],
+    ['tuning.alien', w.tuning.alien],
+    ['tuning.unit', w.tuning.unit],
   );
   w.fields.forEach((f, i) => blobs.push([`field${i}.dist`, f.dist], [`field${i}.dir`, f.dir]));
   const isMap1 = w.terrain === map1Terrain();
@@ -144,6 +153,11 @@ export function serializeWorld(w: World): Uint8Array {
       researchProgress: w.researchProgress,
       researchRate: w.researchRate,
       researchEff: w.researchEff,
+      scenario: w.scenario,
+      unlimited: w.unlimited,
+      nextRunId: w.nextRunId,
+      commanderRespawnTick: w.commanderRespawnTick,
+      commanderDeaths: w.commanderDeaths,
     },
     fieldMeta: w.fields.map((f) => ({ builtAt: f.builtAt, goalCount: f.goalCount })),
     researchQueue: w.researchQueue,
@@ -153,6 +167,9 @@ export function serializeWorld(w: World): Uint8Array {
     pathKey: w.pathKey,
     routes: w.routes,
     pending: w.pending,
+    runs: w.runs,
+    spawnOrigins: w.spawnOrigins,
+    originRoutes: w.originRoutes,
     queue: w.queue,
     log: w.log,
     debug: w.debug,
@@ -225,6 +242,10 @@ export function deserializeWorld(input: Uint8Array | ArrayBuffer): World {
   w.walk.set(get('walk'));
   w.fieldGoal.set(get('fieldGoal'));
   w.fieldDirty.set(get('fieldDirty'));
+  w.stats.set(get('stats'));
+  w.tuning.building.set(get('tuning.building'));
+  w.tuning.alien.set(get('tuning.alien'));
+  w.tuning.unit.set(get('tuning.unit'));
   w.fields.forEach((f, i) => {
     f.dist.set(get(`field${i}.dist`));
     f.dir.set(get(`field${i}.dir`));
@@ -243,6 +264,10 @@ export function deserializeWorld(input: Uint8Array | ArrayBuffer): World {
   w.pathKey.push(...(state.pathKey as string[]));
   w.routes = state.routes as Route[];
   w.pending = state.pending as PendingGroup[];
+  w.runs = state.runs as Array<WallRun | null>;
+  w.spawnOrigins = state.spawnOrigins as SpawnOrigin[];
+  w.originRoutes = state.originRoutes as World['originRoutes'];
+  w.scenario = state.scalars.scenario as ScenarioName;
   w.queue = state.queue as StampedCommand[];
   w.log.length = 0;
   w.log.push(...(state.log as StampedCommand[]));

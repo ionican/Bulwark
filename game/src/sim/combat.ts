@@ -7,9 +7,15 @@
 // and holds fire with none. Alien attacks are short-range projectiles too, so a shield generator
 // absorbs them for anything within its radius except walls (W12's rule), scaled by the upkeep ratio.
 // Armour: each hit loses a flat `armour`, and at least 10% of it always gets through (W12).
+// W24: every shot carries its shooter's type, kind and id from the moment of firing, and each hit
+// records what the target actually lost in the per-kind counters (stats.ts). Damage, range and
+// fire interval include the sandbox tuning multipliers (tuning.ts); a projectile keeps the damage
+// it was fired with. Unlimited spending (sandbox) fires the heavy cannon without parts.
 
-import { BF_ACTIVE, BF_COMPLETE, BF_FIRING, BF_STARVED, T_ALIEN, T_BUILDING, T_UNIT } from './schema.ts';
-import { B, P_ALIEN, P_SHELL, SHIELD, TICK_SECONDS, WRECK_DECAY_PER_SECOND, alienInfo, buildingInfo, unitInfo, type Weapon } from './kinds.ts';
+import { BF_ACTIVE, BF_COMPLETE, BF_FIRING, BF_STARVED, T_ALIEN, T_BUILDING, T_NONE, T_UNIT } from './schema.ts';
+import { B, P_ALIEN, P_SHELL, SHIELD, TICK_SECONDS, U, WRECK_DECAY_PER_SECOND, alienInfo, buildingInfo, unitInfo, type Weapon } from './kinds.ts';
+import { TB_DAMAGE, TB_INTERVAL, TB_RANGE } from './tuning.ts';
+import { recordAbsorbed, recordAlienDamage, recordHitOnAlien, recordShot } from './stats.ts';
 import type { World } from './world.ts';
 
 const DT = TICK_SECONDS;
@@ -61,20 +67,21 @@ export class AlienGrid {
   }
 }
 
+/** Centre of a building's fw × fh footprint. */
 export function centreOf(w: World, s: number): [number, number] {
   const c = w.buildings.cols;
-  const half = buildingInfo(c.kind[s]!).size / 2;
-  return [c.tx[s]! + half, c.ty[s]! + half];
+  return [c.tx[s]! + c.fw[s]! / 2, c.ty[s]! + c.fh[s]! / 2];
 }
 
-/** Distance from a point to a building's footprint rectangle (0 inside). */
+/** Distance from a point to a building's footprint rectangle (0 inside): the nearest footprint tile. */
 export function distToBuilding(w: World, s: number, x: number, z: number): number {
   const c = w.buildings.cols;
-  const size = buildingInfo(c.kind[s]!).size;
   const x0 = c.tx[s]!;
   const z0 = c.ty[s]!;
-  const dx = x < x0 ? x0 - x : x > x0 + size ? x - x0 - size : 0;
-  const dz = z < z0 ? z0 - z : z > z0 + size ? z - z0 - size : 0;
+  const x1 = x0 + c.fw[s]!;
+  const z1 = z0 + c.fh[s]!;
+  const dx = x < x0 ? x0 - x : x > x1 ? x - x1 : 0;
+  const dz = z < z0 ? z0 - z : z > z1 ? z - z1 : 0;
   return Math.sqrt(dx * dx + dz * dz);
 }
 
@@ -127,12 +134,13 @@ export function acquireTargets(w: World): void {
       continue;
     }
     const [x, z] = centreOf(w, s);
+    const range = wpn.range * w.tuning.b(c.kind[s]!, TB_RANGE);
     const cur = c.target[s]! - 1;
     if (cur >= 0) {
       const slot = w.aliens.slotForId(cur);
-      if (slot >= 0 && inRange(w, slot, x, z, wpn.range)) continue;
+      if (slot >= 0 && inRange(w, slot, x, z, range)) continue;
     }
-    const t = findAlien(w, x, z, wpn.range, wpn.prefer);
+    const t = findAlien(w, x, z, range, wpn.prefer);
     c.target[s] = t >= 0 ? w.aliens.id(t) + 1 : 0;
   }
 }
@@ -148,7 +156,10 @@ export function spawnProjectile(
   tz: number,
   damage: number,
   speed: number,
-  wpn?: Weapon,
+  wpn: Weapon | undefined,
+  srcType: number,
+  srcKind: number,
+  srcId: number,
 ): void {
   const p = w.projectiles;
   if (p.count >= p.capacity) return;
@@ -172,13 +183,21 @@ export function spawnProjectile(
   c.splashRadius[s] = wpn?.splashRadius ?? 0;
   c.splashFactor[s] = wpn?.splashFactor ?? 0;
   c.life[s] = 100;
+  c.srcType[s] = srcType;
+  c.srcKind[s] = srcKind;
+  c.srcId[s] = srcId;
 }
 
-/** Applies a hit to an alien with W12's armour rule. */
-export function damageAlien(w: World, s: number, damage: number): void {
+/**
+ * Applies a hit to an alien with W12's armour rule, crediting the shooter (srcType, srcKind) with
+ * the hit points the alien actually lost and with the kill if this hit removed the last of them.
+ */
+export function damageAlien(w: World, s: number, damage: number, srcType = T_NONE, srcKind = 0): void {
   const c = w.aliens.cols;
   const armour = alienInfo(c.kind[s]!).armour;
-  c.hp[s] = c.hp[s]! - Math.max(damage - armour, damage * 0.1);
+  const before = c.hp[s]!;
+  c.hp[s] = before - Math.max(damage - armour, damage * 0.1);
+  if (before > 0) recordHitOnAlien(w, srcType, srcKind, before - Math.max(0, c.hp[s]!), c.hp[s]! <= 0);
 }
 
 /** Shields within range of (x, z) absorb damage first, scaled by the energy upkeep ratio. */
@@ -200,21 +219,29 @@ function absorb(w: World, x: number, z: number, dmg: number): number {
   return dmg;
 }
 
-export function damageBuilding(w: World, s: number, dmg: number): void {
+export function damageBuilding(w: World, s: number, dmg: number, srcType = T_NONE, srcKind = 0): void {
   const c = w.buildings.cols;
-  if (buildingInfo(c.kind[s]!).role !== 'wall') {
+  const wall = buildingInfo(c.kind[s]!).role === 'wall';
+  if (!wall) {
     const [x, z] = centreOf(w, s);
-    dmg = absorb(w, x, z, dmg);
+    const left = absorb(w, x, z, dmg);
+    recordAbsorbed(w, srcType, srcKind, dmg - left);
+    dmg = left;
   }
   if (dmg <= 0) return;
-  c.hp[s] = c.hp[s]! - dmg;
+  const before = c.hp[s]!;
+  c.hp[s] = before - dmg;
+  if (before > 0) recordAlienDamage(w, srcType, srcKind, wall ? 'wall' : 'building', Math.min(before, dmg));
   w.costDrift = true;
 }
 
-export function damageUnit(w: World, s: number, dmg: number): void {
+export function damageUnit(w: World, s: number, dmg: number, srcType = T_NONE, srcKind = 0): void {
   const c = w.units.cols;
-  dmg = absorb(w, c.x[s]!, c.z[s]!, dmg);
-  c.hp[s] = c.hp[s]! - dmg;
+  const left = absorb(w, c.x[s]!, c.z[s]!, dmg);
+  recordAbsorbed(w, srcType, srcKind, dmg - left);
+  const before = c.hp[s]!;
+  c.hp[s] = before - left;
+  if (before > 0 && left > 0) recordAlienDamage(w, srcType, srcKind, 'unit', Math.min(before, left));
 }
 
 export function fireTurrets(w: World): void {
@@ -230,6 +257,7 @@ export function fireTurrets(w: World): void {
     if (!wpn || !(c.flags[s]! & BF_COMPLETE)) continue;
     const t = c.target[s]! === 0 ? -1 : w.aliens.slotForId(c.target[s]! - 1);
     const rate = wpn.energyPerSecond > 0 ? u : 1;
+    const interval = wpn.interval * w.tuning.b(kind, TB_INTERVAL);
     let cd = c.cooldown[s]! - DT * rate;
     if (t < 0) {
       c.cooldown[s] = Math.max(0, cd);
@@ -245,7 +273,7 @@ export function fireTurrets(w: World): void {
     const [x, z] = centreOf(w, s);
     let guard = 0;
     while (cd <= 1e-9 && guard++ < 10) {
-      if (wpn.partsPerShot > 0) {
+      if (wpn.partsPerShot > 0 && !w.unlimited) {
         if (w.parts + 1e-9 < wpn.partsPerShot) {
           c.flags[s] = c.flags[s]! | BF_STARVED;
           cd = 0;
@@ -256,11 +284,12 @@ export function fireTurrets(w: World): void {
       }
       // Tier 2 (researched, then upgraded by engineers) multiplies damage (W12 damageMult).
       const tierMult = c.tier[s]! > 1 ? (buildingInfo(kind).tiers?.[c.tier[s]! - 2]?.damageMult ?? 1) : 1;
-      const dmg = wpn.damage * tierMult;
-      if (wpn.shotSpeed <= 0) damageAlien(w, t, dmg);
-      else spawnProjectile(w, wpn.shot, x, z, T_ALIEN, w.aliens.id(t), ac.x[t]!, ac.z[t]!, dmg, wpn.shotSpeed, wpn);
+      const dmg = wpn.damage * tierMult * w.tuning.b(kind, TB_DAMAGE);
+      recordShot(w, T_BUILDING, kind);
+      if (wpn.shotSpeed <= 0) damageAlien(w, t, dmg, T_BUILDING, kind);
+      else spawnProjectile(w, wpn.shot, x, z, T_ALIEN, w.aliens.id(t), ac.x[t]!, ac.z[t]!, dmg, wpn.shotSpeed, wpn, T_BUILDING, kind, b.id(s));
       c.flags[s] = c.flags[s]! | BF_FIRING;
-      cd += wpn.interval;
+      cd += interval;
     }
     c.cooldown[s] = cd;
   }
@@ -273,7 +302,8 @@ export function fireTurrets(w: World): void {
     const t = findAlien(w, uc.x[cs]!, uc.z[cs]!, wpn.range, -1);
     if (t < 0) cd = Math.max(0, cd);
     else if (cd <= 0) {
-      spawnProjectile(w, wpn.shot, uc.x[cs]!, uc.z[cs]!, T_ALIEN, w.aliens.id(t), ac.x[t]!, ac.z[t]!, wpn.damage, wpn.shotSpeed, wpn);
+      recordShot(w, T_UNIT, U.commander);
+      spawnProjectile(w, wpn.shot, uc.x[cs]!, uc.z[cs]!, T_ALIEN, w.aliens.id(t), ac.x[t]!, ac.z[t]!, wpn.damage, wpn.shotSpeed, wpn, T_UNIT, U.commander, w.units.id(cs));
       cd += wpn.interval;
     }
     uc.weaponCd[cs] = cd;
@@ -332,16 +362,18 @@ function impact(w: World, s: number): void {
   const c = w.projectiles.cols;
   const type = c.tType[s]!;
   const id = c.tId[s]!;
+  const st = c.srcType[s]!;
+  const sk = c.srcKind[s]!;
   if (type === T_ALIEN) {
     const a = w.aliens.slotForId(id);
-    if (a >= 0) damageAlien(w, a, c.damage[s]!);
+    if (a >= 0) damageAlien(w, a, c.damage[s]!, st, sk);
     if (c.splashTargets[s]! > 0) splash(w, s, a);
   } else if (type === T_BUILDING) {
     const b = w.buildings.slotForId(id);
-    if (b >= 0) damageBuilding(w, b, c.damage[s]!);
+    if (b >= 0) damageBuilding(w, b, c.damage[s]!, st, sk);
   } else if (type === T_UNIT) {
     const u = w.units.slotForId(id);
-    if (u >= 0) damageUnit(w, u, c.damage[s]!);
+    if (u >= 0) damageUnit(w, u, c.damage[s]!, st, sk);
   }
 }
 
@@ -362,13 +394,13 @@ function splash(w: World, s: number, primary: number): void {
   });
   hits.sort((p, q) => p[0] - q[0] || p[1] - q[1]);
   const n = Math.min(hits.length, pc.splashTargets[s]!);
-  for (let i = 0; i < n; i++) damageAlien(w, hits[i]![1], pc.damage[s]! * pc.splashFactor[s]!);
+  for (let i = 0; i < n; i++) damageAlien(w, hits[i]![1], pc.damage[s]! * pc.splashFactor[s]!, pc.srcType[s]!, pc.srcKind[s]!);
 }
 
 /** Alien attack: a short-range shot at a building or unit. */
 export function alienShot(w: World, alien: number, tType: number, tId: number, tx: number, tz: number, damage: number): void {
   const c = w.aliens.cols;
-  spawnProjectile(w, P_ALIEN, c.x[alien]!, c.z[alien]!, tType, tId, tx, tz, damage, 12);
+  spawnProjectile(w, P_ALIEN, c.x[alien]!, c.z[alien]!, tType, tId, tx, tz, damage, 12, undefined, T_ALIEN, c.kind[alien]!, w.aliens.id(alien));
 }
 
 export function stepShieldsAndTimers(w: World): void {

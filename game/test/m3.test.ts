@@ -326,7 +326,8 @@ describe('save files', () => {
     const old = saved.slice();
     new DataView(old.buffer).setUint32(4, SAVE_VERSION - 1, true);
     expect(() => deserializeWorld(old)).toThrow(SaveVersionError);
-    expect(() => deserializeWorld(old)).toThrow(/version 0 .* reads version 1/);
+    // W24: SAVE_VERSION went from 1 to 2, so the message names the versions from the constant.
+    expect(() => deserializeWorld(old)).toThrow(new RegExp(`version ${SAVE_VERSION - 1} .* reads version ${SAVE_VERSION}`));
     expect(() => deserializeWorld(new Uint8Array(64))).toThrow(/not a Bulwark save/);
   });
 });

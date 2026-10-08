@@ -3,7 +3,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   server: {
     host: '127.0.0.1',
-    port: 8813,
+    port: 8822, // W24 branch: 8821 is taken on codepanda
     strictPort: true,
     allowedHosts: ['codepandas-mac-studio.tailf809db.ts.net'],
     // map1.ts lives in ../model (W12); let the dev server read it.

@@ -10,10 +10,14 @@ export const BUILDING_FIELDS = [
   { name: 'tier', type: 'u8' },
   /** BF_* bits. */
   { name: 'flags', type: 'u8' },
-  /** Belt pieces: 0 +x, 1 +z, 2 -x, 3 -z. */
+  /** Belt pieces: 0 +x, 1 +z, 2 -x, 3 -z. Gates: the run axis, 0 = along x, 1 = along z. */
   { name: 'dir', type: 'u8' },
+  /** Anchor tile (lowest x and z of the footprint). */
   { name: 'tx', type: 'i16' },
   { name: 'ty', type: 'i16' },
+  /** Footprint in tiles along x and z from the anchor (W24; replaces the kind's square size). */
+  { name: 'fw', type: 'u8' },
+  { name: 'fh', type: 'u8' },
   { name: 'hp', type: 'f32' },
   { name: 'maxHp', type: 'f32' },
   /** Construction (or upgrade) progress 0..1. */
@@ -49,6 +53,13 @@ export const BF_FIRING = 4;
 export const BF_STARVED = 8;
 /** Shield up / machine working. */
 export const BF_ACTIVE = 16;
+/**
+ * W24 construction states. A site with neither BF_STARTED nor BF_COMPLETE is reserved: it holds
+ * its tiles against other placements but blocks nobody and is invisible to aliens. The first tick
+ * build power reaches it, it becomes started (BF_STARTED): it blocks units and aliens and enters
+ * flow costs at its current hit points. A complete building has BF_COMPLETE (and BF_STARTED).
+ */
+export const BF_STARTED = 32;
 
 export const ALIEN_FIELDS = [
   { name: 'kind', type: 'u8' },
@@ -129,6 +140,13 @@ export const PROJECTILE_FIELDS = [
   { name: 'splashRadius', type: 'f32', snap: false },
   { name: 'splashFactor', type: 'f32', snap: false },
   { name: 'life', type: 'u16', snap: false },
+  /**
+   * W24 attribution, fixed at the moment of firing: shooter type (T_*), kind and entity id. Kept
+   * when the shooter dies or its slot is reused, so a late impact is still credited (stats.ts).
+   */
+  { name: 'srcType', type: 'u8' },
+  { name: 'srcKind', type: 'u8' },
+  { name: 'srcId', type: 'u32' },
 ] as const satisfies readonly FieldSpec[];
 
 /** Entity reference types. */

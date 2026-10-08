@@ -3,6 +3,12 @@
 // extra cost that rises with their hit points, so the cheapest route goes round a wall when the
 // detour is shorter than breaking through, and through the weakest wall otherwise.
 // Integer costs, a deterministic heap order (cell index breaks ties), no floating-point drift.
+//
+// W24 costs (built in world.ts rebuildGrids): a reserved construction site costs nothing extra (it
+// is not there yet for aliens); a started site costs as a building at its current hit points.
+// A gate is one entity spread over 3 × depth tiles: each of its tiles costs as a building with the
+// gate's hit points ÷ depth, so a route crossing all `depth` rows pays for breaking the gate once,
+// not once per row. Gate tiles are never `open`, so no diagonal step cuts past a gate's corner.
 
 import { DIR_NONE, DX, DZ, stepCost } from './grid.ts';
 

@@ -59,7 +59,7 @@ export const researchBit = (id: string): number => 1 << RESEARCH_INDEX[id]!;
 /** Research a building kind needs before it can be built (W12 `requires`). */
 export const BUILD_REQUIRES: Record<string, string> = { beam: 'beam', heavy: 'heavy', shield: 'shield' };
 /** Research each upgrade tier needs: kind -> [tier 2, tier 3]. */
-export const TIER_REQUIRES: Record<string, string[]> = { wall: ['wallT2', 'wallT3'], gun: ['gunT2'], area: ['areaT2'], heavy: ['heavyT2'] };
+export const TIER_REQUIRES: Record<string, string[]> = { wall: ['wallT2', 'wallT3'], gate: ['wallT2', 'wallT3'], gun: ['gunT2'], area: ['areaT2'], heavy: ['heavyT2'] };
 /** Heavy cannon tier 2 (new; same shape as W12's gun and area tier 2). */
 export const HEAVY_T2 = { hpMult: 1.5, damageMult: 1.5, cost: [250, 1000, 10] as Cost, time: 200 };
 
@@ -85,11 +85,35 @@ export const callEarlyBonus = (skippedTicks: number): Cost => [
   (skippedTicks / 10) * CALL_EARLY_BONUS_PER_SECOND[2],
 ];
 
+// ---- gates (W24) ---------------------------------------------------------------------------
+/**
+ * A gate is converted from finished walls (gate.ts). New: its cost and build time are the wall's
+ * per-tile cost and build time × footprint tiles × 1.5, so a gate costs half as much again as the
+ * walls it replaces (which are removed with no refund). Its hit points are the wall's tier-1 hit
+ * points × footprint tiles; its upgrade tiers are the wall's, with cost and time × footprint tiles.
+ */
+export const GATE_COST_MULT = 1.5;
+
+// ---- sandbox (W24) -------------------------------------------------------------------------
+/** Sandbox: a dead commander reappears at the base after 10 s (new; Richard's default, PLAN W24). */
+export const SANDBOX_RESPAWN_TICKS = 100;
+/**
+ * Salvage in the commander's wreck (new; W12's commander leaves no wreck). One engineer load
+ * (kinds.ts CARRY_CAPACITY), so the wreck can be reclaimed and lasts about 25 minutes of W12's decay.
+ */
+export const COMMANDER_WRECK_SALVAGE = 20;
+/** Sandbox tuning multipliers are clamped to this range (PLAN W24: 0.1× to 10×). */
+export const TUNE_MIN = 0.1;
+export const TUNE_MAX = 10;
+
 // ---- adjustments to W12 numbers ------------------------------------------------------------
 // Each is listed in the README with its reason. Nothing else in the game changes a W12 number.
 
 /** Rare material per second per rare extractor. W12: 0.1. */
 export const RARE_EXTRACTOR_OUTPUT = 0.25;
+
+/** Build power (BP). W12: commander 10, engineer 5. */
+export const BUILD_RATE = { commander: 8, engineer: map1.engineer.buildRate } as const;
 
 export const ADJUSTMENTS: Array<{ what: string; from: string; to: string; why: string }> = [
   {
@@ -98,5 +122,11 @@ export const ADJUSTMENTS: Array<{ what: string; from: string; to: string; why: s
     to: `${RARE_EXTRACTOR_OUTPUT} per second`,
     why:
       'With 0.1/s the scripted balanced plan collected about 300 rare in 48 minutes: the two north points sit 30 tiles beyond the north line and saboteurs keep killing them, as W12 also saw. Research took all of it, so no beam turret stood before minute 32, and the hunter waves (14, 16, 17, 19, 20) killed the commander every run.',
+  },
+  {
+    what: 'Commander build power',
+    from: `${map1.commander.buildRate} BP`,
+    to: `${BUILD_RATE.commander} BP`,
+    why: "Richard's decision (2026-10-08, W24): commander 8, engineer 5, so the commander builds less than two engineers together. W12 (model/data/map1.ts) keeps 10 as the balance reference.",
   },
 ];

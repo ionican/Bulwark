@@ -5,8 +5,11 @@
 // resource ratio = min(1, pool / total requested); each build then progresses at the WORST ratio
 // among the resources it actually draws. A build that does not draw the short resource is not
 // slowed. Energy upkeep (beams, shields, machines) draws before construction.
+// W24: the first tick build power reaches a site it becomes started (world.ts startSite). With the
+// sandbox's unlimited spending on, construction, upgrades, research, engineers and energy upkeep
+// progress at full supply and draw nothing; income is unchanged.
 
-import { BF_ACTIVE, BF_COMPLETE, BF_STARVED, BF_UPGRADING } from './schema.ts';
+import { BF_ACTIVE, BF_COMPLETE, BF_STARTED, BF_STARVED, BF_UPGRADING } from './schema.ts';
 import { B, COMMANDER_INCOME, SHIELD, TICK_SECONDS, buildingInfo, type Cost } from './kinds.ts';
 import { ENGINEER_BUILD_TIME, ENGINEER_COST, RESEARCH } from './balance.ts';
 import { map1 } from '../../../model/data/map1.ts';
@@ -72,9 +75,9 @@ export function stepUpkeep(w: World): void {
       }
     }
   }
-  const u = demand > EPS ? Math.min(1, Math.max(0, w.pool[1]!) / demand) : 1;
+  const u = w.unlimited ? 1 : demand > EPS ? Math.min(1, Math.max(0, w.pool[1]!) / demand) : 1;
   w.upkeep = u;
-  const draw = demand * u;
+  const draw = w.unlimited ? 0 : demand * u;
   w.pool[1] = w.pool[1]! - draw;
   w.spendTick[1] = w.spendTick[1]! + draw;
   w.shortMask = u < 1 - EPS ? 2 : 0;
@@ -111,6 +114,7 @@ export function stepConstruction(w: World): void {
       c.eff[s] = 255;
       continue;
     }
+    if (!(c.flags[s]! & BF_STARTED)) w.startSite(s);
     const { cost, time } = w.workOf(s);
     const p = Math.min(1 - c.progress[s]!, (bp * DT) / time);
     if (p <= 0) continue;
@@ -162,10 +166,10 @@ export function stepConstruction(w: World): void {
       });
   }
   for (const j of jobs) for (let k = 0; k < 3; k++) requested[k] = requested[k]! + j.cost[k]! * j.p;
-  // Supply ratio per resource.
+  // Supply ratio per resource (all 1 with unlimited spending, which draws nothing).
   let worst = 1;
   for (let k = 0; k < 3; k++) {
-    ratio[k] = requested[k]! > EPS ? Math.min(1, Math.max(0, w.pool[k]!) / requested[k]!) : 1;
+    ratio[k] = w.unlimited ? 1 : requested[k]! > EPS ? Math.min(1, Math.max(0, w.pool[k]!) / requested[k]!) : 1;
     if (ratio[k]! < 1 - EPS) w.shortMask |= 1 << k;
     if (ratio[k]! < worst) worst = ratio[k]!;
   }
@@ -175,7 +179,7 @@ export function stepConstruction(w: World): void {
     let f = 1;
     for (let k = 0; k < 3; k++) if (j.cost[k]! > 0 && ratio[k]! < f) f = ratio[k]!;
     const done = j.p * f;
-    for (let k = 0; k < 3; k++) {
+    for (let k = 0; k < 3 && !w.unlimited; k++) {
       const draw = j.cost[k]! * done;
       w.pool[k] = w.pool[k]! - draw;
       w.spendTick[k] = w.spendTick[k]! + draw;
@@ -189,9 +193,7 @@ function complete(w: World, s: number, upgrading: boolean): void {
   const c = w.buildings.cols;
   c.progress[s] = 1;
   if (upgrading) {
-    const info = buildingInfo(c.kind[s]!);
-    const t = info.tiers![c.tier[s]! - 1]!;
-    const newMax = info.hp * t.hpMult;
+    const newMax = w.maxHpAt(s, c.tier[s]! + 1);
     c.hp[s] = c.hp[s]! + (newMax - c.maxHp[s]!);
     c.maxHp[s] = newMax;
     c.tier[s] = c.tier[s]! + 1;

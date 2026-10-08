@@ -1,8 +1,9 @@
 // Render thread: owns the canvas, camera, input and HUD. The simulation lives in the worker; this
 // thread only receives snapshots, interpolates them and sends commands back.
 //
-// URL parameters: ?stress=1 (stress scene), ?seed=<n> (simulation seed, default 1),
-// ?rich=1 (debug: start with 1,000,000 of each resource).
+// URL parameters: ?stress=1 (stress scene), ?sandbox=1 (W24 mechanics sandbox), ?seed=<n>
+// (simulation seed, default 1), ?rich=1 (debug: start with 1,000,000 of each resource).
+// The scenario shown is the one in the snapshot: loading a save switches to the save's scenario.
 
 import { AmbientLight, Color, DirectionalLight, HemisphereLight, PerspectiveCamera, Scene } from 'three';
 import { createRenderer } from './render/adapter.ts';
@@ -24,11 +25,11 @@ import {
   UNIT_INFO,
   UNIT_KINDS,
   buildingInfo,
-  buildingSize,
+  buildingFootprint,
   isBelt,
   type BuildingKind,
 } from './sim/kinds.ts';
-import { BF_COMPLETE, BF_UPGRADING } from './sim/schema.ts';
+import { BF_COMPLETE, BF_STARTED, BF_UPGRADING } from './sim/schema.ts';
 import {
   G_COMMANDER_HP,
   G_COMMANDER_ID,
@@ -63,15 +64,24 @@ import {
   G_SKIPPED_TICKS,
   G_UNITS_LOST,
   G_WAVE_COUNT,
+  G_COMMANDER_DEATHS,
+  G_RESPAWN_TICK,
+  G_RUNS,
+  G_SCENARIO,
+  G_UNLIMITED,
   decodeSnapshot,
   type Snapshot,
 } from './sim/snapshot.ts';
+import { SCENARIO_NAMES } from './sim/world.ts';
+import { statsReport } from './sim/stats.ts';
+import { TUNE_FIELDS, TUNE_TARGETS, type TuneTarget } from './sim/tuning.ts';
+import { WRECK_COMMANDER } from './sim/sandbox.ts';
 import { heightAt, map1Terrain } from './sim/terrain.ts';
 import { canPlaceOn } from './sim/world.ts';
 import type { Command } from './sim/commands.ts';
 import type { FromWorker, RunnerInfo, ToWorker } from './sim/protocol.ts';
 import { BUILD_REQUIRES, RESEARCH, RESEARCH_INDEX } from './sim/balance.ts';
-import { alienKindIndex, buildingKindIndex, entryIndex as entryIndexOf, researchNodeId } from './sim/names.ts';
+import { alienKindIndex, buildingKindIndex, entryIndex as entryIndexOf, researchNodeId, unitKindIndex } from './sim/names.ts';
 import { EndScreen, ResearchPanel, Ticker, TimeControls, Toasts } from './ui/panels.ts';
 import type { ScenarioName } from './sim/scenarios.ts';
 import { Hud } from './ui/hud.ts';
@@ -80,7 +90,7 @@ import { BuildBar, TEST_GROUP } from './ui/buildbar.ts';
 // ---- setup ---------------------------------------------------------------------------------
 
 const params = new URLSearchParams(location.search);
-const scenario: ScenarioName = params.get('stress') === '1' ? 'stress' : 'map1';
+const scenario: ScenarioName = params.get('stress') === '1' ? 'stress' : params.get('sandbox') === '1' ? 'sandbox' : 'map1';
 const seed = (Number(params.get('seed') ?? '1') || 1) >>> 0;
 
 const terrain = map1Terrain();
@@ -143,13 +153,29 @@ let lastSave: { bytes: number; tick: number; name: string } | null = null;
 let pendingDownload = false;
 let savedBlobUrl: string | null = null;
 
+/** Commands sent with a ref, waiting for the worker's acceptance or refusal. */
+type CommandResult = { ok: true; tick: number; detail?: Record<string, unknown> } | { ok: false; reason: string };
+const waiting = new Map<number, (r: CommandResult) => void>();
+let nextRef = 1;
+let commanderDeathsSeen = 0;
+
 worker.onmessage = (ev: MessageEvent<FromWorker>) => {
   const msg = ev.data;
   if (msg.type === 'rejected') {
     rejected.push({ reason: msg.reason, cmd: msg.cmd });
     if (rejected.length > 50) rejected.shift();
+    // A refusal is reported, not an error: the console shows it as a warning, the toast with a cross.
     console.warn('command refused:', msg.reason, msg.cmd);
     toasts.show(`Refused: ${msg.reason}`, true);
+    if (msg.ref !== undefined) {
+      waiting.get(msg.ref)?.({ ok: false, reason: msg.reason });
+      waiting.delete(msg.ref);
+    }
+    return;
+  }
+  if (msg.type === 'accepted') {
+    waiting.get(msg.ref)?.({ ok: true, tick: msg.tick, detail: msg.detail });
+    waiting.delete(msg.ref);
     return;
   }
   if (msg.type === 'notice' || msg.type === 'error') {
@@ -176,12 +202,16 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
   const snap = decodeSnapshot(msg.buffer);
   const dropped = interp.push(snap, performance.now());
   if (dropped) send({ type: 'recycle', buffer: dropped.buffer }, [dropped.buffer]);
-  buildOccupancy(
-    { count: snap.buildings.count, id: snap.buildings.id, kind: snap.buildings.cols.kind, tx: snap.buildings.cols.tx, ty: snap.buildings.cols.ty },
-    terrain.w,
-    terrain.h,
-    occupancy,
-  );
+  buildOccupancy(buildingRows(snap), terrain.w, terrain.h, occupancy);
+  // Sandbox: the commander fell; say when the next one comes (the simulation carries on).
+  const deaths = snap.globals[G_COMMANDER_DEATHS]!;
+  if (deaths > commanderDeathsSeen) {
+    const due = snap.globals[G_RESPAWN_TICK]!;
+    const msgText = `Commander destroyed: its wreck stays, and a new commander arrives at the base in ${Math.max(0, (due - snap.tick) / 10).toFixed(0)} s.`;
+    notices.push(msgText);
+    toasts.show(msgText, true);
+  }
+  commanderDeathsSeen = deaths;
   if (msg.ticksRun > 0) {
     lastTickMs = msg.tickMs;
     tickSamples.push(msg.tickMs);
@@ -196,6 +226,20 @@ send({ type: 'init', seed, scenario, rich: params.get('rich') === '1' });
 
 function command(cmd: Command) {
   send({ type: 'command', cmd });
+}
+
+/** Sends a command and resolves with the worker's acceptance or its refusal reason. */
+function commandResult(cmd: Command): Promise<CommandResult> {
+  const ref = nextRef++;
+  return new Promise((resolve) => {
+    waiting.set(ref, resolve);
+    send({ type: 'command', cmd, ref });
+  });
+}
+
+function buildingRows(s: Snapshot) {
+  const c = s.buildings.cols;
+  return { count: s.buildings.count, id: s.buildings.id, kind: c.kind, tx: c.tx, ty: c.ty, fw: c.fw, fh: c.fh };
 }
 
 // ---- time, waves, research, saves -------------------------------------------------------------
@@ -253,7 +297,7 @@ function pickView(): PickView | null {
     mapW: terrain.w,
     mapH: terrain.h,
     occupancy,
-    buildings: { count: s.buildings.count, id: s.buildings.id, kind: s.buildings.cols.kind, tx: s.buildings.cols.tx, ty: s.buildings.cols.ty },
+    buildings: buildingRows(s),
     units: interp.units,
     aliens: interp.aliens,
     wrecks: { count: s.wrecks.count, id: s.wrecks.id, kind: s.wrecks.cols.kind, x: s.wrecks.cols.x, z: s.wrecks.cols.z },
@@ -279,12 +323,13 @@ function describe(p: Pick) {
       : p.type === 'alien'
         ? ALIEN_INFO[ALIEN_KINDS[p.kind]!].label
         : p.type === 'wreck'
-          ? `Wreck (${ALIEN_INFO[ALIEN_KINDS[p.kind]!].label})`
+          ? `Wreck (${p.kind === WRECK_COMMANDER ? 'Commander' : ALIEN_INFO[ALIEN_KINDS[p.kind]!].label})`
           : UNIT_INFO[UNIT_KINDS[p.kind]!].label;
   if (p.type === 'building') {
     const r = buildingRow(p.id);
     const c = interp.curr!.buildings.cols;
-    if (r >= 0 && (!(c.flags[r]! & BF_COMPLETE) || c.flags[r]! & BF_UPGRADING)) label += ` (building ${(c.progress[r]! * 100).toFixed(0)}%)`;
+    if (r >= 0 && !(c.flags[r]! & (BF_COMPLETE | BF_STARTED))) label += ' (reserved: not started)';
+    else if (r >= 0 && (!(c.flags[r]! & BF_COMPLETE) || c.flags[r]! & BF_UPGRADING)) label += ` (building ${(c.progress[r]! * 100).toFixed(0)}%)`;
     else if (r >= 0 && c.tier[r]! > 1) label += ` tier ${c.tier[r]}`;
   }
   return { type: p.type, id: p.id, kind: p.kind, kindName: kindName ?? '?', label };
@@ -342,8 +387,8 @@ function setBuildMode(kind: BuildingKind | null) {
 
 /** Footprint origin under a ground point, centred on the cursor. */
 function footprintAt(kind: number, gx: number, gz: number): [number, number] {
-  const size = buildingSize(kind);
-  return size === 1 ? [Math.floor(gx), Math.floor(gz)] : [Math.round(gx - size / 2), Math.round(gz - size / 2)];
+  const [fw, fh] = buildingFootprint(kind);
+  return [fw === 1 ? Math.floor(gx) : Math.round(gx - fw / 2), fh === 1 ? Math.floor(gz) : Math.round(gz - fh / 2)];
 }
 
 function placeBuild(kind: number, tx: number, ty: number, dir: number, queue: boolean): boolean {
@@ -351,8 +396,8 @@ function placeBuild(kind: number, tx: number, ty: number, dir: number, queue: bo
   if (!ids.length || !canPlaceOn(terrain, occupancy, kind, tx, ty)) return false;
   command({ t: 'build', ids, kind, tx, ty, dir, queue });
   // Mark the tiles at once so a quick second click does not double-book them.
-  const size = buildingSize(kind);
-  for (let j = 0; j < size; j++) for (let i = 0; i < size; i++) occupancy[(ty + j) * terrain.w + tx + i] = -1;
+  const [fw, fh] = buildingFootprint(kind);
+  for (let j = 0; j < fh; j++) for (let i = 0; i < fw; i++) occupancy[(ty + j) * terrain.w + tx + i] = -1;
   return true;
 }
 
@@ -773,9 +818,8 @@ function screenOf(type: EntityType, id: number): { x: number; y: number } | null
   if (type === 'building') {
     const r = buildingRow(id);
     if (r < 0) return null;
-    const size = buildingSize(s.buildings.cols.kind[r]!);
-    x = s.buildings.cols.tx[r]! + size / 2;
-    z = s.buildings.cols.ty[r]! + size / 2;
+    x = s.buildings.cols.tx[r]! + s.buildings.cols.fw[r]! / 2;
+    z = s.buildings.cols.ty[r]! + s.buildings.cols.fh[r]! / 2;
   } else if (type === 'wreck') {
     const r = Array.prototype.indexOf.call(s.wrecks.id, id);
     if (r < 0) return null;
@@ -807,7 +851,10 @@ function list(type: EntityType) {
       kindName: BUILDING_KINDS[b.cols.kind[r]!],
       tx: b.cols.tx[r]!,
       ty: b.cols.ty[r]!,
+      fw: b.cols.fw[r]!,
+      fh: b.cols.fh[r]!,
       dir: b.cols.dir[r]!,
+      state: b.cols.flags[r]! & BF_COMPLETE ? 'complete' : b.cols.flags[r]! & BF_STARTED ? 'started' : 'reserved',
       complete: (b.cols.flags[r]! & BF_COMPLETE) !== 0,
       progress: b.cols.progress[r]!,
       hp: b.cols.hp[r]!,
@@ -819,7 +866,14 @@ function list(type: EntityType) {
   }
   if (type === 'wreck') {
     const w = s.wrecks;
-    return Array.from({ length: w.count }, (_, r) => ({ id: w.id[r]!, kind: w.cols.kind[r]!, x: w.cols.x[r]!, z: w.cols.z[r]!, salvage: w.cols.salvage[r]! }));
+    return Array.from({ length: w.count }, (_, r) => ({
+      id: w.id[r]!,
+      kind: w.cols.kind[r]!,
+      kindName: w.cols.kind[r] === WRECK_COMMANDER ? 'commander' : ALIEN_KINDS[w.cols.kind[r]!],
+      x: w.cols.x[r]!,
+      z: w.cols.z[r]!,
+      salvage: w.cols.salvage[r]!,
+    }));
   }
   const v = type === 'unit' ? interp.units : interp.aliens;
   const sec = type === 'unit' ? s.units : s.aliens;
@@ -842,13 +896,21 @@ const median = (xs: number[]) => {
 };
 
 const allUnitIds = () => Array.from(interp.units.id.subarray(0, interp.units.count));
+const tuneKindIndex = (target: TuneTarget, kind: string | number) =>
+  target === 'building' ? buildingKindIndex(kind) : target === 'alien' ? alienKindIndex(kind) : unitKindIndex(kind);
 const entryIndex = (e: string | number | undefined) => entryIndexOf(terrain.entries, e);
 
 const game = {
   get ready() {
     return interp.curr !== null && frames > 2;
   },
+  /** The scenario of the running world (from the snapshot: a loaded save brings its own). */
   get scenario() {
+    const g = interp.curr?.globals;
+    return g ? SCENARIO_NAMES[g[G_SCENARIO]!] : scenario;
+  },
+  /** The scenario asked for in the URL. */
+  get urlScenario() {
     return scenario;
   },
   get tick() {
@@ -913,6 +975,51 @@ const game = {
   get commanderHp() {
     return interp.curr?.globals[G_COMMANDER_HP] ?? 0;
   },
+  /** Sandbox: commanders lost so far, and the tick the next one appears (-1 when none is due). */
+  get commanderRespawn() {
+    const g = interp.curr?.globals;
+    return g ? { deaths: g[G_COMMANDER_DEATHS]!, dueTick: g[G_RESPAWN_TICK]! } : null;
+  },
+  get unlimited() {
+    return (interp.curr?.globals[G_UNLIMITED] ?? 0) === 1;
+  },
+  /** Wall runs in the run table: id, tiles, tiles complete, tiles skipped when laid. */
+  get runs() {
+    const s = interp.curr;
+    if (!s) return [];
+    const out = [];
+    for (let i = 0; i < s.runs.length; i += 4) if (s.runs[i]! > 0) out.push({ id: s.runs[i]!, tiles: s.runs[i + 1]!, complete: s.runs[i + 2]!, skipped: s.runs[i + 3]! });
+    if (out.length !== (s.globals[G_RUNS] ?? 0)) throw new Error('run table and run count disagree');
+    return out;
+  },
+  /** Sandbox multipliers that differ from 1, by target, kind and field. */
+  get tuning() {
+    const t = interp.curr?.tuning;
+    if (!t) return null;
+    const out: Array<{ target: TuneTarget; kind: string; field: string; mult: number }> = [];
+    let i = 0;
+    for (const target of TUNE_TARGETS) {
+      const kinds: readonly string[] = target === 'building' ? BUILDING_KINDS : target === 'alien' ? ALIEN_KINDS : UNIT_KINDS;
+      for (const kind of kinds) for (const field of TUNE_FIELDS[target]) {
+        const m = t[i++]!;
+        if (m !== 1) out.push({ target, kind, field, mult: m });
+      }
+    }
+    return out;
+  },
+  /** Recent sandbox spawn origins and the predicted route from each. */
+  get originRoutes() {
+    const s = interp.curr;
+    if (!s) return [];
+    return s.originRoutes.map((r) => ({ x: r.x, z: r.z, kind: ALIEN_KINDS[r.kind], category: CATEGORY_NAMES[r.category], length: r.cells.length, cells: Array.from(r.cells) }));
+  },
+  /**
+   * W24: per-kind combat counters (per shooter kind: shots, hit points removed, kills; per alien
+   * kind: spawned, killed, hit points removed from walls and gates, other buildings, units, and
+   * absorbed by shields), with the W13 totals (`counters`: kills, salvage, parts) alongside.
+   * Before W24 `stats` was a getter holding the W13 totals; they are now `counters` and in here.
+   */
+  stats: () => (interp.curr ? { ...game.counters!, ...statsReport(interp.curr.stats) } : null),
   get outcome() {
     const o = interp.curr?.globals[G_OUTCOME];
     return o === 2 ? 'won' : o === 1 ? 'lost' : 'playing';
@@ -926,7 +1033,7 @@ const game = {
   get pendingSpawns() {
     return interp.curr?.globals[G_PENDING_SPAWNS] ?? 0;
   },
-  get stats() {
+  get counters() {
     const g = interp.curr?.globals;
     if (!g) return null;
     return {
@@ -1065,6 +1172,25 @@ const game = {
       command({ t: 'spawn', kind: k, entry: entryIndex(entry), count: count ?? TEST_GROUP[ALIEN_KINDS[k]!]! });
     },
   },
+  // ---- W24: wall runs, gates and the sandbox commands. Each sends one command and resolves with
+  // { ok: true, tick, detail? } once the worker has queued it, or { ok: false, reason }.
+  buildRun: (from: [number, number], to: [number, number], depth = 1, opts: { ids?: number[]; queue?: boolean } = {}) =>
+    commandResult({ t: 'buildRun', ids: opts.ids ?? allUnitIds(), from, to, depth, queue: opts.queue ?? false }),
+  cancelRun: (run: number) => commandResult({ t: 'cancelRun', run }),
+  gate: (tx: number, ty: number, opts: { ids?: number[]; axis?: 'x' | 'z'; queue?: boolean } = {}) =>
+    commandResult({ t: 'gate', ids: opts.ids ?? allUnitIds(), tx, ty, axis: opts.axis, queue: opts.queue ?? false }),
+  spawnAt: (kind: string | number, x: number, z: number, count = 1) => commandResult({ t: 'spawnAt', kind: alienKindIndex(kind), x, z, count }),
+  tune: (target: TuneTarget, kind: string | number, field: string, mult: number) =>
+    commandResult({ t: 'tune', target, kind: tuneKindIndex(target, kind), field, mult }),
+  tuneReset: (target?: TuneTarget, kind?: string | number) =>
+    commandResult({ t: 'tuneReset', target, kind: target !== undefined && kind !== undefined ? tuneKindIndex(target, kind) : undefined }),
+  setUnlimited: (on: boolean) => commandResult({ t: 'setUnlimited', on }),
+  grantResearch: (node: string) => commandResult(node === 'all' ? { t: 'grantResearch', all: true } : { t: 'grantResearch', node: researchNodeId(node) }),
+  startWave: (index: number) => commandResult({ t: 'startWave', index }),
+  clearAliens: () => commandResult({ t: 'clearAliens' }),
+  clearWrecks: () => commandResult({ t: 'clearWrecks' }),
+  resetStats: () => commandResult({ t: 'resetStats' }),
+  resetSandbox: (full = false) => commandResult({ t: 'resetSandbox', full }),
   camera: {
     get: (): Rig => ({ ...rig }),
     set: (r: Partial<Rig>) => {
