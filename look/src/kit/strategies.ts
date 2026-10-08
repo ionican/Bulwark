@@ -3,8 +3,9 @@
 // draws the same parts at the same transforms (test/kinds.test.ts checks this through drawn()).
 //
 //   A  naive per kind     each kind has its own instanced batches: per detail level, one batch per
-//                         pivot × material (the parts on one pivot merged, as W21 merges ring and
-//                         head), and one icon batch per kind. W21's structure × 40.
+//                         part × material, except that parts on the same pivot at the same offset
+//                         share a batch (as W21 merges ring and head); one icon batch per kind.
+//                         W21's structure × 40.
 //   B  shared parts       one instanced batch per part × material × level, shared by every kind that
 //                         uses the part; one icon batch per distinct icon.
 //   C  B + merged levels  as B, but at middle and simple detail the static parts of a kind (base,
@@ -335,26 +336,30 @@ function mergePieces(list: Array<{ pieces: PieceMap; off: [number, number, numbe
 
 export class NaivePerKind extends Instanced {
   readonly id = 'A';
-  /** Per kind, per level: the kind's pivot groups. */
-  private perKind: Array<Array<Array<{ pivot: number; g: IGroup }>>> = [];
+  /** Per kind, per level: the kind's groups (one per pivot and offset). */
+  private perKind: Array<Array<Array<{ pivot: number; off: [number, number, number]; g: IGroup }>>> = [];
   private icons: IGroup[] = [];
 
   constructor(kit: Kit, atlas: Texture) {
     super(kit);
     for (const kind of kit.kinds) {
-      const levels: Array<Array<{ pivot: number; g: IGroup }>> = [];
+      const levels: Array<Array<{ pivot: number; off: [number, number, number]; g: IGroup }>> = [];
       for (let lv = 0; lv < 3; lv++) {
-        // group the kind's parts by pivot, in placing order (W21's levelFrom order)
-        const byPivot = new Map<number, Array<{ part: KitPart; pieces: PieceMap; off: [number, number, number] }>>();
+        // group the kind's parts by pivot and offset, in placing order (W21's levelFrom order);
+        // the offset goes into the instance matrix, so geometry stays in part space
+        const by = new Map<string, { pivot: number; off: [number, number, number]; list: Array<{ part: KitPart; pieces: PieceMap; off: [number, number, number] }> }>();
         for (const pl of kind.placed) {
           const pieces = pl.part.levels[lv]!;
           if (pieces.size === 0) continue;
-          const pv = pl.pivot[lv]!;
-          byPivot.set(pv, [...(byPivot.get(pv) ?? []), { part: pl.part, pieces, off: pl.off }]);
+          const key = `${pl.pivot[lv]}|${pl.off.join(',')}`;
+          const e = by.get(key) ?? { pivot: pl.pivot[lv]!, off: pl.off, list: [] };
+          e.list.push({ part: pl.part, pieces, off: [0, 0, 0] });
+          by.set(key, e);
         }
         levels.push(
-          [...byPivot].map(([pivot, list]) => ({
+          [...by.values()].map(({ pivot, off, list }) => ({
             pivot,
+            off,
             g: this.newGroup(
               `A/${kind.id}/${lv}/${pivot}`,
               lv,
@@ -371,7 +376,7 @@ export class NaivePerKind extends Instanced {
 
   /** The geometry of a kind's batch (for the W21 comparison test). */
   batchGeometry(kind: number, level: number, pivot: number, key: MatKey): BufferGeometry | undefined {
-    const e = this.perKind[kind]![level]!.find((x) => x.pivot === pivot);
+    const e = this.perKind[kind]![level]!.find((x) => x.pivot === pivot && x.off.every((v) => v === 0));
     if (!e) return undefined;
     const i = e.g.keys.indexOf(key);
     return i < 0 ? undefined : e.g.meshes[i]!.geometry;
@@ -380,9 +385,10 @@ export class NaivePerKind extends Instanced {
   push(turret: number, kind: Kind, level: number, x: number, y: number, z: number, yaw: number, pitch: number, recoil: number, spin: number, glow: number, iconScale: number): void {
     if (level === ICON) return this.pushIcon(this.icons[kind.index]!, turret, kind, x, y, z, yaw, iconScale);
     writePivots(this.pivots, kind.frame, x, y, z, yaw, pitch, recoil, spin);
-    for (const { pivot, g } of this.perKind[kind.index]![level]!) {
+    for (const { pivot, off, g } of this.perKind[kind.index]![level]!) {
+      // slot() may grow the buffers, so take the array after it
       const o = g.slot(turret, glow);
-      (g.matrix.array as Float32Array).set(this.pivots.subarray(pivot * 16, pivot * 16 + 16), o);
+      writePart(g.matrix.array as Float32Array, o, this.pivots, pivot, off);
     }
   }
 }

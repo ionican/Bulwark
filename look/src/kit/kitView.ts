@@ -9,8 +9,8 @@ import { BASES, HEADS, RINGS, WEAPONS } from './parts.ts';
 import type { Kit, KitPart, MatKey } from './kit.ts';
 
 export const KIT_COLS = 8;
-export const KIT_SPACING = 3.4;
-const ROW_SPACING = 3.9;
+export const KIT_SPACING = 3.3;
+const ROW_SPACING = 4.4;
 
 export interface KitSlot {
   kind: number;
@@ -94,7 +94,7 @@ export class KitView {
     for (const row of rows) {
       const n = row.items.length;
       row.items.forEach((it, i) => {
-        const x = cx + (i - (n - 1) / 2) * 3.1;
+        const x = cx + (i - (n - 1) / 2) * 3.4;
         const z = cz + row.z;
         const g = h(x, z);
         it.parts.forEach((p, j) => {
@@ -108,9 +108,9 @@ export class KitView {
             this.parts.add(m);
           }
         });
-        const tri = it.parts.map((p) => p.triangles.map((t) => t.toLocaleString('en-GB')).join(' / ')).join(' + ');
+        const tri = it.parts.map((p) => p.triangles[0].toLocaleString('en-GB')).join(' + ');
         const used = it.parts[0]!.usedBy.length;
-        const el = this.label(`<b>${it.title}</b><br>${it.parts.length > 1 ? 'mount (lower) + gun (upper) · ' : ''}${tri} tris · ${used} kind${used === 1 ? '' : 's'}`, 'part');
+        const el = this.label(`<b>${it.title}</b><br>${used} kind${used === 1 ? '' : 's'} · ${tri} tris${it.parts.length > 1 ? '<br>mount low, gun high' : ''}`, 'part');
         this.partLabels.push({ el, at: new Vector3(x, g - 0.05, z + 1.25) });
       });
     }

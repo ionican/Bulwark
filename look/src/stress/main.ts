@@ -392,8 +392,9 @@ async function main(): Promise<void> {
   // kit view: the 40 kinds lined up near the base centre
   const kitSlots = kitGrid(kit.kinds.length, BASE.x, BASE.z).map((k) => ({ ...k, y: ground.height(k.x, k.z) }));
   kitView.setKindLabels(kitSlots);
-  const kitCam = (): CamView => ({ target: [BASE.x + 1.6, kitSlots[0]!.y + 0.2, BASE.z + 1.2], distance: 31, elevation: 36, azimuth: 0, fov: 34 });
-  const partsCam = (): CamView => ({ target: [BASE.x + 1.6, kitSlots[0]!.y + 0.3, BASE.z + 0.4], distance: 24, elevation: 38, azimuth: 0, fov: 36 });
+  // framed to the left of the control panel
+  const kitCam = (): CamView => ({ target: [BASE.x + 4.2, kitSlots[0]!.y + 0.2, BASE.z + 1.6], distance: 40, elevation: 47, azimuth: 0, fov: 34 });
+  const partsCam = (): CamView => ({ target: [BASE.x + 2.8, kitSlots[0]!.y + 0.3, BASE.z + 0.9], distance: 30, elevation: 46, azimuth: 0, fov: 38 });
   let battleCam: CamView | null = null;
   const setView = (v: View) => {
     if (v === s.view) return;
@@ -922,7 +923,7 @@ async function main(): Promise<void> {
     const aliensDrawn = alienDraw.update(sim, simT, frustum);
     alienDraw.setWrecks(wrecks);
     tracers.update(shells, cp, wppd, 2.2);
-    if (s.compare) tracers.mesh.visible = false;
+    tracers.mesh.visible = s.view === 'battle' && !s.compare;
     casingMesh.update(casings);
     fx.update(sdt, camera);
     const q = QUALITY[s.quality];
