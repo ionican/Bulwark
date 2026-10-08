@@ -1,0 +1,18 @@
+W22 turret stress benchmark · 8 Oct 2026, 09:21
+300 turrets (instanced, D BatchedMesh) · 40 kinds · 500 aliens · quality high · device pixel ratio 1 · canvas 1440×900 px (1440×900 CSS)
+GPU: ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version) · WEBGL_multi_draw not available
+Detail thresholds (tiles from the camera): full < 24 · middle < 85 · simple < 160 · icon beyond (±8 % hysteresis)
+
+segment      fps avg  1% low  CPU ms  CPU p95  update ms  submit ms  calls  scene  shadow  turret calls  kinds  triangles  full/mid/simple/icon/off  aliens drawn  fps avg  1% low  CPU ms  shells  particles
+close-up        83.5    32.4   11.61    22.70       0.05      11.13    863    449     349           408     15     2.67 M              20/0/0/0/280         5/496     83.5    32.4   11.61      73        971
+game cam        76.3    32.8   12.73    20.90       0.25      11.57   7191   4037    3083          3991     40     3.71 M              0/226/0/0/74        68/491     76.3    32.8   12.73     108       2010
+mid zoom        69.1    29.9   14.04    27.30       0.24      13.05   2640   2488      81          2442     40     2.95 M               0/0/300/0/0       199/493     69.1    29.9   14.04      93       1098
+full zoom       56.4    27.0   17.38    34.90       0.03      16.69   1398    646      81           300     40     3.43 M               0/0/0/300/0       384/495     56.4    27.0   17.38      81        549
+
+fps avg = frames / seconds held (10 s per segment, camera still, combat running); 1% low = 1000 / 99th-percentile frame interval.
+CPU ms = JavaScript time per frame (simulation, matrices, render submission), average and 95th percentile; not GPU time.
+update ms = JavaScript time writing turret instance data; submit ms = JavaScript time inside the render call (all passes).
+calls, triangles = renderer.info over all passes (shadow map, scene, post-processing), averaged; scene = draw calls in the render pass less the shadow map; shadow = draw calls in the shadow map.
+turret calls = turret batches drawn in the scene pass (a BatchedMesh multi-draw counts once); kinds = turret kinds with a turret in view.
+full/mid/simple/icon/off = turrets at each detail level, and outside the view (not drawn); aliens drawn = in view / alive.
+Browser: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36

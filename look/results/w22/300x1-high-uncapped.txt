@@ -1,0 +1,37 @@
+W22 strategy comparison · 8 Oct 2026, 09:16
+300 turrets · 1 kind · 500 aliens · quality high · device pixel ratio 1 · canvas 1440×900 px (1440×900 CSS)
+GPU: ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version) · WEBGL_multi_draw available
+Detail thresholds (tiles from the camera): full < 24 · middle < 85 · simple < 160 · icon beyond (±8 % hysteresis)
+
+strategy                   segment      fps avg  1% low  CPU ms  CPU p95  update ms  submit ms  calls  scene  shadow  turret calls  kinds  triangles  full/mid/simple/icon/off  aliens drawn
+W21 batches                close-up        83.2    32.9   11.61    12.80       0.04      11.14    210     60      84            19      1     2.95 M              19/0/0/0/281         5/495
+A naive per kind           close-up        82.6    32.7   11.74    12.90       0.05      11.26    210     60      84            19      1     2.95 M              19/0/0/0/281         5/495
+B shared parts             close-up        83.1    32.8   11.63    12.80       0.03      11.19    215     63      86            22      1     2.95 M              19/0/0/0/281         5/496
+C shared + merged levels   close-up        83.0    32.7   11.62    12.90       0.03      11.18    215     63      86            22      1     2.95 M              19/0/0/0/281         5/497
+D BatchedMesh              close-up        81.1    32.4   11.91    13.20       0.04      11.46    186     46      74             5      1     2.95 M              19/0/0/0/281         5/496
+
+W21 batches                game cam       101.4    36.6    9.50    10.30       0.08       8.54    227     62      93            16      1     3.62 M              0/226/0/0/74        67/493
+A naive per kind           game cam       101.3    36.5    9.51    10.30       0.15       8.48    227     62      93            16      1     3.62 M              0/226/0/0/74        67/483
+B shared parts             game cam       100.3    36.1    9.60    11.00       0.14       8.58    231     64      95            18      1     3.62 M              0/226/0/0/74        67/490
+C shared + merged levels   game cam       100.8    36.1    9.54    10.20       0.12       8.54    225     61      92            15      1     3.62 M              0/226/0/0/74        68/491
+D BatchedMesh              game cam        92.0    34.4   10.49    20.70       0.24       9.35    207     51      84             5      1     3.62 M              0/226/0/0/74        67/482
+
+W21 batches                mid zoom        73.0    30.9   13.32    13.80       0.08      12.54    203     51      81             5      1     2.87 M               0/0/300/0/0       189/484
+A naive per kind           mid zoom        72.8    30.7   13.34    13.90       0.15      12.47    203     51      81             5      1     2.85 M               0/0/300/0/0       175/482
+B shared parts             mid zoom        73.0    30.8   13.32    13.80       0.13      12.48    203     51      81             5      1     2.84 M               0/0/300/0/0       174/489
+C shared + merged levels   mid zoom        72.9    31.4   13.32    13.90       0.14      12.48    203     51      81             5      1     2.85 M               0/0/300/0/0       173/493
+D BatchedMesh              mid zoom        72.1    30.9   13.47    25.00       0.16      12.60    200     48      81             2      1     2.83 M               0/0/300/0/0       168/480
+
+W21 batches                full zoom       56.4    27.7   17.28    18.30       0.06      16.54    199     47      81             1      1     3.54 M               0/0/0/300/0       410/492
+A naive per kind           full zoom       56.1    27.5   17.43    18.40       0.06      16.71    202     48      81             1      1     3.44 M               0/0/0/300/0       383/495
+B shared parts             full zoom       55.5    19.5   17.66    33.80       0.04      16.94    202     48      81             1      1     3.55 M               0/0/0/300/0       421/495
+C shared + merged levels   full zoom       56.2    27.1   17.42    24.20       0.03      16.72    202     48      81             1      1     3.54 M               0/0/0/300/0       411/494
+D BatchedMesh              full zoom       55.5    18.9   17.62    33.60       0.02      16.94    202     48      81             1      1     3.44 M               0/0/0/300/0       383/494
+
+fps avg = frames / seconds held (10 s per segment, camera still, combat running); 1% low = 1000 / 99th-percentile frame interval.
+CPU ms = JavaScript time per frame (simulation, matrices, render submission), average and 95th percentile; not GPU time.
+update ms = JavaScript time writing turret instance data; submit ms = JavaScript time inside the render call (all passes).
+calls, triangles = renderer.info over all passes (shadow map, scene, post-processing), averaged; scene = draw calls in the render pass less the shadow map; shadow = draw calls in the shadow map.
+turret calls = turret batches drawn in the scene pass (a BatchedMesh multi-draw counts once); kinds = turret kinds with a turret in view.
+full/mid/simple/icon/off = turrets at each detail level, and outside the view (not drawn); aliens drawn = in view / alive.
+Browser: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36

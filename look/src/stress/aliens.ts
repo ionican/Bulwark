@@ -50,6 +50,10 @@ export class AlienSim {
   private nextId = 1;
   private waveIn = 0;
   private rnd = new Rand(2121);
+  /** W22: restart the random stream, so a reset battle replays the same waves. */
+  reseed(seed = 2121): void {
+    this.rnd = new Rand(seed);
+  }
   private radiusOf: number[];
   private heightOf: number[];
   /** Called when an alien is destroyed (slot, kind index, position). */

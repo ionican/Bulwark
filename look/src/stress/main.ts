@@ -192,10 +192,8 @@ async function main(): Promise<void> {
   const wrecks = new Wrecks();
   const badges = new LevelBadges(MAX_TURRETS);
   scene.add(fx.smokeMesh, fx.glowMesh, tracers.mesh, casingMesh.mesh, badges.mesh, ...lights.lights);
-  const rnd = (() => {
-    const r = new Rand(4242);
-    return () => r.next();
-  })();
+  let rng = new Rand(4242);
+  const rnd = () => rng.next();
   /** Wrecks that still burn (fire and plume emitters), newest last; at most 12. */
   const burning: Array<{ slot: number; emitters: ReturnType<Particles['addEmitter']>[] }> = [];
   const stopBurning = (slot: number) => {
@@ -394,7 +392,7 @@ async function main(): Promise<void> {
   kitView.setKindLabels(kitSlots);
   // framed to the left of the control panel
   const kitCam = (): CamView => ({ target: [BASE.x + 4.2, kitSlots[0]!.y + 0.2, BASE.z + 1.6], distance: 40, elevation: 47, azimuth: 0, fov: 34 });
-  const partsCam = (): CamView => ({ target: [BASE.x + 2.8, kitSlots[0]!.y + 0.3, BASE.z + 0.9], distance: 30, elevation: 46, azimuth: 0, fov: 38 });
+  const partsCam = (): CamView => ({ target: [BASE.x + 2.9, kitSlots[0]!.y + 0.3, BASE.z + 0.9], distance: 29, elevation: 46, azimuth: 0, fov: 38 });
   let battleCam: CamView | null = null;
   const setView = (v: View) => {
     if (v === s.view) return;
@@ -734,9 +732,20 @@ async function main(): Promise<void> {
     return stress.allResults;
   };
 
+  /**
+   * W22: every benchmark run starts from the same battle — random streams reseeded, turrets,
+   * aliens, shells and wrecks reset — so strategies run one after another meet the same combat.
+   */
+  const resetBattle = () => {
+    rng = new Rand(4242);
+    sim.reseed();
+    setCount(s.count);
+  };
+
   const runOne = () =>
     new Promise<Results>((resolve) => {
       if (s.compare) setCompare(false);
+      resetBattle();
       resultsEl.classList.remove('show');
       s.paused = false;
       s.timeScale = 1;

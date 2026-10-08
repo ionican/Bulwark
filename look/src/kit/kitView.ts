@@ -94,7 +94,7 @@ export class KitView {
     for (const row of rows) {
       const n = row.items.length;
       row.items.forEach((it, i) => {
-        const x = cx + (i - (n - 1) / 2) * 3.4;
+        const x = cx + (i - (n - 1) / 2) * 3.15;
         const z = cz + row.z;
         const g = h(x, z);
         it.parts.forEach((p, j) => {
