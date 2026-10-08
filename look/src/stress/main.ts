@@ -35,6 +35,12 @@ const COUNTS = [50, 100, 300, 500] as const;
 const RIG_LOD: Lod[] = ['full', 'full', 'simple', 'icon'];
 const BENCH_HOLD = 10;
 const BENCH_MOVE = 2.2;
+/**
+ * `?dpr=2` stands in for the display's device pixel ratio (the quality cap still applies), to load
+ * codepanda's GPU with a Retina laptop's pixel count.
+ */
+const DPR_FORCED = Number(new URLSearchParams(location.search).get('dpr')) || null;
+const pixelRatio = (cap: number) => Math.min(DPR_FORCED ?? (window.devicePixelRatio || 1), cap);
 
 type PresetName = 'close' | 'game' | 'mid' | 'far';
 
@@ -57,7 +63,7 @@ async function main(): Promise<void> {
   const canvas = document.getElementById('view') as HTMLCanvasElement;
   const loading = document.getElementById('loading')!;
   const renderer = new WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false, depth: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, QUALITY.high.maxDpr));
+  renderer.setPixelRatio(pixelRatio(QUALITY.high.maxDpr));
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   renderer.outputColorSpace = SRGBColorSpace;
   renderer.toneMapping = NoToneMapping;
@@ -252,7 +258,7 @@ async function main(): Promise<void> {
     s.quality = q;
     const spec = QUALITY[q];
     lighting.setShadowSize(spec.shadow);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, spec.maxDpr));
+    renderer.setPixelRatio(pixelRatio(spec.maxDpr));
     post.apply(spec);
     post.setSize(window.innerWidth, window.innerHeight);
     terrain.mesh.castShadow = spec.terrainShadow;
@@ -513,6 +519,7 @@ async function main(): Promise<void> {
     mode: s.perTurret ? 'per-turret meshes' : 'instanced',
     quality: s.quality,
     dpr: renderer.getPixelRatio(),
+    dprForced: DPR_FORCED !== null,
     canvas: [canvas.width, canvas.height],
     css: [window.innerWidth, window.innerHeight],
     renderer: stress.renderer,
@@ -677,7 +684,7 @@ async function main(): Promise<void> {
       compareRig.setLod('full');
     }
     badges.mesh.visible = s.bands;
-    if (s.bands) badges.commit(wppd, 20);
+    if (s.bands) badges.commit(wppd, 26);
     const aliensDrawn = alienDraw.update(sim, simT, frustum);
     alienDraw.setWrecks(wrecks);
     tracers.update(shells, cp, wppd, 2.2);
@@ -819,6 +826,39 @@ async function main(): Promise<void> {
     forceLevel: ((l: number | null) => {
       s.force = l;
       level.fill(l ?? LEVEL_NEW);
+    }) as never,
+    /** Frame intervals and CPU time over `seconds` (no camera move). */
+    measure: ((seconds: number) =>
+      new Promise((resolve) => {
+        const iv: number[] = [];
+        const cpu: number[] = [];
+        let last = -1;
+        const t0 = performance.now();
+        const step = (ts: number) => {
+          if (last >= 0) {
+            iv.push(ts - last);
+            cpu.push(stress.stats.cpuMs as number);
+          }
+          last = ts;
+          if (performance.now() - t0 < seconds * 1000) requestAnimationFrame(step);
+          else {
+            const sum = iv.reduce((a, b) => a + b, 0);
+            const sorted = [...iv].sort((a, b) => a - b);
+            resolve({ fps: iv.length / (sum / 1000), low1: 1000 / sorted[Math.floor(0.99 * (sorted.length - 1))]!, frameMs: sum / iv.length, calls: stress.stats.calls, triangles: stress.stats.triangles });
+          }
+        };
+        requestAnimationFrame(step);
+      })) as never,
+    /** Diagnosis switches: turn parts of the frame off to find the bottleneck. */
+    diag: ((o: { shadows?: boolean; ao?: boolean; bloom?: boolean; terrain?: boolean; aliens?: boolean; turrets?: boolean; particles?: boolean; terrainShadow?: boolean }) => {
+      if (o.shadows !== undefined) lighting.sun.castShadow = o.shadows;
+      if (o.ao !== undefined) post.ao.enabled = o.ao;
+      if (o.bloom !== undefined) post.apply({ ...QUALITY[s.quality], ao: post.ao.enabled ? QUALITY[s.quality].ao : 'off', bloom: o.bloom });
+      if (o.terrain !== undefined) terrain.mesh.visible = o.terrain;
+      if (o.terrainShadow !== undefined) terrain.mesh.castShadow = o.terrainShadow;
+      if (o.aliens !== undefined) alienDraw.group.visible = o.aliens;
+      if (o.turrets !== undefined) turretGroup.visible = o.turrets;
+      if (o.particles !== undefined) fx.smokeMesh.visible = fx.glowMesh.visible = o.particles;
     }) as never,
     levels: (() => levels.map((l) => ({ name: l.name, triangles: l.triangles, batches: l.batches.length, shadowBatches: l.batches.filter((b) => b.castShadow).length }))) as never,
     presets: (() => presets) as never,

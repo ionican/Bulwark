@@ -52,6 +52,8 @@ export interface Meta {
   mode: 'instanced' | 'per-turret meshes';
   quality: string;
   dpr: number;
+  /** The pixel ratio was set by ?dpr= rather than the display. */
+  dprForced?: boolean;
   canvas: [number, number];
   css: [number, number];
   renderer: string;
@@ -106,7 +108,7 @@ const lpad = (s: string, n: number) => (s.length >= n ? s : ' '.repeat(n - s.len
 export function formatResults(meta: Meta, rows: Row[]): string {
   const head = [
     `W21 turret stress benchmark · ${meta.date}`,
-    `${meta.turrets} turrets (${meta.mode}) · ${meta.aliens} aliens · quality ${meta.quality} · device pixel ratio ${meta.dpr} · canvas ${meta.canvas[0]}×${meta.canvas[1]} px (${meta.css[0]}×${meta.css[1]} CSS)`,
+    `${meta.turrets} turrets (${meta.mode}) · ${meta.aliens} aliens · quality ${meta.quality} · device pixel ratio ${meta.dpr}${meta.dprForced ? ' (display ratio set by ?dpr=)' : ''} · canvas ${meta.canvas[0]}×${meta.canvas[1]} px (${meta.css[0]}×${meta.css[1]} CSS)`,
     `GPU: ${meta.renderer}`,
     `Detail thresholds (tiles from the camera): full < ${meta.thresholds[0]} · middle < ${meta.thresholds[1]} · simple < ${meta.thresholds[2]} · icon beyond (±8 % hysteresis)`,
     '',

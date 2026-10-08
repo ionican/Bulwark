@@ -1,12 +1,12 @@
-# Bulwark — W17 look test A, W18 look test B, W20 gun-turret bench
+# Bulwark — W17 look test A, W18 look test B, W20 gun-turret bench, W21 turret stress test
 
 One vista of map 1 built from code-made geometry, CC0 photographic textures (Poly Haven, ambientCG) and a full lighting stack, to see how close that gets to `reference/01-mineral-war.jpg` (scene) and `reference/02-gun-turret.png` (building materials and the gun turret). Three.js 0.186, WebGL renderer.
 
 ```
 npm install
-npm run dev      # http://127.0.0.1:8817/          (turret showcase: /?turret=1; W20 bench: /bench.html)
-npm test         # W20 fire-control unit tests (node:test)
-npm run build    # static build in dist/ (index.html and bench.html)
+npm run dev      # http://127.0.0.1:8818/          (turret showcase: /?turret=1; W20 bench: /bench.html; W21 stress test: /stress.html)
+npm test         # W20 fire-control and W21 stress unit tests (node:test, --experimental-transform-types)
+npm run build    # static build in dist/ (index.html, bench.html and stress.html)
 npm run fetch-assets   # re-download the textures listed in scripts/fetch-assets.mjs (already committed)
 ```
 
@@ -91,3 +91,42 @@ Readout: fps, frame CPU ms, draw calls, frame triangles, turret triangles at the
 Debug hook `window.__bench`: `ready`, `errors`, `renderer`, `stats`, `state`, and `api` (`preset`, `cam`, `timeScale`, `pause`, `manual`, `aimAt`, `fire`, `pauseAfterShot`, `lead`, `spawn`, `spawnPath`, `group`, `clear`, `auto`, `lod`, `wire`, `pivots`, `construct`, `compare`, `lineup`, `measure`, `triangles`, `parts`).
 
 Screens: `_screens/w20-closeup.png`, `w20-vs-concept.png`, `w20-firing-slowmo.png`, `w20-range.png`, `w20-lod.png`, `w20-construction.png`, `w20-track-1..3.png`.
+
+## W21 turret rendering stress test (`/stress.html`)
+
+Up to 500 W20 gun turrets on W17's map 1 terrain (same terrain, lighting, haze and post-processing), each aiming and firing on its own against 500 alien machines (W17's four procedural kinds) that advance in waves along five lanes. Code: `src/stress/`; tests: `test/stress.test.ts`.
+
+### Drawing
+
+- **Instanced batches** (`turretLevels.ts`, `turretInstanced.ts`, `turretPose.ts`): per detail level, one `InstancedMesh` per moving part (base, pinion, yaw = slewing ring + head, cradle, barrel) and material. All meshes of one part share one instance-matrix buffer, filled from zero each frame with the turret's yaw, pitch and recoil (`writeTurret`). Bolts are placed into their part's geometry of the same material; emissive slits use a glow material whose emissive is scaled by the instance colour, so each turret's slits pulse with its own shots. Draw calls in the scene pass: 19 (full) + 16 (middle) + 5 (simple) + 1 (icon), whatever the turret count.
+- **Detail levels** (`lod.ts`): full 22,640 triangles (W20's model, bolts included) · middle 2,628 (`turretMid.ts`: same parts and pivots, no bolts, chamfers, gear teeth, brake ports, ribs or small fittings) · simple 212 and icon 32 (W20's). Chosen per turret by camera distance with the game's hysteresis rule (±8 %): full < 24 tiles, middle < 85 (the whole game-camera view), simple < 160, icon beyond.
+- **Shadows**: one directional map (W17's, re-fitted to the view each frame) reaching 1.6 × the camera distance + 20 tiles on high (1.3× medium, 1.0× low) instead of W17's 2.1× + 30; only full- and middle-detail turrets cast, and only their ivory, gunmetal and bronze batches (on low, only full detail).
+- **Per-turret meshes** switch: W20's own `TurretRig` per turret (full for full and middle distance, then simple, icon), for comparison.
+
+### Simulation (`fireControl.ts`, `aliens.ts`, `effects.ts`)
+
+- W20's target choice, lead, aim solver, fire test and recoil in typed arrays (`TurretBank`), step for step the same arithmetic as `TurretBrain` + `Recoil` (the tests compare them exactly over 2,400 ticks). Target search through a uniform 8-tile grid of the aliens, rebuilt each frame.
+- Update rate: every frame for visible turrets at full or middle detail; every 2nd frame at simple detail; every 4th frame for icons and turrets outside the view (staggered by index, with the summed time step).
+- Aliens: W20's constant-speed legs, ground height read from the W17 terrain mesh's own grid; hit points 4× W20's so the front line builds up and keeps the turrets busy.
+- Effect caps: 1,024 shells in flight (oldest reused), 256 casings (full-detail turrets only, 6 s), 2 muzzle point lights, 4,000 smoke + 4,000 glow particles, 96 wrecks (12 newest burn). Muzzle effects by the firing turret's level: W20's full blast and breech vent at full detail; one flash, two side flashes and one puff at middle; one flash at simple; tracer only for icons and off-view turrets.
+
+### Controls and hook
+
+Panel buttons: turret count 50 / 100 / 300 / 500, per-turret meshes, quality high / medium / low, camera presets (close-up **C**, game camera **G**, mid zoom-out **M**, full zoom-out **F**), Vs W20 turret (the instanced turret beside W20's per-object one, same pose), pause (**Space**), time scale 0.25–2×, lead, detail labels (**L**: circle F full, square M middle, triangle S simple, diamond I icon), Run benchmark, Show results (with Copy results). Mouse: left-drag orbit, wheel zoom, right-drag pan. Quality: high = 4096² shadows, N8AO High full resolution, bloom, pixel ratio up to 1.5; medium = 2048², N8AO Medium half resolution, bloom, pixel ratio 1; low = 1024², no AO, no bloom, pixel ratio 1, terrain casts no shadow.
+
+`window.__stress`: `ready`, `errors`, `renderer`, `stats`, `results`, `runBenchmark()` (flies close-up → game camera → mid → full zoom-out, holds each 10 s with the combat running, resolves with `{ meta, rows, text }`), and `api` (`count`, `quality`, `perTurret`, `preset`, `cam`, `pause`, `timeScale`, `bands`, `compare`, `forceLevel`, `measure(s)`, `diag({...})` to switch parts of the frame off). `?dpr=2` stands in for the display's pixel ratio.
+
+### Results on codepanda (M1 Max, 24-core GPU, headless Chrome, 1440×900, pixel ratio 1)
+
+Benchmark, 60 Hz frame cap (fps avg / 1% low; JavaScript ms per frame):
+
+| run | close-up | game camera | mid zoom | full zoom |
+|---|---|---|---|---|
+| 300 turrets, high | 60.0 / 59.5 · 2.1 ms | 60.0 / 59.5 · 2.7 ms | 60.0 / 59.5 · 2.7 ms | 48.5 / 29.9 · 2.3 ms |
+| 300 turrets, medium | 60.0 / 59.5 · 2.4 ms | 60.0 / 59.5 · 2.7 ms | 60.0 / 59.5 · 2.5 ms | 55.2 / 29.9 · 2.6 ms |
+| 500 turrets, high | 59.9 / 59.5 · 2.3 ms | 60.0 / 59.5 · 2.7 ms | 60.0 / 59.5 · 2.4 ms | 49.1 / 29.9 · 2.7 ms |
+| 100 turrets, W20 per-turret meshes, high | 60.0 / 59.5 · 5.4 ms | 35.1 / 29.9 · 28.1 ms (8,064 draw calls) | 48.9 / 29.9 · 6.5 ms | 51.2 / 29.9 · 4.0 ms |
+
+Without the frame cap (`--disable-gpu-vsync`), 300 turrets at the game camera: 103 fps on high, 142 on medium, 175 on low; 500 turrets: 99 high, 127 medium. Switching parts off at the game camera on high: turrets cost about 1 ms of the ~10 ms frame, ambient occlusion about 3 ms, shadows about 2.5 ms, W17's terrain about 5 ms; at the full zoom-out the terrain costs about 13 ms of 17. With the laptop's pixel count (`?dpr=2`, 1728×1117 CSS → 2592×1675 on high): game camera 34–47 fps on high (ambient occlusion and terrain about 10 ms each), 120 fps on medium.
+
+Screens: `_screens/w21-close.png` (W21 instanced beside W20 per-object, same pose), `w21-game.png`, `w21-mid.png`, `w21-far.png`, `w21-lod-bands.png`.
