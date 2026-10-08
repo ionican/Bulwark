@@ -12,7 +12,7 @@
 //
 // Tiers (W7: tiers raise strength), outward face thickness and parapet height in layout.ts TIERS:
 //   1  ivory panels in a gunmetal frame: plinth, ribs, mid rail, gunmetal parapet with an ivory cap
-//   2  thicker armour: sloped ivory glacis, ivory armour panels, bronze band and bronze clamps,
+//   2  thicker armour: sloped ivory glacis, ivory armour panels, a bronze band and gunmetal clamps,
 //      ivory parapet with a gunmetal coping
 //   3  heavy plating: deep glacis, gunmetal backing under heavy ivory plates, bronze band,
 //      crenellated parapet whose merlons carry cyan light slits
@@ -110,13 +110,13 @@ export function faceSegment(p: PB, tier: number, z0: number, z1: number): void {
     strip(p, 'gunmetal', (c) => rectProf(xf + 0.075, 0, xf + 0.11, 0.05, c * 0.5, true, false), z0, z1, -1, 1, 'minor');
     strip(p, 'ceramic', (c) => rectProf(h, 0.3, xf, 1.14, c), z0, z1, -1, 1, 'major', 0.014);
     strip(p, 'dark', () => rectProf(xf - 0.006, 0.47, xf + 0.002, 0.482, 0), z0, z1, -1, 1, 'fine');
-    strip(p, 'bronze', (c) => rectProf(xf - 0.005, 0.66, xf + 0.02, 0.77, c * 0.6), z0, z1, -1, 1, 'major', 0.01);
-    // bronze clamps over the panel joints, bolted
-    every([-0.25, 0.25], 0.07, z0, z1, (a, b, inside) => {
+    strip(p, 'bronze', (c) => rectProf(xf - 0.005, 0.68, xf + 0.02, 0.75, c * 0.6), z0, z1, -1, 1, 'major', 0.01);
+    // gunmetal clamps over the panel joints, bolted in bronze
+    every([-0.25, 0.25], 0.06, z0, z1, (a, b, inside) => {
       if (inside) {
-        box('bronze', xf - 0.006, xf + 0.024, 0.33, 1.1, a, b, 'minor', 0.008);
-        for (const y of [0.42, 0.98]) p.bolt('gunmetal', [xf + 0.024, y, (a + b) / 2], 0.013, [1, 0, 0]);
-      } else strip(p, 'bronze', () => rectProf(xf - 0.006, 0.33, xf + 0.024, 1.1, 0), z0, z1, a, b, 'minor');
+        box('gunmetal', xf - 0.006, xf + 0.022, 0.33, 1.1, a, b, 'minor', 0.008);
+        for (const y of [0.42, 0.98]) p.bolt('bronze', [xf + 0.022, y, (a + b) / 2], 0.013, [1, 0, 0]);
+      } else strip(p, 'gunmetal', () => rectProf(xf - 0.006, 0.33, xf + 0.022, 1.1, 0), z0, z1, a, b, 'minor');
     });
     strip(p, 'ceramic', (c) => [[h - 0.08, 1.14], [xf, 1.14], [xf, 1.42], [xf - 0.03, 1.45], [h - 0.08, 1.45]] as Pt[], z0, z1, -1, 1, 'major', 0);
     strip(p, 'gunmetal', (c) => rectProf(h - 0.1, 1.45, xf - 0.025, 1.47, c * 0.5, true, false), z0, z1, -1, 1, 'major');
@@ -257,12 +257,12 @@ function cap(p: PB, piece: Exclude<Piece, 'straight'>, tier: number): void {
 
 // ---- core (shared by every tier) ----------------------------------------------------------------------
 
-/** Core block [x0, x1] × [z0, z1]: dark skin, gunmetal deck plate on top (the walkway). */
+/** Core block [x0, x1] × [z0, z1]: dark skin, ivory deck plate on top (the walkway). */
 function core(p: PB, x0: number, x1: number, z0: number, z1: number): void {
   const deckT = 0.04;
   // the dark skin, flat-ended so neighbouring blocks meet without a seam
   p.tb.add('dark', stripGeo(rectProf(x0, 0, x1, DECK - deckT, 0), z0, z1, false), {}, 'none');
-  p.tb.add('gunmetal', stripGeo(rectProf(x0, DECK - deckT, x1, DECK, 0), z0, z1, false), {}, 'none');
+  p.tb.add('ceramic', stripGeo(rectProf(x0, DECK - deckT, x1, DECK, 0), z0, z1, false), {}, 'none');
   p.count += 2;
 }
 
@@ -327,7 +327,15 @@ export function wallBuilders(): Map<string, Build> {
   m.set('core/infill', (p) => core(p, h, 0.5, h, 0.5));
   // straight: along x (rotation 0 = E–W)
   m.set('core/straight', (p) => core(p, -0.5, 0.5, -h, h));
-  m.set('core/full', (p) => core(p, -0.5, 0.5, -0.5, 0.5));
+  m.set('core/full', (p) => {
+    core(p, -0.5, 0.5, -0.5, 0.5);
+    // inside a thick wall: a walkway hatch in the middle of each tile (gunmetal plate, bronze
+    // hinges, a cyan lamp), so a deep wall's deck reads as a walkway, not a slab
+    p.box('gunmetal', 0.42, 0.025, 0.42, { y: DECK }, { c: 0.006 });
+    p.box('dark', 0.36, 0.006, 0.012, { y: DECK + 0.025 }, { c: 0, imp: 'fine' });
+    for (const s of [-1, 1]) p.box('bronze', 0.06, 0.02, 0.04, { x: s * 0.12, y: DECK + 0.02, z: -0.22 }, { c: 0.004, imp: 'minor' });
+    p.box('glow', 0.03, 0.012, 0.03, { x: 0.17, y: DECK + 0.025, z: 0.17 }, { c: 0.002, imp: 'minor' });
+  });
   for (const t of [1, 2, 3]) {
     m.set(`face/full/${t}`, (p) => faceSegment(p, t, -0.5, 0.5));
     m.set(`face/hub/${t}`, (p) => faceSegment(p, t, -h, h));

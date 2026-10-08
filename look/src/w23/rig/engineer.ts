@@ -42,15 +42,15 @@ export const VARIANTS: EngVariant[] = [
   { helmet: 0, pack: 1, tool: 2 },
   { helmet: 2, pack: 1, tool: 1 },
 ];
-export const HELMET_NAMES = ['round helmet, full visor', 'helmet with headlamp and aerial', 'hard hat with slit visor'];
-export const PACK_NAMES = ['power pack with canisters', 'frame pack with tank and mast'];
+export const HELMET_NAMES = ['full-visor helmet', 'headlamp helmet', 'slit-visor hard hat'];
+export const PACK_NAMES = ['canister pack', 'tank-and-mast pack'];
 export const TOOL_NAMES = ['nano-welder', 'multi-tool', 'scanner'];
 
 // body dimensions (tiles)
 const WAIST = 0.04;
 const TORSO = 0.29;
 const SHOULDER_Y = 0.25;
-const SHOULDER_Z = 0.098;
+const SHOULDER_Z = 0.112;
 const UARM = 0.145;
 const FARM = 0.13;
 /** Tool tip in the right hand's frame, per tool. */
@@ -290,47 +290,50 @@ function dome(p: PB, key: 'ceramic' | 'gunmetal' | 'glow' | 'dark' | 'bronze', r
 
 export function engineerBuilders(): Map<string, (p: PB) => void> {
   const m = new Map<string, (p: PB) => void>();
-  // pelvis: belt with pouches and a bronze buckle (the tool harness)
+  // pelvis: rounded hips of the suit, a belt with pouches and a bronze buckle (the tool harness)
   m.set('eng/pelvis', (p) => {
-    p.box('gunmetal', 0.105, 0.085, 0.165, { y: -0.035 }, { c: 0.012 });
-    p.box('dark', 0.112, 0.024, 0.172, { y: 0.01 }, { c: 0.004, imp: 'minor' });
-    p.box('bronze', 0.012, 0.022, 0.03, { x: 0.058, y: 0.011 }, { c: 0.003, imp: 'minor' });
+    p.lathe('gunmetal', [[0, -0.075], [0.07, -0.075], [0.09, -0.04], [0.088, 0.02], [0.078, 0.045], [0, 0.045]], { sx: 0.68 }, { seg: 16, smooth: true });
+    p.lathe('dark', [[0.088, 0.0], [0.094, 0.0], [0.094, 0.026], [0.086, 0.026], [0.088, 0]], { sx: 0.7 }, { seg: 16, imp: 'minor' });
+    p.box('bronze', 0.012, 0.024, 0.032, { x: 0.064, y: 0.002 }, { c: 0.003, imp: 'minor' });
     for (const s of [-1, 1]) {
-      p.box('gunmetal', 0.04, 0.045, 0.028, { x: 0.02, y: -0.03, z: s * 0.095 }, { c: 0.006, imp: 'minor' });
-      p.box('gunmetal', 0.035, 0.04, 0.025, { x: -0.035, y: -0.028, z: s * 0.09 }, { c: 0.006, imp: 'fine' });
+      p.box('gunmetal', 0.045, 0.048, 0.03, { x: 0.026, y: -0.04, z: s * 0.088 }, { c: 0.008, imp: 'minor' });
+      p.box('gunmetal', 0.04, 0.044, 0.028, { x: -0.03, y: -0.038, z: s * 0.084 }, { c: 0.007, imp: 'fine' });
     }
-    p.box('bronze', 0.025, 0.06, 0.02, { x: -0.06, y: -0.04, z: 0.06 }, { c: 0.004, imp: 'fine' });
+    p.box('bronze', 0.025, 0.065, 0.022, { x: -0.06, y: -0.05, z: 0.06 }, { c: 0.004, imp: 'fine' });
   });
-  // torso: gunmetal suit, ivory chest and back plates, bronze harness buckles, collar ring
+  // torso: rounded gunmetal suit, ivory chest and back armour, bronze harness, collar ring
   m.set('eng/torso', (p) => {
-    p.frustum('gunmetal', 0.1, TORSO - 0.02, 0.15, 1.12, { y: 0.0 }, { c: 0.014 });
-    p.prof('ceramic', [[0.03, 0.09], [0.062, 0.1], [0.07, 0.2], [0.06, 0.255], [0.03, 0.265]], 0.15, {}, { c: 0.012 });
-    p.prof('ceramic', [[-0.03, 0.1], [-0.03, 0.26], [-0.058, 0.255], [-0.064, 0.12]], 0.14, {}, { c: 0.01, imp: 'minor' });
+    const body: Pt[] = [[0, 0], [0.078, 0], [0.084, 0.06], [0.097, 0.15], [0.104, 0.22], [0.098, 0.262], [0.07, 0.285], [0.042, TORSO], [0, TORSO]];
+    p.lathe('gunmetal', body, { sx: 0.64 }, { seg: 18, smooth: true });
+    // armour: front and back sectors of a slightly larger shell
+    const shell: Pt[] = [[0.094, 0.1], [0.104, 0.15], [0.111, 0.22], [0.105, 0.258], [0.08, 0.28]];
+    p.lathe('ceramic', shell, { sx: 0.66 }, { seg: 10, phi: [Math.PI / 2 - 0.95, 1.9], wear: [0, 3] });
+    p.lathe('ceramic', shell, { sx: 0.66 }, { seg: 10, phi: [-Math.PI / 2 - 0.85, 1.7], wear: [0, 3], imp: 'minor' });
     // harness straps over the shoulders and across the chest
     for (const s of [-1, 1]) {
-      p.beam('bronze', [0.071, 0.12, s * 0.045], [0.064, 0.25, s * 0.05], 0.008, 0.016, { imp: 'minor', c: 0.002 });
-      p.box('bronze', 0.012, 0.018, 0.024, { x: 0.073, y: 0.15, z: s * 0.045 }, { imp: 'fine', c: 0.003 });
+      p.beam('bronze', [0.072, 0.1, s * 0.05], [0.066, 0.25, s * 0.055], 0.008, 0.017, { imp: 'minor', c: 0.002 });
+      p.box('bronze', 0.012, 0.018, 0.026, { x: 0.074, y: 0.14, z: s * 0.05 }, { imp: 'fine', c: 0.003 });
     }
-    p.box('dark', 0.01, 0.014, 0.1, { x: 0.071, y: 0.11 }, { imp: 'fine', c: 0.002 });
-    p.box('glow', 0.006, 0.012, 0.02, { x: 0.07, y: 0.215, z: -0.03 }, { imp: 'minor', c: 0.001 });
-    p.cylY('gunmetal', 0.04, 0.045, 0.03, { y: TORSO - 0.025 }, { seg: 14, imp: 'minor' });
-    // shoulder blocks the arms hang from
-    for (const s of [-1, 1]) p.box('gunmetal', 0.06, 0.05, 0.04, { y: SHOULDER_Y - 0.03, z: s * (SHOULDER_Z - 0.012) }, { c: 0.01 });
+    p.box('dark', 0.012, 0.016, 0.11, { x: 0.068, y: 0.1 }, { imp: 'fine', c: 0.002 });
+    p.box('glow', 0.006, 0.012, 0.022, { x: 0.073, y: 0.205, z: -0.035 }, { imp: 'minor', c: 0.001 });
+    p.cylY('gunmetal', 0.045, 0.05, 0.03, { y: TORSO - 0.022 }, { seg: 14, imp: 'minor' });
+    // shoulder joints the arms hang from
+    for (const s of [-1, 1]) p.lathe('gunmetal', [[0, -0.035], [0.034, -0.03], [0.04, 0], [0.034, 0.03], [0, 0.035]], { y: SHOULDER_Y, z: s * SHOULDER_Z }, { axis: 'z', seg: 12, smooth: true });
   });
   // helmets (head frame: origin at the neck base)
   const neck = (p: PB) => p.cylY('gunmetal', 0.026, 0.03, 0.03, {}, { seg: 12, imp: 'minor' });
   m.set('eng/helmet0', (p) => {
     neck(p);
-    dome(p, 'ceramic', 0.062, 0.07, { cap: Math.PI * 0.95, seg: 18 });
+    dome(p, 'ceramic', 0.068, 0.072, { cap: Math.PI * 0.95, seg: 18 });
     // full-face visor: a band round the front at eye level
-    dome(p, 'glow', 0.0636, 0.07, { phi: [Math.PI / 2 - 0.9, 1.8], from: Math.PI * 0.4, cap: Math.PI * 0.64, seg: 10, imp: 'major' });
+    dome(p, 'glow', 0.0696, 0.072, { phi: [Math.PI / 2 - 0.9, 1.8], from: Math.PI * 0.4, cap: Math.PI * 0.64, seg: 10, imp: 'major' });
     for (const s of [-1, 1]) p.cylZ('bronze', 0.018, 0.012, 0, 0.07, s * 0.063, { seg: 10, imp: 'minor' });
     p.box('gunmetal', 0.03, 0.012, 0.11, { x: -0.04, y: 0.12 }, { imp: 'fine', c: 0.004 });
   });
   m.set('eng/helmet1', (p) => {
     neck(p);
-    dome(p, 'ceramic', 0.06, 0.07, { cap: Math.PI * 0.95, seg: 18 });
-    dome(p, 'glow', 0.0612, 0.07, { phi: [Math.PI / 2 - 0.6, 1.2], from: Math.PI * 0.45, cap: Math.PI * 0.58, seg: 8 });
+    dome(p, 'ceramic', 0.066, 0.072, { cap: Math.PI * 0.95, seg: 18 });
+    dome(p, 'glow', 0.0675, 0.072, { phi: [Math.PI / 2 - 0.6, 1.2], from: Math.PI * 0.45, cap: Math.PI * 0.58, seg: 8 });
     // headlamp on the brow and a whip aerial on the left
     p.tube('bronze', 0.016, 0.03, { x: 0.042, y: 0.12 }, { seg: 10 });
     p.tube('glow', 0.012, 0.006, { x: 0.071, y: 0.12 }, { seg: 10 });
@@ -364,34 +367,34 @@ export function engineerBuilders(): Map<string, (p: PB) => void> {
   });
   // arms (symmetric about their own axis: one part for left and right)
   m.set('eng/uarm', (p) => {
-    limb(p, 'gunmetal', UARM, 0.03, 0.026);
-    dome(p, 'ceramic', 0.042, -0.012, { cap: Math.PI * 0.42, squash: 0.85, seg: 12 });
+    limb(p, 'gunmetal', UARM, 0.037, 0.032);
+    dome(p, 'ceramic', 0.052, -0.016, { cap: Math.PI * 0.45, squash: 0.8, seg: 12 });
   });
   m.set('eng/farm', (p) => {
-    limb(p, 'gunmetal', FARM, 0.025, 0.021);
-    p.cylY('ceramic', 0.029, 0.025, 0.07, { y: -0.115 }, { seg: 12 });
-    p.cylY('bronze', 0.027, 0.027, 0.01, { y: -0.12 }, { seg: 12, imp: 'minor' });
+    limb(p, 'gunmetal', FARM, 0.032, 0.027, 12);
+    p.cylY('ceramic', 0.036, 0.031, 0.075, { y: -0.118 }, { seg: 12 });
+    p.cylY('bronze', 0.034, 0.034, 0.01, { y: -0.124 }, { seg: 12, imp: 'minor' });
   });
   m.set('eng/hand', (p) => {
-    p.box('dark', 0.034, 0.05, 0.03, { y: -0.05 }, { c: 0.008 });
-    p.box('dark', 0.014, 0.025, 0.012, { x: 0.018, y: -0.03, z: 0.012 }, { c: 0.003, imp: 'minor' });
+    p.box('dark', 0.042, 0.056, 0.038, { y: -0.056 }, { c: 0.01 });
+    p.box('dark', 0.016, 0.028, 0.014, { x: 0.022, y: -0.034, z: 0.014 }, { c: 0.003, imp: 'minor' });
   });
   m.set('eng/thigh', (p) => {
-    limb(p, 'gunmetal', 0.215, 0.04, 0.032);
-    p.prof('ceramic', [[0.02, -0.04], [0.042, -0.05], [0.044, -0.16], [0.03, -0.18], [0.02, -0.18]], 0.06, {}, { c: 0.008 });
+    limb(p, 'gunmetal', 0.215, 0.052, 0.042, 14);
+    p.prof('ceramic', [[0.03, -0.04], [0.052, -0.052], [0.054, -0.16], [0.04, -0.185], [0.03, -0.185]], 0.07, {}, { c: 0.008 });
   });
   m.set('eng/shin', (p) => {
-    limb(p, 'gunmetal', 0.215, 0.031, 0.026);
-    p.prof('ceramic', [[0.012, -0.02], [0.036, -0.028], [0.036, -0.15], [0.028, -0.19], [0.012, -0.19]], 0.056, {}, { c: 0.008 });
-    p.cylY('bronze', 0.03, 0.03, 0.012, { y: -0.205 }, { seg: 12, imp: 'minor' });
+    limb(p, 'gunmetal', 0.215, 0.041, 0.034, 14);
+    dome(p, 'ceramic', 0.04, -0.01, { cap: Math.PI * 0.6, seg: 10, phi: [Math.PI / 2 - 0.9, 1.8] });
+    p.prof('ceramic', [[0.02, -0.03], [0.046, -0.04], [0.046, -0.15], [0.036, -0.19], [0.02, -0.19]], 0.064, {}, { c: 0.008 });
+    p.cylY('bronze', 0.038, 0.038, 0.012, { y: -0.205 }, { seg: 12, imp: 'minor' });
   });
   // boot (ankle frame: sole at y = −0.045)
   m.set('eng/boot', (p) => {
-    p.box('gunmetal', 0.12, 0.05, 0.058, { x: 0.022, y: -0.045 }, { c: 0.012 });
-    p.box('dark', 0.126, 0.014, 0.062, { x: 0.022, y: -0.045 }, { c: 0.003, imp: 'minor' });
-    p.box('ceramic', 0.04, 0.028, 0.06, { x: 0.065, y: -0.032 }, { c: 0.008, imp: 'minor' });
+    p.box('gunmetal', 0.135, 0.058, 0.07, { x: 0.024, y: -0.045 }, { c: 0.014 });
+    p.box('dark', 0.142, 0.015, 0.074, { x: 0.024, y: -0.045 }, { c: 0.003, imp: 'minor' });
+    p.box('ceramic', 0.046, 0.032, 0.072, { x: 0.07, y: -0.03 }, { c: 0.01, imp: 'minor' });
   });
-  // tools (right hand frame)
   // tools, held in the right fist and pointing along the forearm (−Y of the hand frame)
   m.set('eng/tool0', (p) => {
     p.box('bronze', 0.024, 0.05, 0.024, { x: 0.004, y: -0.07 }, { c: 0.004 });

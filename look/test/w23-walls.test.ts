@@ -218,10 +218,10 @@ test('mixed tiers in one run join: shared core section, and a joint over every f
     const edge = x + 1;
     const a = world(tileOf(list, x, 3).filter((i) => !i.part.startsWith('joint')));
     const b = world(tileOf(list, x + 1, 3).filter((i) => !i.part.startsWith('joint')));
-    // the core (dark skin and gunmetal deck plate) runs on unchanged
+    // the core (dark skin and ivory deck plate) runs on unchanged
     const ca = sectionX(a.filter((p) => p.part.startsWith('core')), edge);
     const cb = sectionX(b.filter((p) => p.part.startsWith('core')), edge);
-    for (const mat of ['dark', 'gunmetal']) for (let k = 0; k < 4; k++) assert.ok(Math.abs(ca.get(mat)![k]! - cb.get(mat)![k]!) < 1e-4, `core ${mat} at x = ${edge}`);
+    for (const mat of ['dark', 'ceramic']) for (let k = 0; k < 4; k++) assert.ok(Math.abs(ca.get(mat)![k]! - cb.get(mat)![k]!) < 1e-4, `core ${mat} at x = ${edge}`);
     // the joint covers both faces' cross-sections at the edge
     const faceExtent = (pcs: WorldPiece[]) => {
       let zMax = 0;

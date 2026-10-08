@@ -5,7 +5,7 @@
   "description": "W17 look test A: code-built geometry + CC0 photographic textures + full lighting, one vista of map 1",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1 --port 8819 --strictPort",
+    "dev": "vite --host 127.0.0.1 --port 8820 --strictPort",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-transform-types --disable-warning=ExperimentalWarning --test \"test/*.test.ts\"",

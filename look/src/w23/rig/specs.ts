@@ -11,7 +11,7 @@
 import type { BipedSpec } from './biped.ts';
 
 export const ENGINEER_LEGS: BipedSpec = {
-  leg: { thigh: 0.215, shin: 0.215, ankle: 0.045, hipOut: 0.048, hipY: 0.47, footOut: 0.058 },
+  leg: { thigh: 0.215, shin: 0.215, ankle: 0.045, hipOut: 0.052, hipY: 0.47, footOut: 0.062 },
   walk: { stride: 0.62, duty: 0.6, lift: 0.05 },
   run: { stride: 1.0, duty: 0.38, lift: 0.09 },
   turnR: 0.07,
