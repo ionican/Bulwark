@@ -155,6 +155,7 @@ export class Biped {
   reached = true;
   private vel = new Vector3();
   private started = false;
+  private wasActive = false;
 
   constructor(readonly spec: BipedSpec) {
     const mk = (): Foot => ({ pos: new Vector3(), yaw: 0, stance: true, plant: new Vector3(), plantYaw: 0, from: new Vector3(), fromYaw: 0, swing: 0 });
@@ -210,10 +211,14 @@ export class Biped {
     if (dt > 0) this.vel.set(dx / dt, 0, dz / dt);
     this.pos.set(x, ground(x, z), z);
     this.yaw = yaw;
-    let progress = dist + Math.abs(dyaw) * this.spec.turnR;
-    const swinging = !this.feet[0].stance || !this.feet[1].stance;
-    if (progress < 1e-6 && swinging) progress = this.spec.settle * dt;
+    const motion = dist + Math.abs(dyaw) * this.spec.turnR;
+    const active = motion > 1e-6;
     const moving = dist > 1e-6;
+    if (active && !this.wasActive) this.restart(g, moving ? _t.set(dx, 0, dz).normalize() : null, ground);
+    this.wasActive = active;
+    let progress = motion;
+    const swinging = !this.feet[0].stance || !this.feet[1].stance;
+    if (!active && swinging) progress = this.spec.settle * dt;
     if (progress > 0) {
       const prev = this.phase;
       this.phase += progress / g.stride;
@@ -252,6 +257,20 @@ export class Biped {
       }
     }
     this.solve(ground, dt);
+  }
+
+  /**
+   * Starting to move from rest: both feet are planted wherever the last steps left them. The foot
+   * further forward along the new direction keeps its stance, with the phase set so its stance
+   * ends as far behind the hip as a steady walk would; the other foot lifts at once.
+   */
+  private restart(g: GaitSpec, dir: Vector3 | null, ground: Ground): void {
+    if (!this.feet[0].stance || !this.feet[1].stance) return;
+    const off = [0, 1].map((i) => (dir ? _y.subVectors(this.feet[i]!.plant, this.neutral(i, this.pos, this.yaw, ground, _p)).dot(dir) : 0));
+    const lead = off[0]! >= off[1]! ? 0 : 1;
+    let ph = g.duty / 2 - off[lead]! / g.stride;
+    ph = Math.max(g.duty - 0.5 + 1e-3, Math.min(g.duty - 1e-3, ph));
+    this.phase = ph - lead * 0.5;
   }
 
   /** Pelvis height (lowered to keep planted feet in reach) and leg IK. */
