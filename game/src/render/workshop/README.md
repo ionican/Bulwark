@@ -28,7 +28,7 @@ Adapted (each change marked in the file):
 | `w23/lod.ts` | `turret` asset kind (W21's turret thresholds). |
 | `w23/walls/grid.ts` | `addGate(gate)`: a gate whose footprint the simulation decided. |
 | `w23/icons.ts` | The icon drawing function exported as `drawW23Icon`. |
-| `world/terrainMaterial.ts` | From `world/terrainMesh.ts`: the material only (the mesh builder uses W17's analytic field and layout); paving from a per-tile texture; W17's water bands removed. |
+| `world/terrainMaterial.ts` | From `world/terrainMesh.ts`: the material only (the mesh builder uses W17's analytic field and layout); paving from a per-tile texture; W17's water bands removed; no rubble on the flats and the sand detail fading with distance (Richard's feedback). |
 
 Not ported: `kit/strategies.ts`. The game draws the kit turrets through `w23/batches.ts`, which is
 W22's strategy B (one instanced batch per part × material × detail level, shared by every kind

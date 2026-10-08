@@ -4,12 +4,13 @@
 
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { InstancedMesh, MeshStandardMaterial, Scene, type Object3D } from 'three';
-import { ALIEN_KINDS, BUILDING_KINDS, B, UNIT_KINDS } from '../src/sim/kinds.ts';
+import { InstancedMesh, Mesh, MeshStandardMaterial, Scene, type BufferGeometry, type Object3D } from 'three';
+import { A, ALIEN_KINDS, BUILDING_KINDS, B, UNIT_KINDS } from '../src/sim/kinds.ts';
 import { BF_COMPLETE, BF_STARTED } from '../src/sim/schema.ts';
-import { MAX_SPAWN_ORIGINS } from '../src/sim/sandbox.ts';
 import { CAPACITY } from '../src/sim/world.ts';
 import { EntityRenderer } from '../src/render/entities.ts';
+import { routeMarkerGeometries } from '../src/render/geometry.ts';
+import { createWorld } from '../src/sim/scenarios.ts';
 import { footprintRange } from '../src/render/ground.ts';
 import { ICONS } from '../src/render/icons.ts';
 import { entitiesOf, inspectScene } from '../src/render/inspect.ts';
@@ -93,15 +94,15 @@ describe('criterion 2: every kind is drawn with its model, read from the scene g
 
   it('the inspection sees greybox when it is there (W13 renderer on the same snapshot)', () => {
     const grey = new Scene();
-    const e = new EntityRenderer(grey, terrain, CAPACITY, MAX_SPAWN_ORIGINS, { models: true });
+    const e = new EntityRenderer(grey, terrain, CAPACITY, { models: true });
     const s = fx.snap;
-    e.update({ camera: camera(), viewportHeight: 900, yaw: 0, snapshot: s, aliens: mobile(s.aliens), units: mobile(s.units), projectiles: mobile(s.aliens), selection: [], showRoutes: false });
+    e.update({ camera: camera(), viewportHeight: 900, yaw: 0, snapshot: s, aliens: mobile(s.aliens), units: mobile(s.units), projectiles: mobile(s.aliens), selection: [] });
     const rep = inspect(s, grey);
     expect(rep.gun!.greybox).toBeGreaterThan(0);
     // the model view's overlays add no greybox
     const overlay = new Scene();
-    const o = new EntityRenderer(overlay, terrain, CAPACITY, MAX_SPAWN_ORIGINS, { models: false });
-    o.update({ camera: camera(), viewportHeight: 900, yaw: 0, snapshot: s, aliens: mobile(s.aliens), units: mobile(s.units), projectiles: mobile(s.aliens), selection: [], showRoutes: true });
+    const o = new EntityRenderer(overlay, terrain, CAPACITY, { models: false });
+    o.update({ camera: camera(), viewportHeight: 900, yaw: 0, snapshot: s, aliens: mobile(s.aliens), units: mobile(s.units), projectiles: mobile(s.aliens), selection: [] });
     for (const k of INVENTORY) expect(inspect(s, overlay)[k]?.greybox ?? 0, k).toBe(0);
   });
 });
@@ -252,4 +253,36 @@ describe('criterion 7: the turrets are the W22 kit kinds, assembled by the kit',
       }
     });
   }
+});
+
+describe('Richard: no alien routes are drawn (the simulation still computes them)', () => {
+  it('neither view puts route geometry in the scene, with entry and spawn-origin routes in the snapshot', () => {
+    const w = createWorld(1, 'sandbox');
+    w.step();
+    w.enqueue({ t: 'spawnAt', kind: A.rusher, x: 60.5, z: 30.5, count: 3 });
+    for (let i = 0; i < 3; i++) w.step();
+    const s = snapshotOf(w);
+    expect(s.routes.length).toBeGreaterThan(0);
+    expect(s.originRoutes.length).toBeGreaterThan(0);
+    const markers = routeMarkerGeometries().map((g) => (g.getAttribute('position').array as Float32Array).join(','));
+    const isRoute = (g: BufferGeometry) => markers.includes((g.getAttribute('position').array as Float32Array).join(','));
+    const scenes: Object3D[] = [];
+    for (const models of [true, false]) {
+      const sc = new Scene();
+      const e = new EntityRenderer(sc, terrain, CAPACITY, { models });
+      e.update({ camera: camera({ x: 64, z: 64, distance: 200, yaw: 0 }), viewportHeight: 900, yaw: 0, snapshot: s, aliens: mobile(s.aliens), units: mobile(s.units), projectiles: mobile(s.aliens), selection: [] });
+      scenes.push(sc);
+    }
+    draw(r, s, { level: 0 });
+    scenes.push(scene);
+    let meshes = 0;
+    for (const sc of scenes)
+      sc.traverse((o) => {
+        if (!(o instanceof Mesh)) return;
+        meshes++;
+        expect(isRoute(o.geometry), o.name).toBe(false);
+        expect(o.name.toLowerCase()).not.toContain('route');
+      });
+    expect(meshes).toBeGreaterThan(50);
+  });
 });

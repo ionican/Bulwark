@@ -6,6 +6,9 @@
 // Builds this tree, serves it with `vite preview` on strict port 8823, and drives agent-browser
 // (session `w24-2a`, 1440 × 900, quality medium):
 //
+//   input on map 1 (real mouse through agent-browser; Shift by pointer events): a click of under
+//     5 px selects an engineer without moving the camera; Shift + left-drag box-selects; in build
+//     mode a left-drag queues a wall run without orbiting; a plain left-drag orbits; right-drag pans
 //   map 1 (/) and the sandbox (/?sandbox=1)
 //     - loads with 0 console errors (page errors, console.error, __game.errors) and model rendering
 //     - a fixture through the game's own commands: every building kind placed complete (`place`), a
@@ -19,7 +22,8 @@
 //   static benchmark (reported, not gated): the stress scene (/?stress=1, 300 buildings, 500
 //     aliens) paused, fps and frame cost at the game camera and at the full zoom-out
 //
-// With --shots <dir> it also writes the criterion 10 screenshots (w24-2a-*.png) there.
+// With --shots <dir> it also writes the screenshots (w24-2a2-*.png: game camera, the same view
+// tilted low, map edge, aliens close up, full zoom-out) there.
 // It always stops the preview server and closes the agent-browser session. Exit 1 on any failed
 // check (budgets and benchmark figures never fail it).
 
@@ -111,8 +115,37 @@ function errorsNow(label) {
   else note(`${label}: 0 console errors`);
 }
 
-const GAME_CAMERA = { x: 64, z: 62, distance: 50, yaw: 0 };
-const camera = (rig) => js(`(__game.camera.set(${JSON.stringify(rig)}), true)`);
+/** W10's eased elevation for a distance (render/cameraRig.ts pitchFor): the tilt of a preset view. */
+const pitchFor = (d) => {
+  let t = (Math.log(d) - Math.log(10)) / (Math.log(200) - Math.log(10));
+  t = Math.min(1, Math.max(0, t));
+  t = t * t * (3 - 2 * t);
+  return ((50 + 34 * t) * Math.PI) / 180;
+};
+const GAME_CAMERA = { x: 64, z: 62, distance: 50, yaw: 0, pitch: pitchFor(50) };
+/** Sets the camera rig; a rig without a pitch gets the preset tilt for its distance. */
+const camera = (rig) => js(`(__game.camera.set(${JSON.stringify({ pitch: pitchFor(rig.distance), ...rig })}), true)`);
+const rigNow = () => JSON.stringify(js('__game.camera.get()'));
+/** Real mouse input through agent-browser (CDP): press, move in steps, release. */
+async function mouseDrag(x0, y0, x1, y1, button = 'left', steps = 8) {
+  ab('mouse', 'move', String(Math.round(x0)), String(Math.round(y0)));
+  ab('mouse', 'down', button);
+  for (let k = 1; k <= steps; k++) ab('mouse', 'move', String(Math.round(x0 + ((x1 - x0) * k) / steps)), String(Math.round(y0 + ((y1 - y0) * k) / steps)));
+  ab('mouse', 'up', button);
+  await frames(60);
+}
+const key = (k, code) => js(`(window.dispatchEvent(new KeyboardEvent('keydown', { key: '${k}', code: '${code}' })), window.dispatchEvent(new KeyboardEvent('keyup', { key: '${k}', code: '${code}' })), true)`);
+/** Shift + left-drag as pointer events with shiftKey (agent-browser's mouse carries no modifiers). */
+function shiftDrag(x0, y0, x1, y1) {
+  js(`(() => {
+    const c = document.querySelector('canvas.view');
+    const ev = (type, x, y) => c.dispatchEvent(new PointerEvent(type, { bubbles: true, button: 0, buttons: type === 'pointerup' ? 0 : 1, clientX: x, clientY: y, shiftKey: true, pointerId: 7, pointerType: 'mouse' }));
+    ev('pointerdown', ${x0}, ${y0});
+    for (let k = 1; k <= 8; k++) ev('pointermove', ${x0} + (${x1 - x0}) * k / 8, ${y0} + (${y1 - y0}) * k / 8);
+    ev('pointerup', ${x1}, ${y1});
+    return true;
+  })()`);
+}
 const frames = (n) => js(`new Promise((res) => { let k = 0; const f = () => (++k >= ${n} ? res(true) : requestAnimationFrame(f)); requestAnimationFrame(f); })`);
 
 function inspect(label, kinds, want) {
@@ -139,9 +172,9 @@ async function shot(name) {
   if (!shotsDir) return;
   js(`(document.querySelectorAll('body > :not(canvas)').forEach((e) => (e.dataset.shotHidden = e.style.visibility, e.style.visibility = 'hidden')), true)`);
   await frames(6);
-  ab('screenshot', join(shotsDir, `w24-2a-${name}.png`));
+  ab('screenshot', join(shotsDir, `w24-2a2-${name}.png`));
   js(`(document.querySelectorAll('[data-shot-hidden]').forEach((e) => { e.style.visibility = e.dataset.shotHidden; delete e.dataset.shotHidden; }), true)`);
-  note(`screenshot w24-2a-${name}.png`);
+  note(`screenshot w24-2a2-${name}.png`);
 }
 
 /** The sandbox fixture: every kind, through the game's commands. */
@@ -223,6 +256,48 @@ async function main() {
     camera({ x: 64, z: 64, distance: 200, yaw: 0 });
     await frames(10);
     inspect('map 1, full zoom-out', ['commander', 'engineer', 'gun', 'wall', 'generator', 'massExtractor'], 'icons');
+    // ---- input: the workshop camera's feel, with the game's clicks, box and build drags
+    camera({ x: 64, z: 62, distance: 30, yaw: 0, pitch: (60 * Math.PI) / 180 });
+    await frames(10);
+    const units = js(`__game.list('unit').map((u) => ({ id: u.id, kindName: u.kindName, ...__game.screenOf('unit', u.id) }))`);
+    const eng = units.filter((u) => u.kindName === 'engineer');
+    let before = rigNow();
+    ab('mouse', 'move', String(Math.round(eng[0].x + 2)), String(Math.round(eng[0].y)));
+    ab('mouse', 'down', 'left');
+    ab('mouse', 'move', String(Math.round(eng[0].x + 4)), String(Math.round(eng[0].y + 1)));
+    ab('mouse', 'up', 'left');
+    await frames(30);
+    const sel = js('__game.selected');
+    if (!(sel.length === 1 && sel[0].id === eng[0].id && rigNow() === before)) fail(`input: a 3-px click on engineer ${eng[0].id} selected ${JSON.stringify(sel)} and the camera ${rigNow() === before ? 'stayed' : 'moved'}`);
+    else note('input: a click (under 5 px) on an engineer selects it; the camera does not move');
+    const xs = units.map((u) => u.x);
+    const ys = units.map((u) => u.y);
+    shiftDrag(Math.min(...xs) - 30, Math.min(...ys) - 40, Math.max(...xs) + 30, Math.max(...ys) + 30);
+    await frames(30);
+    const boxed = js('__game.selected').length;
+    if (boxed !== units.length || rigNow() !== before) fail(`input: Shift + left-drag selected ${boxed} of ${units.length} units; camera ${rigNow() === before ? 'stayed' : 'moved'}`);
+    else note(`input: Shift + left-drag box-selects all ${boxed} units; the camera does not move`);
+    // the wall tool's key (agent-browser's `press` also toggled the pause button here, so a key event)
+    key('1', 'Digit1');
+    await frames(5);
+    const runs0 = js('__game.runs.length');
+    const a = js('__game.worldToScreen(57.5, 64.5)');
+    const b = js('__game.worldToScreen(66.5, 64.5)');
+    await mouseDrag(a.x, a.y, b.x, b.y);
+    await until('the wall run', `__game.runs.length > ${runs0}`, 10).catch(() => null);
+    const runs1 = js('__game.runs');
+    if (runs1.length !== runs0 + 1 || rigNow() !== before) fail(`input: build-mode left-drag: runs ${runs0} → ${runs1.length}; camera ${rigNow() === before ? 'stayed' : 'moved'}`);
+    else note(`input: in build mode a left-drag queues a wall run (${runs1[runs1.length - 1].tiles} tiles) and does not orbit`);
+    key('Escape', 'Escape');
+    await mouseDrag(720, 450, 820, 400);
+    const after = js('__game.camera.get()');
+    const b0 = JSON.parse(before);
+    if (Math.abs(after.yaw - b0.yaw) < 0.05 || Math.abs(after.pitch - b0.pitch) < 0.02) fail(`input: a plain left-drag did not orbit (${before} → ${JSON.stringify(after)})`);
+    else note(`input: a plain left-drag orbits (yaw ${b0.yaw.toFixed(2)} → ${after.yaw.toFixed(2)}, tilt ${((b0.pitch * 180) / Math.PI).toFixed(0)}° → ${((after.pitch * 180) / Math.PI).toFixed(0)}°)`);
+    before = rigNow();
+    await mouseDrag(720, 450, 620, 520, 'right');
+    if (rigNow() === before) fail('input: a right-drag did not pan');
+    else note('input: a right-drag pans');
     errorsNow('map 1');
 
     // ---- sandbox
@@ -257,44 +332,22 @@ async function main() {
     note(`sandbox: wall topology rebuilds ${js('__game.wallRebuilds')}; LOD ${JSON.stringify(js('__game.lodLevelCounts'))}`);
 
     if (shotsDir) {
-      // the wall run partly built: a second run at normal build power
-      // resume (commands apply at a tick), drop the build-power tuning, lay the run
-      js(`(async () => { if (__game.paused) __game.control.pause(); await __game.tuneReset('unit'); return __game.buildRun([56, 66], [70, 66], 1); })()`);
-      const row66 = (state) => `__game.list('building').filter((b) => b.kindName === 'wall' && b.ty === 66 && b.state === '${state}').length`;
-      await until('a partly built run', `${row66('complete')} >= 3 && ${row66('started')} >= 1 && ${row66('reserved')} >= 3`, 180);
-      // a fresh temporary turret (the first one expires after 30 s): every engineer tries, one is off cooldown
-      js(`(() => { for (const u of __game.list('unit')) if (u.kindName === 'engineer') __game.cmd.dropTurret(u.id); return true; })()`);
-      await until('a temporary turret', `__game.list('building').some((b) => b.kindName === 'tempTurret')`, 30);
+      // resume (commands apply at a tick)
+      js(`(__game.paused && __game.control.pause(), true)`);
+      await until('running', `__game.paused === false`, 10);
       // fresh aliens of every kind close together for their close-up, then hold everything still
       js(`(async () => { for (const [k, x] of [['rusher', 58.5], ['hunter', 62.5], ['breaker', 66.5], ['saboteur', 70.5]]) await __game.spawnAt(k, x, 36.5, 1); __game.control.pause(); return true; })()`);
       await until('paused', `__game.paused === true`, 10);
-      camera({ x: 63, z: 62, distance: 34, yaw: 0.35 });
-      await shot('base-wall-run-gate');
       camera(GAME_CAMERA);
       await shot('game-camera');
-      camera({ x: 54, z: 57.5, distance: 17, yaw: 0.25 });
-      await shot('turrets-gun-area-beam');
-      camera({ x: 71, z: 57, distance: 16, yaw: 0.25 });
-      await shot('turrets-heavy-shield');
-      camera({ x: 61, z: 61, distance: 14, yaw: -0.5 });
-      await shot('gate-and-units');
-      const tt = js(`__game.list('building').find((b) => b.kindName === 'tempTurret')`);
-      camera({ x: tt.tx + 0.5, z: tt.ty + 0.5, distance: 9, yaw: 0.4 });
-      await shot('turret-lookout-temporary');
-      camera({ x: 50, z: 46, distance: 18, yaw: 0.3 });
-      await shot('economy-generator-lab-extractor');
-      camera({ x: 72, z: 46, distance: 20, yaw: 0.3 });
-      await shot('chain-depot-shredder-smelter-assembler');
-      camera({ x: 72.5, z: 70.5, distance: 12, yaw: 0.6 });
-      await shot('belt-splitter-merger');
-      camera({ x: 64.5, z: 37.5, distance: 13, yaw: 0.2 });
-      await shot('aliens-static');
-      camera({ x: 64, z: 64, distance: 200, yaw: 0 });
+      camera({ ...GAME_CAMERA, pitch: (20 * Math.PI) / 180 });
+      await shot('game-camera-tilted-low');
+      camera({ x: 112, z: 18, distance: 75, yaw: -0.8, pitch: (32 * Math.PI) / 180 });
+      await shot('map-edge');
+      camera({ x: 64.5, z: 37.5, distance: 12, yaw: 0.2, pitch: (40 * Math.PI) / 180 });
+      await shot('aliens-close');
+      camera({ x: 64, z: 64, distance: 200, yaw: 0, pitch: (84 * Math.PI) / 180 });
       await shot('strategic-zoom');
-      camera({ x: 64, z: 4, distance: 70, yaw: 2.6 });
-      await shot('map-edge-north');
-      camera({ x: 124, z: 70, distance: 70, yaw: -1.9 });
-      await shot('map-edge-east');
     }
     errorsNow('sandbox');
 

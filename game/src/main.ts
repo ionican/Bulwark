@@ -9,13 +9,14 @@
 import { PerspectiveCamera } from 'three';
 import { createRenderer, type Quality } from './render/adapter.ts';
 import { measureRenderCost } from './render/cost.ts';
-import { applyRig, clampRig, worldPerPixel, type Rig } from './render/cameraRig.ts';
+import { Orbit, applyRig, clampRig, pitchFor, worldPerPixel, type Rig } from './render/cameraRig.ts';
+import { Gestures } from './input.ts';
 import { Ghost } from './render/ghost.ts';
 import { groundHeight } from './render/ground.ts';
 import { entitiesOf, inspectScene } from './render/inspect.ts';
 import { LOD_THRESHOLDS } from './render/lod.ts';
 import { Interpolator } from './render/interp.ts';
-import { boxSelect, buildOccupancy, pickScreen, screenToGround, type Pick, type PickView } from './render/picking.ts';
+import { boxSelect, buildOccupancy, pickScreen, screenToGround, type GroundHit, type Pick, type PickView } from './render/picking.ts';
 import { createView } from './render/view.ts';
 import {
   ALIEN_INFO,
@@ -78,7 +79,7 @@ import {
 import { CAPACITY, SCENARIO_NAMES } from './sim/world.ts';
 import { statsReport } from './sim/stats.ts';
 import { TUNE_FIELDS, TUNE_KINDS, TUNE_TARGETS, TU_HP, tuneIndex, type TuneTarget } from './sim/tuning.ts';
-import { MAX_SPAWN_ORIGINS, WRECK_COMMANDER } from './sim/sandbox.ts';
+import { WRECK_COMMANDER } from './sim/sandbox.ts';
 import { map1Terrain } from './sim/terrain.ts';
 import { canPlaceOn } from './sim/world.ts';
 import type { Command } from './sim/commands.ts';
@@ -105,18 +106,22 @@ window.addEventListener('error', () => consoleErrors++);
 window.addEventListener('unhandledrejection', () => consoleErrors++);
 
 const camera = new PerspectiveCamera(45, 1, 0.5, 1000);
+const DEG = Math.PI / 180;
+/** Preset views (Home: far). The user owns the tilt afterwards (left-drag). */
 const VIEWS = {
-  close: { distance: 26 },
-  mid: { distance: 95 },
-  far: { distance: 175 },
+  close: { distance: 26, pitch: 50 * DEG },
+  mid: { distance: 95, pitch: 66 * DEG },
+  far: { distance: 175, pitch: 84 * DEG },
 } as const;
-const rig: Rig = { x: terrain.base.x, z: terrain.base.z - 2, distance: 50, yaw: 0 };
+// the default game camera keeps W10's elevation for distance 50 (about 69°)
+const rig: Rig = { x: terrain.base.x, z: terrain.base.z - 2, distance: 50, yaw: 0, pitch: pitchFor(50) };
+const orbit = new Orbit(rig);
 
 const loading = document.createElement('div');
 loading.style.cssText = 'position:fixed;inset:0;display:grid;place-items:center;color:#f4efe6;font:600 18px system-ui,sans-serif;background:#1d1916;z-index:50';
 loading.textContent = 'Loading…';
 document.body.appendChild(loading);
-const view = await createView(adapter, terrain, camera, CAPACITY, MAX_SPAWN_ORIGINS, (t) => (loading.textContent = t));
+const view = await createView(adapter, terrain, camera, CAPACITY, (t) => (loading.textContent = t));
 loading.remove();
 const scene = view.scene;
 const entities = view.entities;
@@ -375,7 +380,6 @@ function selectedEngineers(): number[] {
 
 let buildMode: { kind: number; dir: number } | null = null;
 let upgradeMode = false;
-let beltDrag: { tx: number; ty: number } | null = null;
 
 function setBuildMode(kind: BuildingKind | null) {
   upgradeMode = false;
@@ -425,85 +429,98 @@ function placeBeltLine(kind: number, x0: number, z0: number, x1: number, z1: num
 const canvas = adapter.canvas;
 const keys = new Set<string>();
 let mouse: { x: number; y: number } | null = null;
-let drag: { button: number; x0: number; y0: number; x: number; y: number; moved: boolean; anchor: { x: number; z: number } | null } | null = null;
 
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+/** Tile under a screen point, or null. */
+function tileAtScreen(x: number, y: number): { tx: number; ty: number; g: GroundHit } | null {
+  const g = screenToGround(camera, x, y, vw, vh, terrain);
+  return g ? { tx: Math.floor(g.x), ty: Math.floor(g.z), g } : null;
+}
+
+const gestures = new Gestures(orbit, {
+  camera,
+  viewportHeight: () => vh,
+  building: () => buildMode !== null || upgradeMode,
+  click(button, x, y, shift) {
+    if (button === 0) {
+      if (buildMode) {
+        const t = tileAtScreen(x, y);
+        if (t) {
+          const [tx, ty] = footprintAt(buildMode.kind, t.g.x, t.g.z);
+          placeBuild(buildMode.kind, tx, ty, buildMode.dir, shift);
+        }
+        // Belts stay selected for laying more; other buildings only while Shift is held.
+        if (!shift && !isBelt(buildMode.kind)) setBuildMode(null);
+        return;
+      }
+      if (upgradeMode) {
+        const view = pickView();
+        const p = view ? pickScreen(camera, x, y, vw, vh, terrain, view) : null;
+        const ids = selectedEngineers();
+        if (p && p.type === 'building' && buildingInfo(p.kind).tiers && ids.length) command({ t: 'upgrade', ids, target: p.id, queue: shift });
+        if (!shift) upgradeMode = false;
+        return;
+      }
+      selectAt(x, y, shift);
+    } else if (button === 2) {
+      if (buildMode || upgradeMode) {
+        setBuildMode(null);
+        return;
+      }
+      rightClick(x, y, shift);
+    }
+  },
+  box(x0, y0, x1, y1, shift) {
+    const view = pickView();
+    if (view) setSelection(boxSelect(camera, x0, y0, x1, y1, vw, vh, terrain, view), shift);
+  },
+  boxPreview(r) {
+    const b = hud.box.style;
+    if (!r) {
+      b.display = 'none';
+      return;
+    }
+    b.display = 'block';
+    b.left = `${Math.min(r.x0, r.x1)}px`;
+    b.top = `${Math.min(r.y0, r.y1)}px`;
+    b.width = `${Math.abs(r.x1 - r.x0)}px`;
+    b.height = `${Math.abs(r.y1 - r.y0)}px`;
+  },
+  buildDrag(x0, y0, x1, y1, shift) {
+    if (!buildMode) return;
+    const a = tileAtScreen(x0, y0);
+    const b = tileAtScreen(x1, y1);
+    if (a && b) {
+      if (buildMode.kind === B.wall) {
+        // a wall drag lays a run (one order per builder, built tile by tile: run 1's buildRun)
+        const ids = selectedBuilders();
+        if (ids.length) void commandResult({ t: 'buildRun', ids, from: [a.tx, a.ty], to: [b.tx, b.ty], depth: 1, queue: shift });
+      } else if (isBelt(buildMode.kind)) placeBeltLine(buildMode.kind, a.tx, a.ty, b.tx, b.ty, buildMode.dir, shift);
+      else {
+        const [tx, ty] = footprintAt(buildMode.kind, b.g.x, b.g.z);
+        placeBuild(buildMode.kind, tx, ty, buildMode.dir, shift);
+      }
+    }
+    if (!shift && !isBelt(buildMode.kind)) setBuildMode(null);
+  },
+});
+const ptr = (e: PointerEvent) => ({ button: e.button, x: e.clientX, y: e.clientY, shift: e.shiftKey });
 canvas.addEventListener('pointerdown', (e) => {
-  canvas.setPointerCapture(e.pointerId);
-  const anchor = e.button === 1 ? screenToGround(camera, e.clientX, e.clientY, vw, vh, terrain) : null;
-  drag = { button: e.button, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, moved: false, anchor };
-  if (e.button === 1) e.preventDefault();
-  if (e.button === 0 && buildMode && isBelt(buildMode.kind)) {
-    const g = screenToGround(camera, e.clientX, e.clientY, vw, vh, terrain);
-    if (g) beltDrag = { tx: Math.floor(g.x), ty: Math.floor(g.z) };
+  try {
+    canvas.setPointerCapture(e.pointerId);
+  } catch {
+    // a synthetic event (tests) has no active pointer to capture
   }
+  if (e.button === 1) e.preventDefault();
+  gestures.down(ptr(e));
 });
 canvas.addEventListener('pointermove', (e) => {
   mouse = { x: e.clientX, y: e.clientY };
-  if (!drag) return;
-  const dx = e.clientX - drag.x;
-  drag.x = e.clientX;
-  drag.y = e.clientY;
-  if (Math.abs(e.clientX - drag.x0) + Math.abs(e.clientY - drag.y0) > 5) drag.moved = true;
-  if (drag.button === 0 && drag.moved && !buildMode && !upgradeMode) {
-    const b = hud.box.style;
-    b.display = 'block';
-    b.left = `${Math.min(drag.x0, e.clientX)}px`;
-    b.top = `${Math.min(drag.y0, e.clientY)}px`;
-    b.width = `${Math.abs(e.clientX - drag.x0)}px`;
-    b.height = `${Math.abs(e.clientY - drag.y0)}px`;
-  } else if (drag.button === 1 && drag.anchor) {
-    const cur = screenToGround(camera, e.clientX, e.clientY, vw, vh, terrain);
-    if (cur) {
-      rig.x += drag.anchor.x - cur.x;
-      rig.z += drag.anchor.z - cur.z;
-      applyCamera();
-    }
-  } else if (drag.button === 2 && drag.moved) {
-    rig.yaw += dx * 0.006;
-    applyCamera();
-  }
+  gestures.move(ptr(e));
 });
-canvas.addEventListener('pointerup', (e) => {
-  if (!drag) return;
-  const d = drag;
-  drag = null;
-  hud.box.style.display = 'none';
-  if (d.button === 0) {
-    if (buildMode) {
-      const g = screenToGround(camera, e.clientX, e.clientY, vw, vh, terrain);
-      if (g) {
-        if (isBelt(buildMode.kind) && beltDrag) placeBeltLine(buildMode.kind, beltDrag.tx, beltDrag.ty, Math.floor(g.x), Math.floor(g.z), buildMode.dir, e.shiftKey);
-        else {
-          const [tx, ty] = footprintAt(buildMode.kind, g.x, g.z);
-          placeBuild(buildMode.kind, tx, ty, buildMode.dir, e.shiftKey);
-        }
-      }
-      beltDrag = null;
-      // Belts stay selected for laying more; other buildings only while Shift is held.
-      if (!e.shiftKey && !isBelt(buildMode.kind)) setBuildMode(null);
-      return;
-    }
-    if (upgradeMode) {
-      const view = pickView();
-      const p = view ? pickScreen(camera, e.clientX, e.clientY, vw, vh, terrain, view) : null;
-      const ids = selectedEngineers();
-      if (p && p.type === 'building' && buildingInfo(p.kind).tiers && ids.length) command({ t: 'upgrade', ids, target: p.id, queue: e.shiftKey });
-      if (!e.shiftKey) upgradeMode = false;
-      return;
-    }
-    if (d.moved) {
-      const view = pickView();
-      if (view) setSelection(boxSelect(camera, d.x0, d.y0, e.clientX, e.clientY, vw, vh, terrain, view), e.shiftKey);
-    } else selectAt(e.clientX, e.clientY, e.shiftKey);
-  } else if (d.button === 2 && !d.moved) {
-    if (buildMode || upgradeMode) {
-      setBuildMode(null);
-      return;
-    }
-    rightClick(e.clientX, e.clientY, e.shiftKey);
-  }
-});
+canvas.addEventListener('pointerup', (e) => gestures.up(ptr(e)));
+canvas.addEventListener('pointercancel', () => gestures.cancel());
 canvas.addEventListener('pointerleave', () => {
   mouse = null;
 });
@@ -624,7 +641,9 @@ function zoomAt(sx: number, sy: number, factor: number) {
 }
 
 function setView(name: keyof typeof VIEWS) {
+  orbit.stop();
   rig.distance = VIEWS[name].distance;
+  rig.pitch = VIEWS[name].pitch;
   if (name === 'far') {
     rig.x = terrain.w / 2;
     rig.z = terrain.h / 2;
@@ -639,7 +658,7 @@ function steer(dt: number) {
   if (keys.has('s') || keys.has('arrowdown')) pz += 1;
   if (keys.has('a') || keys.has('arrowleft')) px -= 1;
   if (keys.has('d') || keys.has('arrowright')) px += 1;
-  if (mouse && !drag) {
+  if (mouse && !gestures.dragging) {
     const edge = 6;
     if (mouse.x <= edge) px -= 1;
     if (mouse.x >= vw - 1 - edge) px += 1;
@@ -695,6 +714,7 @@ function frame(now: number) {
   frameTimes.push(now);
   while (frameTimes.length && frameTimes[0]! < now - 1000) frameTimes.shift();
   steer(dt);
+  if (orbit.update()) applyCamera();
   const snap = interp.curr;
   const tUpdate = performance.now();
   if (snap) {
@@ -709,7 +729,6 @@ function frame(now: number) {
         units: interp.units,
         projectiles: interp.projectiles,
         selection,
-        showRoutes: true,
       },
       rig.distance,
       (x, y, z) => worldPerPixel(camera, Math.hypot(x - camera.position.x, y - camera.position.y, z - camera.position.z), vh),
@@ -1253,6 +1272,7 @@ const game = {
   camera: {
     get: (): Rig => ({ ...rig }),
     set: (r: Partial<Rig>) => {
+      orbit.stop();
       Object.assign(rig, r);
       applyCamera();
       return { ...rig };

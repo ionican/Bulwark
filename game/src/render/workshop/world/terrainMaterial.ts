@@ -4,7 +4,10 @@
 // same `aMask` attribute (dark, pave, cliff). Adapted for the game:
 //   - paving under complete buildings comes from a 128 × 128 texture (`tPave`, one texel per
 //     tile, linear filtered) updated when buildings complete, maxed with the vertex mask;
-//   - W17's pools and wet band are removed (the game has no water).
+//   - W17's pools and wet band are removed (the game has no water);
+//   - (Richard's feedback) no rubble patches on the flats (they read as repeating dark blotches; rubble
+//     stays on cliffs), and the sand photo's detail fades to its mean from 60 to 170 tiles from the
+//     camera, so its tiling does not show at the full zoom-out.
 // The material is a MeshStandardMaterial patched in onBeforeCompile, so it keeps three's lights,
 // shadows, fog and image-based lighting:
 //   steep faces → cliff_side photo, projected on the two vertical planes (no stretching), tinted
@@ -104,6 +107,7 @@ const FRAG = /* glsl */ `
   vec3 sAm = textureLod(tSandD, uvS, 7.0).rgb; vec3 sBm = textureLod(tSandD, uvSb, 7.0).rgb;
   vec3 sandPhoto = mix(sA, sB, sw);
   float sandDetail = clamp(mix(lumOf(sA) / max(1e-3, lumOf(sAm)), lumOf(sB) / max(1e-3, lumOf(sBm)), sw), 0.3, 2.2);
+  sandDetail = mix(sandDetail, 1.0, smoothstep(60.0, 170.0, distance(wp, cameraPosition)) * 0.8);
   vec4 sandArm = mix(texture(tSandA, uvS), texture(tSandA, uvSb), sw);
   vec3 snA = unpackN(texture(tSandN, uvS));
   vec3 snB = unpackN(texture(tSandN, uvSb));
@@ -127,8 +131,8 @@ const FRAG = /* glsl */ `
   vec3 darkNrm = normalize(dX.zyx * bw.x + dY.xzy * bw.y + dZ.xyz * bw.z);
   float darkDetail = clamp(lumOf(darkPhoto) / uLum.z, 0.3, 2.0);
   vec3 darkCol = vec3(0.2, 0.05, 0.022) * darkDetail;
-  // rocky rubble patches on the flats
-  float rubble = max(smoothstep(0.58, 0.72, tfbm(wp.xz * 0.11 + 13.0)) * (1.0 - vMask.y * 0.7), cliffM * smoothstep(0.45, 0.6, tfbm(wp.xz * 0.2 - 5.0)));
+  // rocky rubble on cliffs and rock (none on the flats: game adaptation)
+  float rubble = cliffM * smoothstep(0.45, 0.6, tfbm(wp.xz * 0.2 - 5.0));
   vec3 rubbleCol = vec3(0.34, 0.1, 0.045) * darkDetail;
 
   // --- combine
@@ -187,6 +191,6 @@ export function terrainMaterial(bank: TextureBank, pave: Texture, mapW: number, 
       .replace('#include <normal_fragment_maps>', 'normal = normalize(mat3(viewMatrix) * gTerrainN);')
       .replace('#include <aomap_fragment>', '#include <aomap_fragment>\nreflectedLight.indirectDiffuse *= mix(1.0, gTerrainAO, 0.8);\nreflectedLight.indirectSpecular *= mix(1.0, gTerrainAO, 0.8);');
   };
-  m.customProgramCacheKey = () => 'terrain-v1';
+  m.customProgramCacheKey = () => 'terrain-game-v2';
   return m;
 }

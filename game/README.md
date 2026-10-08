@@ -63,7 +63,7 @@ Headless check (`test/fullmap.test.ts`, `test/plans.ts`): W12's balanced plan, p
 ## Controls
 
 Space: pause. Shift+1/2/3: speed. C: call next wave. Y: research panel. H: help.
-Left click or drag: select. Right click with units selected: reclaim a wreck (engineers), help an unfinished site, otherwise move; Shift queues. Build: select the commander or an engineer, pick from the build bar (or its hotkey), click to place; belts: drag for a line, R rotates; Esc or right click cancels. U then click a wall: upgrade it. T: engineers drop a temporary turret. X: stop. Right drag or Q/E: rotate. Wheel: zoom towards the cursor. Middle drag, WASD/arrows or the screen edge: pan. Home: whole map. The debug panel spawns a test group of each alien kind at each entry.
+Left click: select; Shift + left drag: box select. Right click with units selected: reclaim a wreck (engineers), help an unfinished site, otherwise move; Shift queues. Build: select the commander or an engineer, pick from the build bar (or its hotkey), click to place; walls: drag for a run (`buildRun`), belts: drag for a line, R rotates; Esc or right click cancels. U then click a wall: upgrade it. T: engineers drop a temporary turret. X: stop. Camera (W24 run 2a, the workshop's orbit feel, with damping): left drag orbits (turn and tilt, 10°–89° above the horizon); right drag, WASD/arrows or the screen edge: pan on the ground; wheel: zoom towards the cursor; middle drag: dolly; Q/E: turn. A press that moves 5 px or less is a click and never moves the camera. Home: whole map. The debug panel spawns a test group of each alien kind at each entry.
 
 ## Debug hook
 

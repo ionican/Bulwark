@@ -357,7 +357,7 @@ export class ModelRenderer {
     for (const name of new Set(W17_BUILDING_MODEL.values())) addModel(name, BUILDING_MAKERS[name as keyof typeof BUILDING_MAKERS](w));
     addModel('splitterMarker', beltMarker(w, 'splitter'));
     addModel('mergerMarker', beltMarker(w, 'merger'));
-    for (const a of ALIEN_MODEL_NAMES) addModel(a, ALIEN_MAKERS[a](w), ALIEN_SCALE);
+    for (const a of ALIEN_MODEL_NAMES) addModel(a, ALIEN_MAKERS[a](materials.alien), ALIEN_SCALE);
     addModel('wreck', wreckModel(w));
     const alienModel = new Set(ALIEN_MODEL_NAMES.map((a) => this.modelIndex.get(a)!));
     const wreckIdx = this.modelIndex.get('wreck')!;

@@ -46,9 +46,9 @@ export class Hud {
     const help = this.div('hud help');
     this.help = help;
     help.textContent =
-      'Left click / drag: select · Right click: move, assist a site, reclaim a wreck · Shift: queue\n' +
-      'Build: pick from the bar, R rotates belts, drag to lay a belt line, Esc/right click cancels\n' +
-      'Wheel: zoom to cursor · Middle drag, WASD/arrows, screen edge: pan · Q/E or right drag: rotate · Home: whole map\n' +
+      'Left click: select · Shift + left drag: box select · Right click: move, assist a site, reclaim a wreck · Shift: queue\n' +
+      'Build: pick from the bar, click to place, drag to lay a wall run or belt line, R rotates belts, Esc/right click cancels\n' +
+      'Camera: left drag orbits (turn and tilt) · right drag, WASD/arrows, screen edge: pan · wheel: zoom to cursor · middle drag: dolly · Q/E: turn · Home: whole map\n' +
       'Space: pause (orders still work) · Shift+1/2/3: speed · C: call next wave early · Y: research';
     this.box = this.div('boxsel');
   }

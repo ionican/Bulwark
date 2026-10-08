@@ -7,6 +7,9 @@
 //           patched here with the same per-instance data and build cut as W23's, so a W17
 //           building under construction is cut by its snapshot progress exactly like a wall.
 //   depth   W23's depth material (shadows cut at the same height), shared by every batch.
+//   alien   the W17 set for the alien machines, with the hull and trim lightened (W17's near-black
+//           metal read as silhouettes at the game camera) and a warm rim light, so their form and
+//           panel detail read; their shapes still tell the kinds apart (W24 run 2a feedback)
 //   plinth  foundations under buildings on slopes: W17's concrete pad material.
 //   outline reserved sites (no build power yet): unlit, drawn over the scene.
 //
@@ -21,6 +24,7 @@ import { BUILT, createAssetMats, type AssetMats, type MatKey } from './workshop/
 export interface RenderMaterials {
   asset: AssetMats;
   w17: Mats;
+  alien: Mats;
   depth: MeshDepthMaterial;
   plinth: Material;
   outline: Material;
@@ -36,9 +40,10 @@ varying vec3 vCutData;`;
  * emissive is scaled by the glow level, and the instance colour is not used as a tint. Any patch the
  * source material already has (W17's edge wear) runs first.
  */
-export function cutMaterial(src: MeshStandardMaterial): MeshStandardMaterial {
+export function cutMaterial(src: MeshStandardMaterial, opts: { rim?: Color; name?: string } = {}): MeshStandardMaterial {
   const m = src.clone();
-  m.name = `${src.name}-cut`;
+  m.name = opts.name ?? `${src.name}-cut`;
+  const rim = opts.rim ?? null;
   const prev = src.onBeforeCompile;
   const prevKey = src.customProgramCacheKey();
   m.onBeforeCompile = (sh: WebGLProgramParametersWithUniforms, r: WebGLRenderer) => {
@@ -67,6 +72,7 @@ export function cutMaterial(src: MeshStandardMaterial): MeshStandardMaterial {
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
         totalEmissiveRadiance *= vCutData.x;
+        ${rim ? `totalEmissiveRadiance += vec3(${rim.r.toFixed(3)}, ${rim.g.toFixed(3)}, ${rim.b.toFixed(3)}) * pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 2.5);` : ''}
         if (vCutData.z < ${(BUILT * 0.5).toFixed(1)}) {
           float below = vCutData.z - vCutWY;
           float band = smoothstep(0.05, 0.0, below) + smoothstep(0.3, 0.0, below) * 0.15;
@@ -74,7 +80,7 @@ export function cutMaterial(src: MeshStandardMaterial): MeshStandardMaterial {
         }`,
       );
   };
-  m.customProgramCacheKey = () => `${prevKey}|cut`;
+  m.customProgramCacheKey = () => `${prevKey}|cut${rim ? `|rim${rim.getHexString()}` : ''}`;
   return m;
 }
 
@@ -93,10 +99,21 @@ export function createRenderMaterials(bank: TextureBank): RenderMaterials {
   const asset = createAssetMats(bank);
   const w17src = createMaterials(bank);
   const w17 = cutMats(w17src);
+  const rim = new Color(0.55, 0.22, 0.08);
+  const hull = w17src.hull.clone();
+  hull.onBeforeCompile = w17src.hull.onBeforeCompile;
+  hull.customProgramCacheKey = w17src.hull.customProgramCacheKey;
+  hull.color = new Color('#8f8a84');
+  hull.metalness = 0.4;
+  hull.roughness = 0.55;
+  const trim = w17src.trim.clone();
+  trim.color = new Color('#c2c3c8');
+  trim.metalness = 0.5;
+  const alien = { ...w17, hull: cutMaterial(hull, { rim, name: 'alienHull-cut' }), trim: cutMaterial(trim, { rim, name: 'alienTrim-cut' }) };
   const plinth = cutMaterial(w17src.pad);
   plinth.name = 'plinth';
   plinth.color = new Color('#a89a88');
-  return { asset, w17, depth: asset.depth, plinth, outline: outlineMaterial() };
+  return { asset, w17, alien, depth: asset.depth, plinth, outline: outlineMaterial() };
 }
 
 const W17_KEYS: W17Key[] = ['ivory', 'trim', 'copper', 'glow', 'glass', 'void', 'pad', 'hull', 'alienGlow', 'crystal', 'ore', 'belt', 'hot', 'rock'];
@@ -110,5 +127,6 @@ export function standInMaterials(): RenderMaterials {
   const asset: AssetMats = { byKey, depth, noise: new Texture(), all: Object.values(byKey) };
   const w17 = {} as Mats;
   for (const k of W17_KEYS) w17[k] = new MeshStandardMaterial({ name: `${k}-cut` });
-  return { asset, w17, depth, plinth: new MeshStandardMaterial({ name: 'plinth' }), outline: outlineMaterial() };
+  const alien = { ...w17, hull: new MeshStandardMaterial({ name: 'alienHull-cut' }), trim: new MeshStandardMaterial({ name: 'alienTrim-cut' }) };
+  return { asset, w17, alien, depth, plinth: new MeshStandardMaterial({ name: 'plinth' }), outline: outlineMaterial() };
 }

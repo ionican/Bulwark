@@ -38,7 +38,6 @@ export async function createView(
   terrain: Terrain,
   camera: PerspectiveCamera,
   capacity: Capacity,
-  maxSpawnOrigins: number,
   progress: (text: string) => void,
 ): Promise<GameView> {
   const scene = new Scene();
@@ -51,7 +50,7 @@ export async function createView(
     scene.add(sun);
     const terrainView = buildTerrainView(terrain);
     scene.add(terrainView.group);
-    const entities = new EntityRenderer(scene, terrain, capacity, maxSpawnOrigins, { models: true });
+    const entities = new EntityRenderer(scene, terrain, capacity, { models: true });
     adapter.attach(scene, camera);
     return {
       scene,
@@ -86,7 +85,7 @@ export async function createView(
     return atlas;
   });
   scene.add(models.group);
-  const entities = new EntityRenderer(scene, terrain, capacity, maxSpawnOrigins, { models: false });
+  const entities = new EntityRenderer(scene, terrain, capacity, { models: false });
   const terrainView = buildTerrainView(terrain, { ground: false });
   scene.add(terrainView.group);
   adapter.attach(scene, camera);

@@ -99,6 +99,31 @@ function distToSegment(px: number, pz: number, ax: number, az: number, bx: numbe
   return Math.sqrt(dx * dx + dz * dz);
 }
 
+const DEPOSIT_CENTRES: ReadonlyArray<readonly [number, number]> = [...MASS_DEPOSITS, ...RARE_POINTS.map(([tx, ty]) => [tx, ty] as [number, number])].map(([tx, ty]) => [tx + 1, ty + 1] as const);
+
+/**
+ * Map 1's rolling ground at a grid point, before rock outcrops (W24 run 2a, Richard's feedback: the
+ * earlier ground read as flat): rises and dips of about 0.5–1.5 tiles over 15–40 tiles, a little
+ * flatter round the base and the deposits. Defined beyond the map too, so the drawn scenery carries
+ * the same ground on past the edge. Heights are stored and drawn only: nothing in the simulation
+ * reads them (movement, combat and flow costs use tiles), so the gameplay does not depend on them.
+ * Integer hashing and polynomial smoothing only, as the rest of this file.
+ */
+export function rollingHeight(x: number, z: number): number {
+  const n = valueNoise(x, z, 37, 1) * 2.6 + valueNoise(x, z, 17, 2) * 1.3 + valueNoise(x, z, 7, 3) * 0.3;
+  const bx = x - BASE.x;
+  const bz = z - BASE.z;
+  const d = Math.sqrt(bx * bx + bz * bz);
+  let flat = d < 10 ? 0.3 : d > 32 ? 1 : 0.3 + 0.7 * smooth((d - 10) / 22);
+  for (const [cx, cz] of DEPOSIT_CENTRES) {
+    const dx = x - cx;
+    const dz = z - cz;
+    const dd = Math.sqrt(dx * dx + dz * dz);
+    if (dd < 7) flat = Math.min(flat, 0.4 + 0.6 * smooth(dd < 2.5 ? 0 : (dd - 2.5) / 4.5));
+  }
+  return 1.3 + (n - 1.3) * flat;
+}
+
 let cached: Terrain | null = null;
 
 /** Map 1 terrain. Cached: the result is shared and must be treated as read-only. */
@@ -141,15 +166,10 @@ export function map1Terrain(): Terrain {
   for (const [tx, ty] of MASS_DEPOSITS) for (let j = 0; j < 2; j++) for (let i = 0; i < 2; i++) tiles[(ty + j) * w + tx + i] = TILE_MASS;
   for (const [tx, ty] of RARE_POINTS) for (let j = 0; j < 2; j++) for (let i = 0; i < 2; i++) tiles[(ty + j) * w + tx + i] = TILE_RARE;
 
-  // Gentle rolling ground, flattened round the base; rock tiles raise their corner vertices.
+  // Rolling ground (rollingHeight below); rock tiles raise their corner vertices.
   for (let z = 0; z <= h; z++) {
     for (let x = 0; x <= w; x++) {
-      let n = valueNoise(x, z, 32, 1) * 2.4 + valueNoise(x, z, 12, 2) * 0.8 + valueNoise(x, z, 5, 3) * 0.2;
-      const bx = x - BASE.x;
-      const bz = z - BASE.z;
-      const d = Math.sqrt(bx * bx + bz * bz);
-      const flat = d < 14 ? 0 : d > 30 ? 1 : smooth((d - 14) / 16);
-      n = 0.8 + (n - 0.8) * flat;
+      const n = rollingHeight(x, z);
       let rockN = 0;
       for (let j = -1; j <= 0; j++) for (let i = -1; i <= 0; i++) {
         const tx = x + i;

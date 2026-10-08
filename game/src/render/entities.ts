@@ -1,16 +1,16 @@
 // Instanced drawing of everything the simulation sends: buildings, aliens, player units, wrecks,
 // belt items, projectiles, beams, shields, construction frames, health bars, the aliens' predicted
-// routes and selection markers. One InstancedMesh per kind per detail level, so the draw-call count
+// and selection markers. One InstancedMesh per kind per detail level, so the draw-call count
 // depends on the number of kinds, not the number of entities.
 // Each frame every entity is frustum-tested, given its own LOD by camera distance (with hysteresis,
 // see lod.ts) and written straight into its mesh's instance matrix array.
 // W24 construction states are drawn by shape: a reserved site as a dotted outline only, a started
 // site as the scaffold frame round its growing model, a complete building as its model. A gate is
 // its 3 × depth footprint box with the centre column open (the corridor), turned to its axis.
-// Sandbox spawn-origin routes are drawn with the same markers as the entry routes.
+// W24 run 2a (Richard): alien routes are not drawn (the simulation still computes them).
 // W24 run 2a: this is W13's greybox renderer. With `models: false` (the default view; models.ts
 // draws every building, unit, alien and wreck) it draws only the overlays: belt items, health bars,
-// beams and work lines, shields, shots, routes and selection markers. With `models: true`
+// beams and work lines, shields, shots and selection markers. With `models: true`
 // (`?greybox=1`) it draws everything, as in W13. Heights come from the drawn ground (ground.ts).
 // Its model batches are named `greybox/…`, so a scene inspection can tell them apart.
 
@@ -28,7 +28,7 @@ import {
   type PerspectiveCamera,
   type Scene,
 } from 'three';
-import { B, BUILDING_KINDS, CATEGORY_COUNT, ITEM_PART, SHIELD, U, UNIT_KINDS, ALIEN_KINDS, alienInfo, isBelt, unitInfo } from '../sim/kinds.ts';
+import { B, BUILDING_KINDS, ITEM_PART, SHIELD, U, UNIT_KINDS, ALIEN_KINDS, alienInfo, isBelt, unitInfo } from '../sim/kinds.ts';
 import { BF_COMPLETE, BF_FIRING, BF_UPGRADING, isReserved } from '../sim/schema.ts';
 import type { Terrain } from '../sim/terrain.ts';
 import { groundHeight as heightAt } from './ground.ts';
@@ -45,7 +45,6 @@ import {
   lineGeometry,
   projectileGeometries,
   reservedOutlineGeometry,
-  routeMarkerGeometries,
   selectionMarkerGeometry,
   shieldDomeGeometry,
   unitGeometries,
@@ -203,7 +202,6 @@ export interface FrameInput {
   units: MobileView;
   projectiles: MobileView;
   selection: readonly Pick[];
-  showRoutes: boolean;
 }
 
 export class EntityRenderer {
@@ -218,7 +216,6 @@ export class EntityRenderer {
   private readonly frames: Batch;
   private readonly reserved: Batch;
   private readonly bars: Batch; // 0 back, 1 fill
-  private readonly routes: Batch;
   private readonly markers: Batch;
   private readonly lod: { b: Uint8Array; bId: Uint32Array; a: Uint8Array; aId: Uint32Array; u: Uint8Array; uId: Uint32Array; w: Uint8Array; wId: Uint32Array };
   /** Row of each live alien / building / wreck by slot, for id lookups this frame. */
@@ -235,7 +232,7 @@ export class EntityRenderer {
   private readonly terrain: Terrain;
   private wppPerDist = 0;
 
-  constructor(scene: Scene, terrain: Terrain, capacity: Capacity, maxSpawnOrigins: number, opts: { models: boolean }) {
+  constructor(scene: Scene, terrain: Terrain, capacity: Capacity, opts: { models: boolean }) {
     this.terrain = terrain;
     this.models = opts.models;
     const C = capacity;
@@ -263,8 +260,6 @@ export class EntityRenderer {
     const fill = new MeshBasicMaterial({ color: '#f4efe6', depthTest: false, depthWrite: false });
     this.bars = new Batch(scene, [barGeometry(), barGeometry()], [back, fill], 1024, 13, C.buildings + C.aliens + C.units);
     this.bars.meshes[1]!.renderOrder = 14;
-    // Route markers: at least 3 tiles apart on routes of at most 601 tiles, 4 per entry plus 8 origins.
-    this.routes = new Batch(scene, routeMarkerGeometries(), [icon], 1024, 8, Math.ceil(601 / 3) * (terrain.entries.length * CATEGORY_COUNT + maxSpawnOrigins));
     this.markers = new Batch(scene, [selectionMarkerGeometry()], [icon], 2048, 15, C.buildings + C.aliens + C.units + C.wrecks);
     if (BUILDING_KINDS.length + ALIEN_KINDS.length + UNIT_KINDS.length === 0) throw new Error('no kinds');
   }
@@ -353,7 +348,6 @@ export class EntityRenderer {
     this.drawWorkLines(f);
     this.drawWrecks(snap, yc, ys);
     this.drawShots(f.projectiles);
-    if (f.showRoutes) this.drawRoutes(snap);
     this.drawSelection(f, wppd);
     for (const b of this.allBatches()) b.commit();
     void t;
@@ -538,63 +532,6 @@ export class EntityRenderer {
     }
   }
 
-  private routeCats = new Map<number, number>();
-  private routeCatsVersion = -1;
-
-  /**
-   * Markers along each predicted route, spaced to a constant screen distance. Where routes of
-   * several categories share a tile, one marker is drawn there and its shape cycles through the
-   * categories that pass, so a shared stretch shows every alien kind that will use it.
-   */
-  private drawRoutes(snap: Snapshot) {
-    if (this.routeCatsVersion !== snap.routesVersion) {
-      this.routeCats.clear();
-      for (const list of [snap.routes, snap.originRoutes])
-        for (const r of list) for (const c of r.cells) this.routeCats.set(c, (this.routeCats.get(c) ?? 0) | (1 << r.category));
-      this.routeCatsVersion = snap.routesVersion;
-    }
-    for (const r of snap.routes) this.drawRoute(r.cells, r.category);
-    for (const r of snap.originRoutes) this.drawRoute(r.cells, r.category);
-  }
-
-  private readonly cats: number[] = [];
-
-  /** Markers along one route (entry or spawn origin), spaced to a constant screen distance. */
-  private drawRoute(cells: Uint16Array, category: number) {
-    const t = this.terrain;
-    const W = t.w;
-    const wppd = this.wppPerDist;
-    const cats = this.cats;
-    if (cells.length < 2) return;
-    let i = 1;
-    let n = 0;
-    while (i < cells.length - 1) {
-      const c0 = cells[i]!;
-      const mask = this.routeCats.get(c0) ?? 0;
-      // Only the lowest category through this tile draws it.
-      if ((mask & ((1 << category) - 1)) === 0) {
-        const c1 = cells[i + 1]!;
-        const x = (c0 % W) + 0.5;
-        const z = Math.floor(c0 / W) + 0.5;
-        const dx = (c1 % W) - (c0 % W);
-        const dz = Math.floor(c1 / W) - Math.floor(c0 / W);
-        const l = Math.sqrt(dx * dx + dz * dz) || 1;
-        const y = heightAt(t, x, z) + 0.2;
-        const wpp = wppd * this.distTo(x, y, z);
-        if (this.visible(x, y, z, 1)) {
-          cats.length = 0;
-          for (let k = 0; k < CATEGORY_COUNT; k++) if (mask & (1 << k)) cats.push(k);
-          const cat = cats[n % cats.length]!;
-          const s = Math.max(0.35, ICON_PX.route * wpp);
-          // Marker "up" (-Z) turned onto the route direction: rotation (cos, sin) = (-uz, -ux).
-          this.routes.push(cat, -dz / l, -dx / l, s, 1, s, x, y, z);
-        }
-        n++;
-        i += Math.max(3, Math.round(ICON_PX.route * 5 * wpp));
-      } else i++;
-    }
-  }
-
   private drawSelection(f: FrameInput, wppd: number) {
     const t = this.terrain;
     const add = (x: number, z: number, half: number, iconPx: number) => {
@@ -635,7 +572,7 @@ export class EntityRenderer {
   }
 
   private allBatches(): Batch[] {
-    return [this.buildings, this.aliens, this.units, this.wrecks, this.items, this.shots, this.lines, this.shields, this.frames, this.reserved, this.bars, this.routes, this.markers];
+    return [this.buildings, this.aliens, this.units, this.wrecks, this.items, this.shots, this.lines, this.shields, this.frames, this.reserved, this.bars, this.markers];
   }
 }
 
