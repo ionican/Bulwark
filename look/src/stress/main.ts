@@ -156,6 +156,8 @@ async function main(): Promise<void> {
     preset: 'game' as PresetName | 'free',
     bands: false,
     compare: false,
+    /** Debug: draw every turret at one level (null = by distance). */
+    force: null as number | null,
   };
   const presets: Record<PresetName, CamView> = {} as Record<PresetName, CamView>;
   const cmp = { c: 0, d: 1, yaw: 0, pitch: 4 * DEG };
@@ -179,15 +181,16 @@ async function main(): Promise<void> {
       }
       return best;
     };
-    const c = front(45);
+    // the north corridor's front: aliens climb the ramp and hold here
+    const c = front(78);
     const cs = sites[c]!;
     // from inside the base, looking out past the front-line turret towards the aliens; high enough
     // (24°) for the line of sight to clear the heads of the turrets in between
     const ob = Math.atan2(-(cs.z - BASE.z), cs.x - BASE.x);
     const inward = Math.atan2(-Math.cos(ob), Math.sin(ob)) / DEG;
     presets.close = { target: [cs.x + Math.cos(ob) * 0.8, cs.y + 0.8, cs.z - Math.sin(ob) * 0.8], distance: 8.5, elevation: 24, azimuth: inward - 30, fov: 35 };
-    const gx = BASE.x + Math.cos(45 * DEG) * 10;
-    const gz = BASE.z - Math.sin(45 * DEG) * 10;
+    const gx = BASE.x + Math.cos(45 * DEG) * 14;
+    const gz = BASE.z - Math.sin(45 * DEG) * 14;
     presets.game = { target: [gx, 0, gz], distance: 50, elevation: 68.9, azimuth: -45, fov: 45 };
     presets.mid = { target: [gx, 0, gz], distance: 115, elevation: 60, azimuth: -45, fov: 45 };
     presets.far = { target: [BASE.x + 12, 0, BASE.z - 12], distance: 235, elevation: 65, azimuth: -45, fov: 45 };
@@ -271,7 +274,9 @@ async function main(): Promise<void> {
   const setCompare = (on: boolean) => {
     s.compare = on;
     if (on && s.perTurret) setPerTurret(false);
-    document.body.classList.toggle('compare', on);
+    document.body.classList.toggle('cmp21', on);
+    // effects frozen in mid-air would cross the pair
+    for (const m of [fx.smokeMesh, fx.glowMesh, tracers.mesh]) m.visible = !on;
     compareRig.root.visible = on;
     if (!on) return;
     s.paused = true;
@@ -299,7 +304,8 @@ async function main(): Promise<void> {
     const bz = az * Math.cos(25 * DEG) + oz * Math.sin(25 * DEG);
     cmp.yaw = Math.atan2(-bz, bx);
     cmp.pitch = 4 * DEG;
-    cam.go({ target: [(c.x + d.x) / 2, Math.max(c.y, d.y) + 0.62, (c.z + d.z) / 2], distance: 9.5, elevation: 14, azimuth: Math.atan2(ox, oz) / DEG, fov: 24 }, true);
+    // centred a little towards W20's turret so both barrels are in frame
+    cam.go({ target: [(c.x + d.x) / 2 + ax * 0.5, Math.max(c.y, d.y) + 0.62, (c.z + d.z) / 2 + az * 0.5], distance: 10, elevation: 16, azimuth: Math.atan2(ox, oz) / DEG, fov: 24 }, true);
     s.preset = 'free';
   };
 
@@ -593,7 +599,7 @@ async function main(): Promise<void> {
       const y = bankT.py[i]! + 0.8;
       const z = bankT.pz[i]!;
       const d = Math.hypot(x - cp.x, y - cp.y, z - cp.z);
-      level[i] = chooseLevel(level[i]!, d);
+      level[i] = s.force ?? chooseLevel(level[i]!, d);
       sphere.center.set(x, y, z);
       // generous radius: a turret just outside the view still casts its shadow into it
       sphere.radius = level[i]! <= 1 ? 4 : 1.8;
@@ -675,6 +681,7 @@ async function main(): Promise<void> {
     const aliensDrawn = alienDraw.update(sim, simT, frustum);
     alienDraw.setWrecks(wrecks);
     tracers.update(shells, cp, wppd, 2.2);
+    if (s.compare) tracers.mesh.visible = false;
     casingMesh.update(casings);
     fx.update(sdt, camera);
     const q = QUALITY[s.quality];
@@ -809,6 +816,10 @@ async function main(): Promise<void> {
     timeScale: ((v: number) => (s.timeScale = v)) as never,
     bands: ((v: boolean) => (s.bands = v)) as never,
     compare: ((v: boolean) => setCompare(v)) as never,
+    forceLevel: ((l: number | null) => {
+      s.force = l;
+      level.fill(l ?? LEVEL_NEW);
+    }) as never,
     levels: (() => levels.map((l) => ({ name: l.name, triangles: l.triangles, batches: l.batches.length, shadowBatches: l.batches.filter((b) => b.castShadow).length }))) as never,
     presets: (() => presets) as never,
     lanes: (() => LANES.map((l) => l.name)) as never,
