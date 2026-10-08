@@ -120,9 +120,61 @@ The greybox renderer draws: gates (footprint box with the corridor marked by a g
 12. **Determinism and continuation:** as described above.
 13. Existing 77 tests keep passing (updated where the construction-state change requires it, each update listed); the balanced plan result reported.
 
-## Run 2 — renderer port (outline; planned after run 1)
+## Run 2 — renderer port (planned 2026-10-08 after run 1 closed at `60ebba6`)
 
-Port geometry, materials and pure rigs, not the workshop's simulation logic (Codex 17): W17 lighting, photo-textured materials and post-processing; a terrain mesh built from the game's own heightfield (one ground source for mesh, picking and feet); W21/W22 instanced turret parts with a frozen mapping from each game turret kind to a kit kind; W23 walls, gates with doors, extractors, engineer and commander rigs, strategic-zoom icons; W21 alien models. All driven by snapshot adapters. Wall topology rebuilds only when the wall layout changes; damage and progress update instance attributes (Codex 18). Buildings without a model keep a labelled placeholder. Default quality medium, device pixel ratio capped as in the workshop's medium setting.
+Goal: the sandbox and map 1 draw with the W17–W23 models, lighting and textures instead of greybox shapes, driven only by simulation snapshots, at 55 fps or better at the game camera on codepanda. Gameplay, simulation and snapshot format do not change.
+
+### What is ported, and from where
+
+Port into `game/src/render/` (copy and adapt; `look/` stays unchanged as the workshop record). Port geometry, materials, rigs and pure animation only — never the workshop's own simulation or demo controllers (`look/src/w23/units.ts` task logic, `look/src/stress/aliens.ts` wave movement, `look/src/stress/fireControl.ts` targeting, `look/src/w23/world.ts` construction logic) (Codex round 1, finding 17).
+
+| Game thing | Source | Notes |
+|---|---|---|
+| Lighting, shadows, haze, post-processing | `look/src/render/{lighting,fog,post,camera}.ts`, `look/src/stress/post.ts` | Default quality **medium**, device pixel ratio capped at 1 on medium as in the workshop; high stays selectable. |
+| Photo-textured materials | `look/src/assets/{textures,composite}.ts`, `look/src/models/materials.ts`, `look/src/w23/mats.ts` | Copy only the CC0 texture sets actually used into `game/public/assets/`, with `CREDITS.md`. |
+| Terrain | `look/src/world/terrainMesh.ts` shading and materials | **Inside the 128 × 128 map: the mesh follows the game's own terrain** (`game/src/sim/terrain.ts` tiles and heights); rock tiles drawn as raised terraced outcrops in the W17 style. **Outside the map edge: W17-style canyon scenery** (terraced canyon walls, haze), cosmetic only. One height function is used by the terrain mesh, picking, unit feet, building bases and alien feet. |
+| Turrets | W21/W22 kit: `look/src/kit/*`, `look/src/stress/{turretInstanced,turretLevels,turretMid,turretPose,lod}.ts` | One instanced batch per part and level (W21). Frozen mapping, game kind → kit kind: **gun → bastion** (W20's turret), **area → anvil** (howitzer), **beam → lantern**, **heavy → rampart** (long barrel on a bunker base), **tempTurret → lookout** (light twin on a mast). Aim: yaw and pitch towards the snapshot's `target` alien, using W20's aim solver (`look/src/bench/aim.ts`) render-side; recoil and muzzle flash on shots seen in the snapshot's projectiles. |
+| Walls and gates | `look/src/w23/walls/*`, `look/src/w23/{batches,parts,lod}.ts` | Auto-joining tiles, tiers, two damage states from the hit-point fraction, gate doors that open when a player unit is within 2 tiles (cosmetic). **The wall topology rebuilds only when the set of wall and gate tiles changes** (a layout version in the render adapter, computed from the snapshot); damage and construction progress update per-instance attributes only (Codex round 1, finding 18). |
+| Construction sites | `look/src/w23/world.ts` site look, `look/src/bench/construction.ts` | Reserved = ghost outline; started = the W23 site look rising with `progress`; complete = finished. Shape and outline, never colour alone. |
+| Extractors | `look/src/w23/extractors.ts` | Mass and rare; animated while working. |
+| Commander and engineers | `look/src/w23/rig/*`, `look/src/w23/beams.ts` | Animation from snapshot state only: walking (planted feet from distance moved), building (nano-beam to the site in `work`), carrying (from `carry`), idle. |
+| Aliens | W21 alien models and gait from `look/src/stress/aliens.ts` (geometry and gait only) | The game's four kinds: rusher, hunter, breaker, saboteur. |
+| Other buildings | W17 procedural buildings, `look/src/models/procedural/buildings.ts` | Generator, research station, depot, shredder, smelter, assembler, shield generator, belts, splitter, merger. Any kind with no fitting model keeps the greybox shape with its label; list each. |
+| Shots and effects | `look/src/fx/{particles,tracers}.ts`, `look/src/stress/effects.ts` | Pooled and capped as in W21. |
+| Strategic zoom | `look/src/w23/icons.ts`, `look/src/kit/icons.ts` | Icons for every kind at full zoom-out; shape-coded. |
+
+Health bars and the selection ring use tuned maximum hit points (run 1 open item). Draw-batch capacities follow the simulation tables (run 1 review finding 4 rule).
+
+`?greybox=1` keeps the W13 renderer, for comparison until Richard signs off the look; it is removed in run 3.
+
+### Run 2 acceptance criteria
+
+1. **Snapshot-only:** the renderer imports nothing from `game/src/sim` that mutates state; a test asserts the render adapters take a decoded snapshot and the render-side interpolation only.
+2. **Coverage:** `__game.renderInfo()` returns, per building kind, unit kind and alien kind, the batch family used and triangles at each detail level; every kind listed in the table above uses its named source (not greybox), and greybox is used only by kinds named as having no model.
+3. **Turret mapping:** a test checks the frozen mapping table covers every turret kind and that each kit kind exists.
+4. **Wall topology:** a test drives the wall adapter with snapshots where only hit points and progress change → zero topology rebuilds; one tile added or removed → exactly one rebuild.
+5. **One ground:** a test samples 1,000 points inside the map; terrain mesh height (by barycentric interpolation of the mesh), the picking height and the feet height agree within 0.01 tiles.
+6. **Capacity:** with three maximum wall runs (1,536 reserved tiles) and 500 aliens, every instance is drawn, overflow false.
+7. **Browser:** `?sandbox=1` and map 1 load with 0 console errors; a 20-tile wall run, a gate, a gun turret and spawned aliens all appear with their models (via `renderInfo()` counts of visible instances per kind).
+8. **Performance** (automated, `game/scripts/bench-render.mjs` in agent-browser): new preset `?sandbox=1&bench=1` — indestructible, respawning population of 400 wall tiles including 2 gates, 40 engineers, the commander, 11 extractors, 100 turrets (20 of each mapped kind), 300 aliens — at medium quality, device pixel ratio 1, 1440 × 900, fixed game-camera pose: after 5 s warm-up, over 20 s, **average ≥ 55 fps and 1%-low ≥ 45 fps**; the script also reports visible instance counts, draw calls, triangles, worker tick ms, and the same at full strategic zoom-out (reported, not gated). It exits non-zero if the gate fails or the population falls below 90% of target.
+9. **Screenshots for Richard** (agent-browser, saved to the vault at `Resources/Bulwark Art Reference/w24-r2-*.png`): game camera over the base with a wall run under construction and a gate; close-up of engineers building; aliens attacking a wall; full strategic zoom-out.
+10. Run 1's tests stay green; the fingerprint script (`game/scripts/fingerprint.test.ts`) is identical before and after (the simulation must not change).
+
+### Verify command — run 2 (frozen)
+
+```bash
+cd ~/Projects/worktrees/bulwark-w24/game && npm ci --no-audit --no-fund >/dev/null && \
+npx vitest run test/w24r2-*.test.ts && npm test && npm run build && \
+(cd ../look && npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit) && \
+node scripts/check-render.mjs && node scripts/bench-render.mjs
+```
+
+Fails on the current tree: no `test/w24r2-*` files (vitest exits 1) and neither script exists. The calling session re-runs it, re-runs the fingerprint comparison against `60ebba6`, reads the new tests against criteria 1–6, and looks at the screenshots itself before Richard does. The look needs Richard's sign-off; a green Verify is not a visual pass.
+
+### Run 2 decisions made here (Richard can overturn)
+
+- **Terrain:** the playable map keeps the game's own gently rolling ground (the simulation does not use height, and buildings can go anywhere, so W17's pre-flattened building pads cannot carry over); the red-canyon look comes from W17 textures, lighting, haze, terraced outcrops on rock tiles and canyon scenery beyond the map edge. The alternative — making map 1 itself a canyon — changes the playable map and needs a design decision first.
+- **Turret mapping** as in the table; changing it later is a one-line edit.
 
 ## Run 3 — panel, controls and benchmark (outline; planned after run 2)
 
