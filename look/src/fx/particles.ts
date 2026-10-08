@@ -248,16 +248,22 @@ export class Particles {
   readonly smokeMesh: Mesh;
   readonly glowMesh: Mesh;
   readonly atlas: Texture;
-  private smoke = new Pool(5000);
-  private glow = new Pool(5000);
+  private smoke: Pool;
+  private glow: Pool;
   private emitters: Emitter[] = [];
   private rnd = new Rand(321);
-  private order = new Uint32Array(5000);
-  private depth = new Float32Array(5000);
+  private order: Uint32Array;
+  private depth: Float32Array;
   private wind = new Vector3(0.9, 0, -0.35);
   readonly smokeUniforms: { uSun: { value: Color }; uAmb: { value: Color } };
 
-  constructor() {
+  /** Pool sizes: particles beyond a cap are not spawned (W17 and W20 use 5000 each). */
+  constructor(caps: { smoke?: number; glow?: number } = {}) {
+    this.smoke = new Pool(caps.smoke ?? 5000);
+    this.glow = new Pool(caps.glow ?? 5000);
+    const most = Math.max(this.smoke.cap, this.glow.cap);
+    this.order = new Uint32Array(most);
+    this.depth = new Float32Array(most);
     this.atlas = puffAtlas();
     const mk = (pool: Pool, frag: string, additive: boolean, uniforms: Record<string, { value: unknown }>) => {
       const quad = new PlaneGeometry(1, 1);
@@ -297,6 +303,11 @@ export class Particles {
 
   get count(): number {
     return this.smoke.n + this.glow.n;
+  }
+
+  /** Live and maximum particles per pool, and the number of persistent emitters. */
+  get usage(): { smoke: number; smokeCap: number; glow: number; glowCap: number; emitters: number } {
+    return { smoke: this.smoke.n, smokeCap: this.smoke.cap, glow: this.glow.n, glowCap: this.glow.cap, emitters: this.emitters.length };
   }
 
   spawn(p: ParticleSpec): void {

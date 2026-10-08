@@ -116,14 +116,17 @@ export class Lighting {
     (this.sun.shadow as unknown as { map: null }).map = null;
   }
 
-  /** Fit the shadow camera to the view frustum up to `reach` world units from the camera. */
-  update(camera: PerspectiveCamera, targetDist: number): void {
+  /**
+   * Fit the shadow camera to the view frustum up to `reach` world units from the camera (default
+   * 2.1 × the target distance + 30; W21 passes a shorter reach to keep shadows near the camera).
+   */
+  update(camera: PerspectiveCamera, targetDist: number, reachOverride?: number): void {
     // haze relative to the looked-at distance
     this.fog.near = targetDist * 0.75;
     this.fog.far = 50 + targetDist * 1.0;
     this.sky.position.copy(camera.position);
 
-    const reach = Math.min(camera.far, targetDist * 2.1 + 30);
+    const reach = Math.min(camera.far, reachOverride ?? targetDist * 2.1 + 30);
     const inv = camera.projectionMatrixInverse;
     let k = 0;
     for (const zN of [-1, 1]) {
