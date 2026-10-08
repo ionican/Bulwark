@@ -120,6 +120,16 @@ export const US_WAITING = 5;
 export const UNIT_IDLE = US_IDLE;
 export const UNIT_MOVING = US_MOVING;
 
+/**
+ * W25: order kinds in the snapshot's queue section (snapshot.ts), one per units.ts Order type.
+ * Here, not in snapshot.ts, because render code may import only the pure data modules.
+ */
+export const Q_MOVE = 0;
+export const Q_BUILD = 1;
+export const Q_RUN = 2;
+export const Q_PRODUCE = 3;
+export const Q_RECLAIM = 4;
+
 export const WRECK_FIELDS = [
   { name: 'kind', type: 'u8' },
   { name: 'x', type: 'f32' },

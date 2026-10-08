@@ -48,6 +48,7 @@ export class Hud {
     help.textContent =
       'Left click: select · Shift + left drag: box select · Right click: move, assist a site, reclaim a wreck · Shift: queue\n' +
       'Build: pick from the bar, click to place, drag to lay a wall run or belt line, R rotates belts, Esc/right click cancels\n' +
+      'Queue: Shift adds an order to the selected units’ queues, no Shift replaces them; Shift held keeps the build tool, releasing it closes it\n' +
       'Camera: left drag orbits (turn and tilt) · right drag, WASD/arrows, screen edge: pan · wheel: zoom to cursor · middle drag: dolly · Q/E: turn · Home: whole map\n' +
       'Space: pause (orders still work) · Shift+1/2/3: speed · C: call next wave early · Y: research';
     this.box = this.div('boxsel');
@@ -105,5 +106,10 @@ export class Hud {
     }
     this.sel.style.display = '';
     this.sel.textContent = lines.join(' · ');
+  }
+
+  /** CSS px from the viewport bottom to just above the selection panel (W25: the queue panel sits there). */
+  aboveSelection(): number {
+    return this.sel.style.display === 'none' ? 8 : 8 + this.sel.offsetHeight + 6;
   }
 }

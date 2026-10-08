@@ -18,7 +18,7 @@
 
 import { B, buildingInfo } from './kinds.ts';
 import { BF_COMPLETE, constructionState, isReserved } from './schema.ts';
-import { TILE_ROCK, tileAt } from './terrain.ts';
+import { TILE_ROCK, tileAt, type Terrain } from './terrain.ts';
 import type { World } from './world.ts';
 
 export const RUN_CAPACITY = 32;
@@ -37,6 +37,8 @@ export interface RunPlan {
   /** Tiles to lay, in build order. */
   tiles: Array<[number, number]>;
   skipped: { rock: number; wall: number; blocked: number; total: number };
+  /** W25: the skipped tiles themselves, in the same order (the drag preview draws them). */
+  skippedAt: Array<[number, number]>;
   axis: 'x' | 'z';
   /** Which end the build starts from. */
   start: 'from' | 'to';
@@ -49,12 +51,49 @@ export interface RunCommand {
   depth: number;
 }
 
+/**
+ * What planning a run reads (W25): the simulation passes its world (planRun), the render thread's
+ * drag preview its latest snapshot (dragPlan.ts), so both lay out exactly the same tiles.
+ */
+export interface RunPlanSource {
+  terrain: Terrain;
+  /** A wall or gate stands on the tile (any construction state). */
+  wallAt(x: number, y: number): boolean;
+  /** A tier-1 wall may be placed on the tile (world.ts canPlaceOn). */
+  canPlaceWall(x: number, y: number): boolean;
+}
+
 /** Geometry and build order of a run, or the reason it is refused. Pure: creates nothing. */
 export function planRun(w: World, cmd: RunCommand): RunPlan | string {
+  // Which end is nearer the builders' centroid (no builders: none, and the from end is used).
+  let n = 0;
+  let cx = 0;
+  let cz = 0;
+  for (const id of cmd.ids) {
+    const s = w.units.slotForId(id);
+    if (s < 0) continue;
+    cx += w.units.cols.x[s]!;
+    cz += w.units.cols.z[s]!;
+    n++;
+  }
+  const W = w.terrain.w;
+  const src: RunPlanSource = {
+    terrain: w.terrain,
+    wallAt: (x, y) => {
+      const occ = w.occupancy[y * W + x]! - 1;
+      return occ >= 0 && buildingInfo(w.buildings.cols.kind[occ]!).role === 'wall';
+    },
+    canPlaceWall: (x, y) => w.canPlace(B.wall, x, y),
+  };
+  return planRunOn(src, cmd, n > 0 ? [cx / n, cz / n] : null);
+}
+
+/** planRun over any source; `centroid` is the builders' mean position (null: no builders). */
+export function planRunOn(src: RunPlanSource, cmd: { from: [number, number]; to: [number, number]; depth: number }, centroid: [number, number] | null): RunPlan | string {
   const [fx, fy] = cmd.from;
   const [tx, ty] = cmd.to;
-  const W = w.terrain.w;
-  const H = w.terrain.h;
+  const W = src.terrain.w;
+  const H = src.terrain.h;
   const inside = (x: number, y: number) => x >= 0 && y >= 0 && x < W && y < H;
   if (!inside(fx, fy) || !inside(tx, ty)) return `run ends must be on the map (0..${W - 1}, 0..${H - 1})`;
   const dx = tx - fx;
@@ -68,25 +107,15 @@ export function planRun(w: World, cmd: RunCommand): RunPlan | string {
   const side = across < 0 ? -1 : 1;
   // Which end is nearer the builders' centroid (tie, or no builders: the from end).
   let start: 'from' | 'to' = 'from';
-  let n = 0;
-  let cx = 0;
-  let cz = 0;
-  for (const id of cmd.ids) {
-    const s = w.units.slotForId(id);
-    if (s < 0) continue;
-    cx += w.units.cols.x[s]!;
-    cz += w.units.cols.z[s]!;
-    n++;
-  }
-  if (n > 0) {
-    cx /= n;
-    cz /= n;
+  if (centroid) {
+    const [cx, cz] = centroid;
     const endX = axis === 'x' ? fx + along : fx;
     const endY = axis === 'x' ? fy : fy + along;
     const d2 = (x: number, y: number) => (x + 0.5 - cx) ** 2 + (y + 0.5 - cz) ** 2;
     if (d2(endX, endY) < d2(fx, fy)) start = 'to';
   }
   const tiles: Array<[number, number]> = [];
+  const skippedAt: Array<[number, number]> = [];
   const skipped = { rock: 0, wall: 0, blocked: 0, total: 0 };
   for (let i = 0; i < length; i++) {
     const u = start === 'from' ? i : length - 1 - i;
@@ -94,20 +123,18 @@ export function planRun(w: World, cmd: RunCommand): RunPlan | string {
       const x = axis === 'x' ? fx + step * u : fx + side * v;
       const y = axis === 'x' ? fy + side * v : fy + step * u;
       if (!inside(x, y)) skipped.blocked++;
-      else if (tileAt(w.terrain, x, y) === TILE_ROCK) skipped.rock++;
+      else if (tileAt(src.terrain, x, y) === TILE_ROCK) skipped.rock++;
+      else if (src.wallAt(x, y)) skipped.wall++; // wall or gate
+      else if (!src.canPlaceWall(x, y)) skipped.blocked++;
       else {
-        const occ = w.occupancy[y * W + x]! - 1;
-        if (occ >= 0 && buildingInfo(w.buildings.cols.kind[occ]!).role === 'wall') skipped.wall++; // wall or gate
-        else if (!w.canPlace(B.wall, x, y)) skipped.blocked++;
-        else {
-          tiles.push([x, y]);
-          continue;
-        }
+        tiles.push([x, y]);
+        continue;
       }
       skipped.total++;
+      skippedAt.push([x, y]);
     }
   }
-  return { tiles, skipped, axis, start };
+  return { tiles, skipped, skippedAt, axis, start };
 }
 
 /** Null if a run with `tiles` new sites fits the run table and the building table. */

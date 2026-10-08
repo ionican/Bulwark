@@ -1,6 +1,8 @@
 // Player commands: main thread -> worker. The worker stamps each with the tick it applies to,
 // so a replay of (seed, scenario, stamped commands) reproduces a game exactly.
-// `queue: true` appends the order to the units' queues instead of replacing them.
+// `queue: true` appends the order to the units' queues instead of replacing them. W25: replacing
+// (or removing, with dequeue and clearQueue) an order removes any reserved site no unit has queued
+// any more; started sites stay.
 
 import type { TuneTarget } from './tuning.ts';
 
@@ -41,6 +43,17 @@ export type Command =
    * build it. `axis` forces the run axis; without it the axis is picked as W23 does.
    */
   | { t: 'gate'; ids: number[]; tx: number; ty: number; axis?: 'x' | 'z'; queue?: boolean }
+  // ---- W25: build queue ----
+  /**
+   * Remove one order from unit `id`'s queue (0 = the current order). `expect` names the item as the
+   * snapshot showed it (schema.ts Q_* kind and target: building, wreck or run id, -1 for a move or
+   * produce order): if the queue moved on before the command's tick, the first order matching it
+   * is removed instead, and it is refused if none matches. A reserved site no unit holds any more
+   * is removed (world.ts dropOrphans).
+   */
+  | { t: 'dequeue'; id: number; index: number; expect?: { kind: number; target: number } }
+  /** Empty the queues of `ids`, under the same rule. */
+  | { t: 'clearQueue'; ids: number[] }
   // Sandbox only (sandbox.ts): refused with a reason in any other scenario.
   /** Spawn `count` (1..50) aliens of `kind` round world point (x, z). */
   | { t: 'spawnAt'; kind: number; x: number; z: number; count: number }

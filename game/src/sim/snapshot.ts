@@ -10,6 +10,10 @@
 //   aliens, units, wrecks, projectiles: the same, from their schemas
 //   routes    u16 words: per route [entry, category, n, cell × n]
 //   origins   u16 words: per sandbox spawn origin [tile x, tile z, alien kind, category, n, cell × n]
+//   queues    (W25) u32 × units: each unit's order count, in the units section's row order; then
+//             for all n queued orders (G_QUEUE_ORDERS), unit by unit in queue order, the columns
+//             kind i32 (schema.ts Q_*), target i32 (building or wreck id, a run's claimed tile;
+//             -1 none), run i32 (run id, 0 none), x f32, z f32 (where it points: queue.ts orderPosition)
 // Every column starts 4-byte aligned. Only live entities are written, in ascending slot order.
 // The bytes depend on simulation state only (no timings), so equal state gives byte-identical
 // snapshots — the determinism tests compare them.
@@ -21,12 +25,17 @@ import { STAT_COUNT } from './stats.ts';
 import { TUNE_COUNT, TUNE_SIZE } from './tuning.ts';
 import { RUN_CAPACITY, runCompleteCount } from './runs.ts';
 import { originTile } from './sandbox.ts';
+import { orderKind, orderPosition, orderTarget } from './queue.ts';
 
 const RUN_WORDS = RUN_CAPACITY * 4;
 
 export const SNAPSHOT_MAGIC = 0x314b5742; // "BWK1"
-/** 4 (W24): footprints, construction states, projectile attribution, scenario, stats, tuning, origins. */
-export const SNAPSHOT_VERSION = 4;
+/**
+ * 4 (W24): footprints, construction states, projectile attribution, scenario, stats, tuning, origins.
+ * 5 (W25): the unit order queues, as a section after the origins (scripts/fingerprint-compare.mjs
+ * --strip-queue removes it again to compare with version 4).
+ */
+export const SNAPSHOT_VERSION = 5;
 const HEADER_WORDS = 16;
 const HEADER_BYTES = HEADER_WORDS * 4;
 export const GLOBAL_COUNT = 48;
@@ -89,6 +98,7 @@ export const G_UNLIMITED = 40; // 1 while sandbox spending is free
 export const G_RUNS = 41; // wall runs in the run table
 export const G_RESPAWN_TICK = 42; // sandbox: tick the next commander appears, -1 when none is due
 export const G_COMMANDER_DEATHS = 43; // sandbox: commanders lost so far
+export const G_QUEUE_ORDERS = 44; // W25: orders in the queue section, all units
 
 
 type SnapFields<S extends readonly FieldSpec[]> = Exclude<S[number], { snap: false }>;
@@ -138,6 +148,35 @@ export interface Snapshot {
   /** Wall run table: per slot [id (0 = free), tiles, complete, skipped]. */
   runs: Int32Array;
   originRoutes: OriginRouteView[];
+  /** W25: unit order queues (layout above); `first` is each unit row's first order, worked out on decode. */
+  queues: QueueView;
+}
+
+export interface QueueView {
+  /** Per unit row: orders queued, and the index of its first one in the order columns. */
+  count: Uint32Array;
+  first: Uint32Array;
+  kind: Int32Array;
+  target: Int32Array;
+  run: Int32Array;
+  x: Float32Array;
+  z: Float32Array;
+}
+
+export interface QueueItem {
+  kind: number;
+  target: number;
+  run: number;
+  x: number;
+  z: number;
+}
+
+/** The queue of unit row `row`, first order first. */
+export function queueOf(s: Snapshot, row: number): QueueItem[] {
+  const q = s.queues;
+  const out: QueueItem[] = [];
+  for (let i = q.first[row]!, end = i + q.count[row]!; i < end; i++) out.push({ kind: q.kind[i]!, target: q.target[i]!, run: q.run[i]!, x: q.x[i]!, z: q.z[i]! });
+  return out;
 }
 
 const align4 = (n: number) => (n + 3) & ~3;
@@ -161,6 +200,16 @@ function originWords(world: World): number {
   return n;
 }
 
+/** Orders queued over all live units. */
+function queuedOrders(world: World): number {
+  let n = 0;
+  for (let s = 0; s < world.units.highWater; s++) if (world.units.alive[s]) n += world.orders[s]?.length ?? 0;
+  return n;
+}
+
+/** Bytes of the queue section: a count per unit, five 4-byte columns per order. */
+const queueBytes = (units: number, orders: number) => units * 4 + orders * 5 * 4;
+
 
 export function snapshotSize(world: World): number {
   return (
@@ -175,7 +224,8 @@ export function snapshotSize(world: World): number {
     sectionBytes(WRECK_FIELDS, world.wrecks.count) +
     sectionBytes(PROJECTILE_FIELDS, world.projectiles.count) +
     align4(routeWords(world) * 2) +
-    align4(originWords(world) * 2)
+    align4(originWords(world) * 2) +
+    queueBytes(world.units.count, queuedOrders(world))
   );
 }
 
@@ -246,6 +296,7 @@ function writeGlobals(world: World, g: Float64Array): void {
   g[G_RUNS] = runs;
   g[G_RESPAWN_TICK] = world.commanderRespawnTick;
   g[G_COMMANDER_DEATHS] = world.commanderDeaths;
+  g[G_QUEUE_ORDERS] = queuedOrders(world);
 }
 
 /**
@@ -320,8 +371,38 @@ export function encodeSnapshot(world: World, out?: ArrayBuffer): ArrayBuffer {
     for (const c of route.cells) o[k++] = c;
   }
   off += align4(owords * 2);
+  off = writeQueues(world, buf, off);
   if (off !== size) throw new Error(`snapshot size mismatch: wrote ${off}, expected ${size}`);
   return buf;
+}
+
+function writeQueues(world: World, buf: ArrayBuffer, offset: number): number {
+  const units = world.units;
+  const n = queuedOrders(world);
+  const count = new Uint32Array(buf, offset, units.count);
+  offset += units.count * 4;
+  const kind = new Int32Array(buf, offset, n);
+  const target = new Int32Array(buf, offset + n * 4, n);
+  const run = new Int32Array(buf, offset + n * 8, n);
+  const x = new Float32Array(buf, offset + n * 12, n);
+  const z = new Float32Array(buf, offset + n * 16, n);
+  let row = 0;
+  let k = 0;
+  for (let s = 0; s < units.highWater; s++) {
+    if (!units.alive[s]) continue;
+    const orders = world.orders[s] ?? [];
+    count[row++] = orders.length;
+    for (const o of orders) {
+      kind[k] = orderKind(o);
+      target[k] = orderTarget(o);
+      run[k] = o.t === 'run' ? o.run : 0;
+      const [px, pz] = orderPosition(world, s, o);
+      x[k] = px;
+      z[k] = pz;
+      k++;
+    }
+  }
+  return offset + n * 20;
 }
 
 function readSection<S extends readonly FieldSpec[]>(schema: S, n: number, buf: ArrayBuffer, offset: number): [Section<S>, number] {
@@ -372,7 +453,23 @@ export function decodeSnapshot(buf: ArrayBuffer): Snapshot {
     originRoutes.push({ x: or[k]!, z: or[k + 1]!, kind: or[k + 2]!, category: or[k + 3]!, cells: or.subarray(k + 5, k + 5 + n) });
     k += 5 + n;
   }
-  const end = o6 + align4(owords * 2);
+  const o7 = o6 + align4(owords * 2);
+  const nUnits = h[H_N_UNITS]!;
+  const nOrders = globals[G_QUEUE_ORDERS]!;
+  const count = new Uint32Array(buf, o7, nUnits);
+  const q0 = o7 + nUnits * 4;
+  const first = new Uint32Array(nUnits);
+  for (let r = 1; r < nUnits; r++) first[r] = first[r - 1]! + count[r - 1]!;
+  const queues: QueueView = {
+    count,
+    first,
+    kind: new Int32Array(buf, q0, nOrders),
+    target: new Int32Array(buf, q0 + nOrders * 4, nOrders),
+    run: new Int32Array(buf, q0 + nOrders * 8, nOrders),
+    x: new Float32Array(buf, q0 + nOrders * 12, nOrders),
+    z: new Float32Array(buf, q0 + nOrders * 16, nOrders),
+  };
+  const end = o7 + queueBytes(nUnits, nOrders);
   if (end !== h[H_BYTES]) throw new Error('snapshot length mismatch');
   return {
     buffer: buf,
@@ -394,6 +491,7 @@ export function decodeSnapshot(buf: ArrayBuffer): Snapshot {
     tuning,
     runs,
     originRoutes,
+    queues,
   };
 }
 

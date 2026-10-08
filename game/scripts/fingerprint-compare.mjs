@@ -3,7 +3,14 @@
 // of snapshots and saves over scripted sandbox, stress and map 1 runs — on this tree and on a
 // baseline commit, and fails unless every hash is identical.
 //
-//   node scripts/fingerprint-compare.mjs <commit>
+//   node scripts/fingerprint-compare.mjs <commit> [--strip-queue]
+//
+// Strict (the default): every snapshot and save hash must be identical.
+// --strip-queue (W25): both runs hash snapshots with the W25 queue section removed and saves with
+// the state-format word set back to 4 (fingerprint.test.ts FP_STRIP_QUEUE), so a tree that only
+// added the queue section compares identical with one from before it. Saves are compared only when
+// both trees write the same SAVE_VERSION; if the save format itself changed, the save entries are
+// listed and left out of the verdict.
 //
 // The baseline's game/ and model/ are exported with `git archive` into a temporary directory that
 // uses this tree's node_modules, and both runs use this tree's copy of the fingerprint script, so
@@ -15,9 +22,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const commit = process.argv[2];
+const args = process.argv.slice(2);
+const strip = args.includes('--strip-queue');
+const commit = args.find((a) => !a.startsWith('--'));
 if (!commit) {
-  console.error('usage: node scripts/fingerprint-compare.mjs <commit>');
+  console.error('usage: node scripts/fingerprint-compare.mjs <commit> [--strip-queue]');
   process.exit(2);
 }
 const game = fileURLToPath(new URL('..', import.meta.url));
@@ -27,7 +36,8 @@ const tmp = mkdtempSync(join(tmpdir(), 'bulwark-fp-'));
 
 function run(cwd) {
   return new Promise((resolve, reject) => {
-    const p = spawn('npx', ['vitest', 'run', '--config', 'scripts/vitest.bench.config.ts', 'scripts/fingerprint.test.ts', '--reporter=verbose', '--silent=false'], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    const env = { ...process.env, FP_STRIP_QUEUE: strip ? '1' : '0' };
+    const p = spawn('npx', ['vitest', 'run', '--config', 'scripts/vitest.bench.config.ts', 'scripts/fingerprint.test.ts', '--reporter=verbose', '--silent=false'], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     p.stdout.on('data', (d) => (out += d));
     p.stderr.on('data', (d) => (out += d));
@@ -51,15 +61,28 @@ try {
   const [here, there] = await Promise.all([run(game), run(base)]);
   const seconds = ((Date.now() - t0) / 1000).toFixed(1);
   let diffs = 0;
+  let skipped = 0;
+  const saveVersion = (e) => /^save-v(\d+):/.exec(e ?? '')?.[1];
   for (const key of new Set([...Object.keys(here), ...Object.keys(there)])) {
     const a = here[key] ?? [];
     const b = there[key] ?? [];
     const n = Math.max(a.length, b.length);
     let first = -1;
-    for (let i = 0; i < n; i++) if (a[i] !== b[i]) (first < 0 ? (first = i) : 0), diffs++;
+    for (let i = 0; i < n; i++) {
+      if (a[i] === b[i]) continue;
+      // stripped mode: saves of different SAVE_VERSIONs are not comparable; listed, not counted
+      if (strip && saveVersion(a[i]) && saveVersion(b[i]) && saveVersion(a[i]) !== saveVersion(b[i])) {
+        console.log(`${key}: entry ${i} is a save of another format (${a[i]} vs ${b[i]}): not compared`);
+        skipped++;
+        continue;
+      }
+      if (first < 0) first = i;
+      diffs++;
+    }
     console.log(`${key}: ${a.length} hashes here, ${b.length} at ${sha.slice(0, 7)}; ${first < 0 ? 'identical' : `differ from entry ${first} (${a[first]} vs ${b[first]})`}; last ${a[a.length - 1]}`);
   }
-  console.log(`fingerprint ${diffs === 0 ? 'IDENTICAL' : `DIFFERS in ${diffs} entries`} — this tree vs ${sha.slice(0, 7)} (${seconds} s)`);
+  const mode = strip ? 'stripped of the W25 queue section' : 'strict';
+  console.log(`fingerprint (${mode}) ${diffs === 0 ? 'IDENTICAL' : `DIFFERS in ${diffs} entries`}${skipped ? ` (${skipped} save entries of another format not compared)` : ''} — this tree vs ${sha.slice(0, 7)} (${seconds} s)`);
   ok = diffs === 0;
 } catch (e) {
   console.error(String(e?.stack ?? e));

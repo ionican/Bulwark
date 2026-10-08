@@ -5,7 +5,8 @@
 //   middle-drag          dolly (MIDDLE = DOLLY); the wheel zooms towards the cursor (main.ts)
 //   Shift + left-drag    box selection
 //   left-drag in a build mode (building, upgrading)  lays the line or run; never orbits
-//                        (W23's painter takes the left button the same way)
+//                        (W23's painter takes the left button the same way); W25: the planned
+//                        tiles are previewed while it moves (buildDragPreview), Esc cancels it
 //   click (moved ≤ 5 px) left: select or place; right: order or cancel. A click never moves the
 //                        camera: nothing is sent to the orbit until the pointer has moved more than
 //                        5 px, and then the whole movement since the press is.
@@ -37,6 +38,11 @@ export interface GestureHost {
   boxPreview(rect: { x0: number; y0: number; x1: number; y1: number } | null): void;
   /** Left-drag in a build mode released: from the press to the release point. */
   buildDrag(x0: number, y0: number, x1: number, y1: number, shift: boolean): void;
+  /**
+   * W25: a build-mode left-drag under way: from the press to the pointer now (preview), or null
+   * when it ends (released or cancelled).
+   */
+  buildDragPreview?(drag: { x0: number; y0: number; x1: number; y1: number } | null): void;
 }
 
 /** Movement (|dx| + |dy|, CSS pixels) beyond which a press is a drag, not a click. */
@@ -77,6 +83,7 @@ export class Gestures {
     else if (p.mode === 'pan') this.orbit.pan(dx, dy, this.host.camera, h);
     else if (p.mode === 'dolly') this.orbit.dolly(dy);
     else if (p.mode === 'box') this.host.boxPreview({ x0: p.x0, y0: p.y0, x1: e.x, y1: e.y });
+    else if (p.mode === 'build') this.host.buildDragPreview?.({ x0: p.x0, y0: p.y0, x1: e.x, y1: e.y });
   }
 
   up(e: PointerIn): void {
@@ -84,6 +91,7 @@ export class Gestures {
     this.press = null;
     if (!p) return;
     if (p.mode === 'box') this.host.boxPreview(null);
+    if (p.mode === 'build') this.host.buildDragPreview?.(null);
     if (!p.moved) {
       this.host.click(p.button, e.x, e.y, e.shift);
       return;
@@ -94,6 +102,12 @@ export class Gestures {
 
   cancel(): void {
     if (this.press?.mode === 'box') this.host.boxPreview(null);
+    if (this.press?.mode === 'build') this.host.buildDragPreview?.(null);
     this.press = null;
+  }
+
+  /** W25: a build-mode drag is under way (Esc cancels it). */
+  get buildDragging(): boolean {
+    return this.press?.mode === 'build' && this.press.moved;
   }
 }

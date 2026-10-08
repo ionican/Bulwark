@@ -10,6 +10,7 @@ import { MAX_ORDERS, type World } from './world.ts';
 import { MAX_RUN_DEPTH, planRun, runById, runCapacityProblem } from './runs.ts';
 import { planGate } from './gate.ts';
 import { SPAWN_AT_MAX, spawnPlaces } from './sandbox.ts';
+import { dequeueIndex } from './queue.ts';
 import { TUNE_TARGETS, tuneFieldProblem, tuneProblem, type TuneTarget } from './tuning.ts';
 import { map1 } from '../../../model/data/map1.ts';
 
@@ -109,6 +110,22 @@ function check(w: World, cmd: Command): string | null {
     case 'cancelRun':
       if (!isInt(cmd.run)) return 'cancelRun needs a run id';
       return runById(w, cmd.run) ? null : `no run ${cmd.run}`;
+    case 'dequeue': {
+      if (!isInt(cmd.id)) return 'dequeue needs a unit id';
+      const s = w.units.slotForId(cmd.id);
+      if (s < 0) return `unit ${cmd.id} does not exist`;
+      if (!isInt(cmd.index) || cmd.index < 0) return `dequeue index must be an integer 0 or more (got ${JSON.stringify(cmd.index)})`;
+      const e = cmd.expect;
+      if (e !== undefined && (!e || typeof e !== 'object' || !isInt(e.kind) || !isInt(e.target))) return 'dequeue expect needs an integer kind and target';
+      const n = w.orders[s]?.length ?? 0;
+      if (dequeueIndex(w, s, cmd.index, e) >= 0) return null;
+      return e ? `that order is no longer in unit ${cmd.id}'s queue` : `index ${cmd.index} is out of range: unit ${cmd.id} has ${n} order${n === 1 ? '' : 's'} queued`;
+    }
+    case 'clearQueue': {
+      if (!idList(cmd.ids) || !cmd.ids.length) return 'clearQueue needs unit ids';
+      const missing = cmd.ids.find((id) => w.units.slotForId(id) < 0);
+      return missing === undefined ? null : `unit ${missing} does not exist`;
+    }
     case 'gate': {
       if (!idList(cmd.ids)) return 'gate needs unit ids';
       if (!isInt(cmd.tx) || !isInt(cmd.ty)) return 'gate needs integer tile coordinates';

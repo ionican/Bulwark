@@ -8,7 +8,8 @@
 //   10 turrets fire   11 projectiles   12 aliens move and attack   13 deaths, wrecks
 //   14 shields, wreck decay, temporary turrets   15 statistics
 // W24 adds: after the commands, the sandbox commander's respawn; after construction, finished
-// wall runs are freed (runs.ts).
+// wall runs are freed (runs.ts). W25 (queue.ts): a command that replaces or removes orders then
+// removes the reserved sites no unit's queue holds any more, within the command step.
 //
 // Construction states (W24, schema.ts BF_STARTED): a site is reserved until build power first
 // reaches it (holds its tiles against placement, blocks nobody, adds no flow cost; aliens may still
@@ -57,6 +58,7 @@ import { stepConveyors } from './conveyor.ts';
 import { acquireTargets, fireTurrets, stepProjectiles, stepShieldsAndTimers, AlienGrid } from './combat.ts';
 import { stepAliens } from './aliens.ts';
 import { stepUnits, type Order } from './units.ts';
+import { dequeueIndex, dropOrphans } from './queue.ts';
 import { validateCommand, upgradeProblem } from './validate.ts';
 import { COMMANDER_WRECK_SALVAGE, RESEARCH, RESEARCH_INDEX, SANDBOX_RESPAWN_TICKS, callEarlyBonus, EXTRACTOR_BOOST, FIELD_ENG_TURRET_COOLDOWN } from './balance.ts';
 import { map1 } from '../../../model/data/map1.ts';
@@ -417,7 +419,21 @@ export class World {
 
   // ---- commands ----------------------------------------------------------------------------
 
+  /**
+   * Orders replaced or removed by the command being applied (giveOrder without `queue`, dequeue,
+   * clearQueue). Not saved: filled and drained within apply().
+   */
+  private readonly dropped: Order[] = [];
+
   private apply(cmd: Command): void {
+    this.dropped.length = 0;
+    this.applyCommand(cmd);
+    // W25 (queue.ts): reserved sites the replaced or removed orders held, that no queue holds now, go.
+    if (this.dropped.length) dropOrphans(this, this.dropped);
+    this.dropped.length = 0;
+  }
+
+  private applyCommand(cmd: Command): void {
     switch (cmd.t) {
       case 'move': {
         const n = cmd.ids.length;
@@ -492,6 +508,24 @@ export class World {
       }
       case 'cancelRun':
         cancelRun(this, cmd.run);
+        break;
+      case 'dequeue': {
+        const slot = this.units.slotForId(cmd.id);
+        const i = dequeueIndex(this, slot, cmd.index, cmd.expect);
+        if (i < 0) break; // validation refuses this; kept for enqueue() without validation
+        this.dropped.push(...this.orders[slot]!.splice(i, 1));
+        if (i === 0) this.paths[slot] = null; // the current order went: plan afresh for the next
+        break;
+      }
+      case 'clearQueue':
+        for (const id of cmd.ids) {
+          const slot = this.units.slotForId(id);
+          if (slot < 0) continue;
+          this.dropped.push(...(this.orders[slot] ?? []));
+          this.orders[slot] = [];
+          this.paths[slot] = null;
+          this.units.cols.state[slot] = US_IDLE;
+        }
         break;
       case 'gate': {
         const site = this.convertToGate(cmd.tx, cmd.ty, cmd.axis);
@@ -568,9 +602,11 @@ export class World {
     return this.validated && this.validated.cmd === cmd ? (this.validated.result as T) : undefined;
   }
 
+  /** Appends an order (`queue`) or replaces the unit's queue with it; replaced orders go to `dropped`. */
   giveOrder(slot: number, order: Order, queue: boolean): void {
     if (!this.orders[slot]) this.orders[slot] = [];
     if (!queue) {
+      this.dropped.push(...this.orders[slot]!);
       this.orders[slot] = [];
       this.paths[slot] = null;
     }

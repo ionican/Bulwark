@@ -8,8 +8,10 @@ npm run dev     # http://127.0.0.1:8822/   (sandbox: /?sandbox=1, stress scene: 
                 #  W13 greybox view: /?greybox=1, high quality: /?quality=high)
 npm test        # tsc + vitest, about 2 minutes (includes two headless full-map runs)
 npm run build   # static build in dist/
-node scripts/fingerprint-compare.mjs <commit>   # simulation unchanged against a commit (snapshot and save hashes)
+node scripts/fingerprint-compare.mjs <commit> [--strip-queue]   # simulation unchanged against a commit (snapshot and save hashes;
+                #  --strip-queue: W25's snapshot queue section left out, to compare with a tree from before it)
 node scripts/check-render.mjs [--shots <dir>]   # browser check of the model view on port 8823 (agent-browser, session w24-2a)
+node scripts/check-queue.mjs [--shots <dir>]    # W25 build queue and drag preview, real input, port 8824 (agent-browser, session w25)
 ```
 
 ## Layout
@@ -35,7 +37,7 @@ Scale: 1 tile = 2 m; map 1 is 128 × 128 tiles.
 - **Checkpoints**: the full state is stored just before each wave starts. "Rewind to wave start" restores the start of the current wave, or the previous one if the current wave began under 5 s ago; the lose screen offers the same.
 - **Research**: research stations make 1 RP/s each (W12 labRate); a node needs `seconds` RP and drains its cost while it runs, by the construction drain rule. One node at a time; never refunded. Beam turret, heavy cannon and shield generator need their research (W12 `requires`); wall tiers 2/3 and gun, area and heavy tier 2 need research, then engineers upgrade each building (U). Nodes and costs: `src/sim/balance.ts`.
 - **Win/lose**: the commander's death is the only loss; the map is won when all 20 waves have arrived and every alien is destroyed.
-- **Saves**: Export save downloads a `.bulwark` file (full state, `SAVE_VERSION` 2, state format = `SNAPSHOT_VERSION` 4 since W24); Import save loads one and refuses any other version with a message. Checkpoints are not included in the file.
+- **Saves**: Export save downloads a `.bulwark` file (full state, `SAVE_VERSION` 2, state format = `SNAPSHOT_VERSION` 5 since W25; W24's state format 4 still loads, the save content is the same); Import save loads one and refuses any other version with a message. Checkpoints are not included in the file.
 - **Engineers**: the commander produces them (Produce engineer button; W12 cost 60 mass, 200 energy, 80 BP·s).
 
 ## Balance
@@ -59,6 +61,16 @@ Headless check (`test/fullmap.test.ts`, `test/plans.ts`): W12's balanced plan, p
 - **Gates** (`gate.ts`): converted from finished walls with W23's predicate; 3 × depth; corridor in the centre column for units; aliens break through (flow cost hp ÷ depth per tile).
 - **Sandbox** (`/?sandbox=1`, `sandbox.ts`): no waves, no end state (the commander respawns after 10 s), and commands `spawnAt`, `tune`/`tuneReset` (`tuning.ts`), `setUnlimited`, `grantResearch`, `startWave`, `clearAliens`, `clearWrecks`, `resetStats`, `resetSandbox`, refused outside the sandbox. The scenario is stored in the world, saves and snapshots.
 - **Stats** (`stats.ts`): per-kind counters, in every snapshot.
+
+## W25: build queue (Supreme Commander style)
+
+- **Per-unit queues** (`src/sim/queue.ts`): an order goes onto the queue of every unit selected when it was given; units that share an item build it together, each when it reaches that item in its own queue; a unit never works on an item it has not queued (except by an assist order).
+- **Shift appends, no Shift replaces**, for every order kind (build, wall run, gate, upgrade, move, assist, reclaim). When orders are replaced or removed, a reserved site no unit holds any more is removed (it cost nothing: no refund); a started site stays part-built; a wall run with no run order left loses its reserved tiles and its run-table slot. Exceptions: a gate site stays (its walls were converted when it was ordered); `stop`, a unit's death and an unreachable site leave sites as in W24.
+- **Commands** `dequeue { id, index, expect? }` (`expect` names the item as the snapshot showed it, so a queue that moved on before the command's tick still loses the right item) and `clearQueue { ids }`; refusals come back through the final-result path.
+- **Snapshot** version 5: a queue section per unit (order kind, target id, run id, position; `queueOf`). Nothing on the render thread changes queues.
+- **Drawn** for the selected units only (`render/queueView.ts`): a line from the unit through each target in order, an arrowhead per target, a numbered label per target (one label listing the positions where selected units share an item); units are told apart by dash pattern (long, short, dash-dot), never colour. The **queue panel** (bottom left) lists each selected unit's queue with a remove control per item and Clear per unit, and names each unit's line style.
+- **Build tool**: stays open while Shift is held; releasing Shift after a Shift placement closes it (belts stay open, as before); Esc always closes it.
+- **Drag preview** (`dragPlan.ts`, `render/dragPreview.ts`): while a wall run or belt line is dragged, the planned tiles are drawn every frame from the simulation's own run planner (`runs.ts planRunOn`) on the latest snapshot: a solid outline on tiles that will be built, a dashed outline and a cross on tiles that will be skipped, and a label at the cursor (tiles, skipped, cost). Esc during the drag queues nothing.
 
 ## Controls
 
@@ -93,6 +105,8 @@ The default view draws every kind with the workshop's models, in a static pose, 
 - **Lighting and post**: W17's sun (one shadow map fitted near the camera), HDRI light, haze and sky; W21's post stack (N8AO, bloom, ACES, SMAA). Quality medium by default (pixel ratio ≤ 1); `?quality=high` or `__game.setQuality('high')`.
 - **Walking** (brought forward from 2b, `walk.ts`): the commander and engineers walk with W23's gait and planted feet, aliens with W21's gait phase, both advanced by the distance moved between frames; a new id, a jump over 2 tiles or the tick going backwards resets; paused, nothing advances.
 - **Overlays** (health bars, beams and work lines, shots, shields, selection, entry labels) are still W13's (effects are run 2b). Alien routes are not drawn (Richard, 8 Oct); the simulation still computes them.
+
+W25 adds: `queues` (every unit's queue from the snapshot), `queuePanel`, `inspectQueue()` (lines, labels and arrowheads read from the scene), `dragPreview` (the plan and what the scene draws for it, during a drag), `reservedOutlines()`, `shiftHeld`, `shiftPlaced`, `dequeue(id, index, expect?)`, `clearQueue(ids)`.
 
 `window.__game` adds: `renderMode`, `quality`, `setQuality(q)`, `viewport`, `timing` (CPU ms of the last frame's update and of each render pass), `wallRebuilds`, `overflowed`, `inspect()` (per kind: model and icon instances found in the scene graph on that kind's entities, greybox instances, mesh and material names), `renderCost(frames)` (forced-completion frame cost with the ground, post and each post pass switched off), `place(kind, tx, ty, dir)` (debug: the simulation's `place` command, a complete building at once). `lodLevelCounts` has `middle` in the model view.
 

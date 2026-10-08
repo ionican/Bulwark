@@ -13,6 +13,9 @@
 // Version 2 (W24) adds the scenario, wall runs, sandbox tuning and unlimited spending, spawn
 // origins, the combat counters, the commander respawn, and (through the projectile table)
 // projectile attribution.
+// W25 left the save format alone: the order queues were already saved in full (JSON `orders`),
+// and the only change, snapshot version 5, adds a snapshot section that is derived from them. So a
+// version 2 save of state format 4 (W24) still loads; new saves record state format 5.
 
 import { World, type PendingGroup, type Route, type ScenarioName } from './world.ts';
 import type { WallRun } from './runs.ts';
@@ -25,6 +28,9 @@ import type { Order } from './units.ts';
 
 export const SAVE_MAGIC = 0x534b5742; // "BWKS"
 export const SAVE_VERSION = 2;
+
+/** State formats (SNAPSHOT_VERSION) whose version 2 saves load: W24's 4 and W25's 5 (header note). */
+const READABLE_STATE_FORMATS: readonly number[] = [4, SNAPSHOT_VERSION];
 
 export class SaveVersionError extends Error {}
 
@@ -196,9 +202,9 @@ export function deserializeWorld(input: Uint8Array | ArrayBuffer): World {
   if (dv.getUint32(0, true) !== SAVE_MAGIC) throw new SaveVersionError('This file is not a Bulwark save.');
   const version = dv.getUint32(4, true);
   const snapVersion = dv.getUint32(8, true);
-  if (version !== SAVE_VERSION || snapVersion !== SNAPSHOT_VERSION)
+  if (version !== SAVE_VERSION || !READABLE_STATE_FORMATS.includes(snapVersion))
     throw new SaveVersionError(
-      `This save is version ${version} (state format ${snapVersion}); this build reads version ${SAVE_VERSION} (state format ${SNAPSHOT_VERSION}) only.`,
+      `This save is version ${version} (state format ${snapVersion}); this build reads version ${SAVE_VERSION} (state format ${READABLE_STATE_FORMATS.join(' or ')}) only.`,
     );
   const jsonLen = dv.getUint32(12, true);
   const state = JSON.parse(new TextDecoder().decode(bytes.subarray(16, 16 + jsonLen)), reviver);

@@ -12,8 +12,11 @@ import { measureRenderCost } from './render/cost.ts';
 import { Orbit, applyRig, clampRig, pitchFor, worldPerPixel, type Rig } from './render/cameraRig.ts';
 import { Gestures } from './input.ts';
 import { Ghost } from './render/ghost.ts';
+import { DASH_NAMES, QueueOverlay, canvasLabel, inspectQueue } from './render/queueView.ts';
+import { DragPreview, inspectDrag } from './render/dragPreview.ts';
+import { beltLineTiles, dragLabel, planDrag, type DragPlan, type DragView } from './dragPlan.ts';
 import { groundHeight } from './render/ground.ts';
-import { entitiesOf, inspectScene } from './render/inspect.ts';
+import { drawnMeshes, entitiesOf, inspectScene } from './render/inspect.ts';
 import { LOD_THRESHOLDS } from './render/lod.ts';
 import { Interpolator } from './render/interp.ts';
 import { boxSelect, buildOccupancy, pickScreen, screenToGround, type GroundHit, type Pick, type PickView } from './render/picking.ts';
@@ -33,7 +36,7 @@ import {
   isBelt,
   type BuildingKind,
 } from './sim/kinds.ts';
-import { BF_COMPLETE, BF_UPGRADING, constructionState, isReserved } from './sim/schema.ts';
+import { BF_COMPLETE, BF_UPGRADING, Q_BUILD, Q_MOVE, Q_PRODUCE, Q_RECLAIM, Q_RUN, constructionState, isReserved } from './sim/schema.ts';
 import {
   G_COMMANDER_HP,
   G_COMMANDER_ID,
@@ -74,6 +77,8 @@ import {
   G_SCENARIO,
   G_UNLIMITED,
   decodeSnapshot,
+  queueOf,
+  type QueueItem,
   type Snapshot,
 } from './sim/snapshot.ts';
 import { CAPACITY, SCENARIO_NAMES } from './sim/world.ts';
@@ -90,6 +95,7 @@ import { EndScreen, ResearchPanel, Ticker, TimeControls, Toasts } from './ui/pan
 import type { ScenarioName } from './sim/scenarios.ts';
 import { Hud } from './ui/hud.ts';
 import { BuildBar, TEST_GROUP } from './ui/buildbar.ts';
+import { QueuePanel, type QueuePanelUnit } from './ui/queuePanel.ts';
 
 // ---- setup ---------------------------------------------------------------------------------
 
@@ -126,6 +132,8 @@ loading.remove();
 const scene = view.scene;
 const entities = view.entities;
 const ghost = new Ghost(scene, terrain);
+const queueView = new QueueOverlay(scene, terrain, canvasLabel());
+const dragPreview = new DragPreview(scene, terrain);
 const hud = new Hud();
 
 let vw = window.innerWidth;
@@ -380,9 +388,20 @@ function selectedEngineers(): number[] {
 
 let buildMode: { kind: number; dir: number } | null = null;
 let upgradeMode = false;
+/**
+ * W25: a placement was made with Shift held since the build tool was picked. Releasing Shift then
+ * closes the tool (except belts, which stay open as before); Esc always closes it.
+ */
+let shiftPlaced = false;
+/**
+ * Shift held, from the keyboard. A pointer event's own shiftKey is used too; this also covers input
+ * whose pointer events carry no modifiers (agent-browser's mouse with its keydown Shift).
+ */
+let shiftHeld = false;
 
 function setBuildMode(kind: BuildingKind | null) {
   upgradeMode = false;
+  shiftPlaced = false;
   if (kind === null || !selectedBuilders().length) {
     buildMode = null;
     ghost.hide();
@@ -407,22 +426,69 @@ function placeBuild(kind: number, tx: number, ty: number, dir: number, queue: bo
   return true;
 }
 
+/** A belt line (dragPlan.ts beltLineTiles, the tiles the drag preview shows): the first piece placed takes `queue`, the rest append. */
 function placeBeltLine(kind: number, x0: number, z0: number, x1: number, z1: number, dirIfSingle: number, queue: boolean) {
-  const dx = x1 - x0;
-  const dz = z1 - z0;
   let first = true;
-  if (dx === 0 && dz === 0) {
-    placeBuild(kind, x0, z0, dirIfSingle, queue);
+  for (const [x, z, dir] of beltLineTiles(x0, z0, x1, z1, dirIfSingle)) if (placeBuild(kind, x, z, dir, queue || !first)) first = false;
+}
+
+// ---- W25 item 7: live preview of a build-mode drag ----------------------------------------------
+
+/**
+ * The drag under way: the cursor (screen) and its end tiles, worked out on pointer moves; the plan,
+ * and the inputs it was made from (kind, direction, tiles, tick), so a frame with nothing changed
+ * allocates nothing.
+ */
+let drag: { x1: number; y1: number; from: [number, number]; to: [number, number] } | null = null;
+let dragPlan: DragPlan | null = null;
+const dragMadeFrom = { kind: -1, dir: -1, fx: 0, fy: 0, tx: 0, ty: 0, tick: -1 };
+const dragLabelEl = document.createElement('div');
+dragLabelEl.className = 'pnl draglabel';
+dragLabelEl.style.cssText = 'position:fixed;display:none;pointer-events:none;font-size:11px;padding:2px 6px;z-index:9';
+document.body.appendChild(dragLabelEl);
+
+/** The snapshot as the run planner reads it (dragPlan.ts DragView). */
+function dragView(s: Snapshot): DragView {
+  return { terrain, occupancy, kinds: s.buildings.cols.kind, units: { count: s.units.count, id: s.units.id, x: s.units.cols.x, z: s.units.cols.z } };
+}
+
+/**
+ * The plan for the drag now: walls and belts only (other kinds place one building on release).
+ * Worked out again only when its inputs change (end tiles, tool, direction, snapshot tick).
+ */
+function currentDragPlan(): DragPlan | null {
+  const s = interp.curr;
+  if (!drag || !buildMode || !s || !(buildMode.kind === B.wall || isBelt(buildMode.kind))) {
+    dragPlan = null;
+    return null;
+  }
+  const m = dragMadeFrom;
+  const [fx, fy] = drag.from;
+  const [tx, ty] = drag.to;
+  if (!dragPlan || m.kind !== buildMode.kind || m.dir !== buildMode.dir || m.fx !== fx || m.fy !== fy || m.tx !== tx || m.ty !== ty || m.tick !== s.tick) {
+    Object.assign(m, { kind: buildMode.kind, dir: buildMode.dir, fx, fy, tx, ty, tick: s.tick });
+    dragPlan = planDrag(dragView(s), buildMode.kind, selectedBuilders(), [fx, fy], [tx, ty], buildMode.dir);
+    dragLabelEl.textContent = dragLabel(dragPlan);
+  }
+  return dragPlan;
+}
+
+function updateDragPreview() {
+  const plan = currentDragPlan();
+  dragPreview.update(plan);
+  if (!plan || !drag) {
+    dragLabelEl.style.display = 'none';
     return;
   }
-  if (Math.abs(dx) >= Math.abs(dz)) {
-    const dir = dx > 0 ? 0 : 2;
-    for (let x = x0; x !== x1 + Math.sign(dx); x += Math.sign(dx)) if (placeBuild(kind, x, z0, dir, queue || !first)) first = false;
-  } else {
-    const dir = dz > 0 ? 1 : 3;
-    for (let z = z0; z !== z1 + Math.sign(dz); z += Math.sign(dz)) if (placeBuild(kind, x0, z, dir, queue || !first)) first = false;
+  dragLabelEl.style.display = '';
+  if (dragLabelAt[0] !== drag.x1 || dragLabelAt[1] !== drag.y1) {
+    dragLabelAt[0] = drag.x1;
+    dragLabelAt[1] = drag.y1;
+    dragLabelEl.style.left = `${Math.round(drag.x1 + 18)}px`;
+    dragLabelEl.style.top = `${Math.round(drag.y1 + 14)}px`;
   }
 }
+const dragLabelAt = [NaN, NaN];
 
 // ---- input ---------------------------------------------------------------------------------
 
@@ -449,6 +515,7 @@ const gestures = new Gestures(orbit, {
         if (t) {
           const [tx, ty] = footprintAt(buildMode.kind, t.g.x, t.g.z);
           placeBuild(buildMode.kind, tx, ty, buildMode.dir, shift);
+          if (shift) shiftPlaced = true;
         }
         // Belts stay selected for laying more; other buildings only while Shift is held.
         if (!shift && !isBelt(buildMode.kind)) setBuildMode(null);
@@ -487,6 +554,13 @@ const gestures = new Gestures(orbit, {
     b.width = `${Math.abs(r.x1 - r.x0)}px`;
     b.height = `${Math.abs(r.y1 - r.y0)}px`;
   },
+  buildDragPreview(d) {
+    const a = d && tileAtScreen(d.x0, d.y0);
+    const b = d && tileAtScreen(d.x1, d.y1);
+    // the same end tiles buildDrag sends on release
+    drag = d && a && b ? { x1: d.x1, y1: d.y1, from: [a.tx, a.ty], to: [b.tx, b.ty] } : null;
+    if (!drag) dragPlan = null;
+  },
   buildDrag(x0, y0, x1, y1, shift) {
     if (!buildMode) return;
     const a = tileAtScreen(x0, y0);
@@ -501,11 +575,12 @@ const gestures = new Gestures(orbit, {
         const [tx, ty] = footprintAt(buildMode.kind, b.g.x, b.g.z);
         placeBuild(buildMode.kind, tx, ty, buildMode.dir, shift);
       }
+      if (shift) shiftPlaced = true;
     }
     if (!shift && !isBelt(buildMode.kind)) setBuildMode(null);
   },
 });
-const ptr = (e: PointerEvent) => ({ button: e.button, x: e.clientX, y: e.clientY, shift: e.shiftKey });
+const ptr = (e: PointerEvent) => ({ button: e.button, x: e.clientX, y: e.clientY, shift: e.shiftKey || shiftHeld });
 canvas.addEventListener('pointerdown', (e) => {
   try {
     canvas.setPointerCapture(e.pointerId);
@@ -563,6 +638,7 @@ const KEY_TO_KIND = new Map<string, BuildingKind>();
 for (const k of BUILDING_KINDS) if (BUILDING_INFO[k].key) KEY_TO_KIND.set(BUILDING_INFO[k].key, k);
 
 window.addEventListener('keydown', (e) => {
+  if (e.key === 'Shift') shiftHeld = true;
   if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
   const k = e.key.toLowerCase();
   if (e.code === 'Space') {
@@ -587,9 +663,14 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (e.key === 'Home') setView('far');
-  if (e.key === 'Escape') setBuildMode(null);
+  if (e.key === 'Escape') {
+    // a drag under way ends with nothing queued (its release is ignored), then the tool closes
+    if (gestures.buildDragging) gestures.cancel();
+    setBuildMode(null);
+  }
   if (k === 'r' && buildMode) buildMode.dir = (buildMode.dir + 1) & 3;
-  else if (KEY_TO_KIND.has(k)) setBuildMode(KEY_TO_KIND.get(k)!);
+  // a held key repeats: picking the same tool again would forget a Shift placement (W25)
+  else if (KEY_TO_KIND.has(k) && !e.repeat) setBuildMode(KEY_TO_KIND.get(k)!);
   else if (k === 'u') startUpgrade();
   else if (k === 't') dropTurret();
   else if (k === 'x') stopUnits();
@@ -597,8 +678,16 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => {
   keys.delete(e.key.toLowerCase());
+  if (e.key === 'Shift') {
+    shiftHeld = false;
+    // Shift released after placing with it: the build tool closes (belts stay, as before).
+    if (buildMode && shiftPlaced && !isBelt(buildMode.kind)) setBuildMode(null);
+  }
 });
-window.addEventListener('blur', () => keys.clear());
+window.addEventListener('blur', () => {
+  keys.clear();
+  shiftHeld = false;
+});
 
 function startUpgrade() {
   buildMode = null;
@@ -627,6 +716,56 @@ const bar = new BuildBar(
   },
   terrain.entries.map((e) => e.name),
 );
+
+// ---- W25: order queues of the selected units ---------------------------------------------------
+
+const queuePanel = new QueuePanel({
+  remove: (unit, index, expect) => void commandResult({ t: 'dequeue', id: unit, index, expect }),
+  clear: (unit) => void commandResult({ t: 'clearQueue', ids: [unit] }),
+});
+
+/** The id `dequeue`'s `expect` names an item by (commands.ts): the run id for a run, else the target. */
+const queueItemId = (it: QueueItem) => (it.kind === Q_RUN ? it.run : it.target);
+
+/** One queue item in words. */
+function queueItemText(s: Snapshot, it: QueueItem): string {
+  if (it.kind === Q_MOVE) return `Move to ${it.x.toFixed(0)}, ${it.z.toFixed(0)}`;
+  if (it.kind === Q_PRODUCE) return 'Produce an engineer';
+  if (it.kind === Q_RECLAIM) return 'Reclaim a wreck';
+  if (it.kind === Q_RUN) {
+    for (let i = 0; i < s.runs.length; i += 4) if (s.runs[i] === it.run) return `Wall run: ${s.runs[i + 2]}/${s.runs[i + 1]} tiles built`;
+    return 'Wall run';
+  }
+  if (it.kind !== Q_BUILD) return '?';
+  const r = Array.prototype.indexOf.call(s.buildings.id, it.target);
+  if (r < 0) return 'Build (gone)';
+  const c = s.buildings.cols;
+  const label = buildingInfo(c.kind[r]!).label;
+  const f = c.flags[r]!;
+  if (f & BF_COMPLETE) return f & BF_UPGRADING ? `Upgrade ${label} to tier ${c.tier[r]! + 1}` : `${label} (done)`;
+  return isReserved(f) ? `Build ${label} (reserved)` : `Build ${label} ${(c.progress[r]! * 100).toFixed(0)}%`;
+}
+
+/** The selected units' queues for the panel, in selection order (the order that picks each line's dashes). */
+function selectedQueues(): QueuePanelUnit[] {
+  const s = interp.curr;
+  if (!s) return [];
+  const out: QueuePanelUnit[] = [];
+  let nth = -1;
+  for (const p of selection) {
+    if (p.type !== 'unit') continue;
+    nth++;
+    const row = Array.prototype.indexOf.call(s.units.id, p.id);
+    if (row < 0) continue;
+    out.push({
+      id: p.id,
+      name: `${UNIT_INFO[UNIT_KINDS[p.kind]!].label} ${nth + 1}`,
+      lineStyle: DASH_NAMES[nth % DASH_NAMES.length]!,
+      items: queueOf(s, row).map((it) => ({ text: queueItemText(s, it), kind: it.kind, item: queueItemId(it) })),
+    });
+  }
+  return out;
+}
 
 function zoomAt(sx: number, sy: number, factor: number) {
   const before = screenToGround(camera, sx, sy, vw, vh, terrain);
@@ -679,7 +818,7 @@ function steer(dt: number) {
 }
 
 function updateGhost() {
-  if (!buildMode || !mouse) {
+  if (!buildMode || !mouse || dragPlan) {
     ghost.hide();
     return;
   }
@@ -737,6 +876,8 @@ function frame(now: number) {
       rig.distance > LOD_THRESHOLDS[1]!,
     );
   }
+  if (snap) queueView.update({ camera, viewportHeight: vh, snapshot: snap, units: interp.units, selection });
+  updateDragPreview();
   updateGhost();
   updateMs = performance.now() - tUpdate;
   adapter.render(dt);
@@ -776,6 +917,7 @@ function frame(now: number) {
       won: g[G_OUTCOME] === 2,
     });
     refreshSelectionPanel();
+    queuePanel.update(selectedQueues(), hud.aboveSelection());
     ticker.update({
       tick: snap.tick,
       nextWave: g[G_NEXT_WAVE]!,
@@ -816,7 +958,7 @@ function frame(now: number) {
     const builders = selectedBuilders().length > 0;
     const active = buildMode ? BUILDING_KINDS[buildMode.kind]! : upgradeMode ? 'upgrade' : null;
     const hint = buildMode
-      ? `Placing ${buildingInfo(buildMode.kind).label}${isBelt(buildMode.kind) ? ' — drag for a line, R rotates' : ''}. Esc cancels.`
+      ? `Placing ${buildingInfo(buildMode.kind).label}${isBelt(buildMode.kind) ? ' — drag for a line, R rotates' : ''}. Shift queues more; Esc cancels.`
       : upgradeMode
         ? 'Click a wall or turret to upgrade it (tiers need research).'
         : builders
@@ -1287,6 +1429,54 @@ const game = {
   screenOf,
   worldToScreen,
   list,
+  // ---- W25: build queue
+  /** Every unit's queue from the snapshot: kind name, target id, run id, position. */
+  get queues() {
+    const s = interp.curr;
+    if (!s) return [];
+    const names = ['move', 'build', 'run', 'produce', 'reclaim'];
+    return Array.from({ length: s.units.count }, (_, row) => ({
+      id: s.units.id[row]!,
+      orders: queueOf(s, row).map((it) => ({ kind: names[it.kind] ?? String(it.kind), target: it.target, run: it.run, x: it.x, z: it.z, text: queueItemText(s, it) })),
+    }));
+  },
+  /**
+   * W25 item 7: the drag preview — the plan (tiles to build, tiles skipped, label) and what the
+   * scene holds for it (render/dragPreview.ts inspectDrag: outline and cross centres). Null when no
+   * drag is under way.
+   */
+  get dragPreview() {
+    if (!dragPlan || !drag) return null;
+    return {
+      kind: BUILDING_KINDS[dragPlan.kind],
+      build: dragPlan.build.map(([x, y, dir]) => [x, y, dir]),
+      skipped: dragPlan.skipped.map(([x, y]) => [x, y]),
+      label: dragLabelEl.textContent,
+      refused: dragPlan.refused,
+      drawn: inspectDrag(scene),
+    };
+  },
+  /** The queue drawing read back from the scene graph (render/queueView.ts inspectQueue). */
+  inspectQueue: () => inspectQueue(scene),
+  /** Ground positions (x, z) of the reserved-site outlines (the ghosts) drawn last frame, read from the scene. */
+  reservedOutlines: (): Array<[number, number]> =>
+    drawnMeshes(scene)
+      .filter((d) => d.name === 'reserved-outline')
+      .flatMap((d) => Array.from({ length: d.count }, (_, i): [number, number] => [d.worlds[i * 16 + 12]!, d.worlds[i * 16 + 14]!])),
+  /** The queue panel as shown: per unit, its name, line style and item texts. */
+  get queuePanel() {
+    return selectedQueues().map((u) => ({ id: u.id, name: u.name, lineStyle: u.lineStyle, items: u.items.map((i) => i.text) }));
+  },
+  get shiftHeld() {
+    return shiftHeld;
+  },
+  /** W25: a placement was made with Shift since the build tool was picked (releasing Shift closes it). */
+  get shiftPlaced() {
+    return shiftPlaced;
+  },
+  /** Removes item `index` of unit `id`'s queue (resolves with the final result, as the W24 helpers). */
+  dequeue: (id: number, index: number, expect?: { kind: number; target: number }) => commandResult({ t: 'dequeue', id, index, expect }),
+  clearQueue: (ids: number[]) => commandResult({ t: 'clearQueue', ids }),
 };
 
 declare global {

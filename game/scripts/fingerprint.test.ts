@@ -1,6 +1,13 @@
 // Refactor guard (not part of npm test): hashes of snapshots and saves over several scripted runs.
 // Run before and after a refactor; the output must be identical.
 // npx vitest run --config scripts/vitest.bench.config.ts scripts/fingerprint.test.ts
+//
+// FP_STRIP_QUEUE=1 (W25, fingerprint-compare.mjs --strip-queue): hashes a snapshot of version 5 or
+// later with its queue section removed and its header and globals put back as version 4 had them
+// (version 4, length without the section, G_QUEUE_ORDERS 0), and a save with its state-format word
+// put back to 4, so a tree with the queue section compares equal to one without when nothing else
+// changed. Save hashes are labelled with their SAVE_VERSION. Self-contained on purpose: the compare
+// script runs this file against a baseline tree whose sources have none of this.
 import { it } from 'vitest';
 import { createWorld } from '../src/sim/scenarios.ts';
 import { A, B, U } from '../src/sim/kinds.ts';
@@ -14,7 +21,36 @@ const fnv = (b: Uint8Array) => {
   for (let i = 0; i < b.length; i++) h = Math.imul(h ^ b[i]!, 0x01000193) >>> 0;
   return h.toString(16);
 };
-const snapHash = (w: World) => fnv(snapshotBytes(encodeSnapshot(w)));
+const STRIP = process.env.FP_STRIP_QUEUE === '1';
+// snapshot.ts header and globals layout (unchanged from version 4 to 5)
+const H_VERSION = 1;
+const H_N_UNITS = 9;
+const H_BYTES = 10;
+const GLOBALS_AT = 16 * 4;
+const G_QUEUE_ORDERS = 44;
+/** A version ≥ 5 snapshot as version 4 would have written it: the trailing queue section removed. */
+function stripQueue(bytes: Uint8Array): Uint8Array {
+  const h = new Uint32Array(bytes.buffer, bytes.byteOffset, 16);
+  if (h[H_VERSION]! < 5) return bytes;
+  const orders = new Float64Array(bytes.buffer, bytes.byteOffset + GLOBALS_AT, 48)[G_QUEUE_ORDERS]!;
+  const len = h[H_BYTES]! - (h[H_N_UNITS]! * 4 + orders * 20); // a count per unit, 5 × 4 bytes per order
+  const out = bytes.slice(0, len);
+  const oh = new Uint32Array(out.buffer, 0, 16);
+  oh[H_VERSION] = 4;
+  oh[H_BYTES] = len;
+  new Float64Array(out.buffer, GLOBALS_AT, 48)[G_QUEUE_ORDERS] = 0;
+  return out;
+}
+const snapOut = (w: World) => (STRIP ? stripQueue(snapshotBytes(encodeSnapshot(w))) : snapshotBytes(encodeSnapshot(w)));
+const snapHash = (w: World) => fnv(snapOut(w));
+/** Save bytes; stripped: the state-format word (bytes 8–11) back to 4. */
+function saveEntry(w: World): string {
+  const b = serializeWorld(w);
+  if (!STRIP) return `save:${fnv(b)}`;
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  if (dv.getUint32(8, true) >= 5) dv.setUint32(8, 4, true);
+  return `save-v${dv.getUint32(4, true)}:${fnv(b)}`;
+}
 const ids = (w: World, kind?: number) => {
   const o: number[] = [];
   for (let s = 0; s < w.units.highWater; s++) if (w.units.alive[s] && (kind === undefined || w.units.cols.kind[s] === kind)) o.push(w.units.id(s));
@@ -28,8 +64,8 @@ function play(w: World, script: Array<[number, (w: World) => Command]>, ticks: n
     w.step();
     if (w.tick % every === 0) out.push(snapHash(w));
   }
-  out.push(`save:${fnv(serializeWorld(w))}`);
-  out.push(`len:${snapshotBytes(encodeSnapshot(w)).length}`);
+  out.push(saveEntry(w));
+  out.push(`len:${snapOut(w).length}`);
   return out;
 }
 
