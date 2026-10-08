@@ -12,6 +12,8 @@ export interface HudStats {
   distance: number;
   renderer: string;
   scenario: string;
+  /** Render mode and quality, e.g. "models · medium" or "greybox". */
+  view: string;
 }
 
 const css = `
@@ -60,7 +62,7 @@ export class Hud {
 
   update(s: HudStats): void {
     this.stats.textContent =
-      `BULWARK greybox · ${s.scenario} · H: help\n` +
+      `BULWARK ${s.view} · ${s.scenario} · H: help\n` +
       `fps ${s.fps.toFixed(0).padStart(4)}   worker tick ${s.tickMs.toFixed(2)} ms   tick ${s.tick}\n` +
       `draw calls ${s.drawCalls}   triangles ${s.triangles}\n` +
       `buildings ${s.counts.buildings}   aliens ${s.counts.aliens}   units ${s.counts.units}\n` +

@@ -100,9 +100,12 @@ export function createRenderer(mode: RenderMode, quality: Quality = 'medium'): R
       camera = c;
       if (mode === 'models') {
         post = new StressPost(r, s, c, Math.max(1, cssW), Math.max(1, cssH));
-        // time each pass's own render call (CPU), once per frame
+        // W21's order (stress/post.ts): scene, ambient occlusion, bloom + tone map, tone map only
+        // (when bloom is off), SMAA. Named, and each pass's own render call timed (CPU).
+        const names = ['scene', 'ambient-occlusion', 'bloom+tonemap', 'tonemap-only', 'smaa'];
+        post.composer.passes.forEach((p, i) => (p.name = names[i] ?? p.name));
         for (const pass of post.composer.passes) {
-          const name = pass.name || pass.constructor.name;
+          const name = pass.name;
           const inner = pass.render.bind(pass);
           pass.render = (...args: Parameters<typeof pass.render>) => {
             const t0 = performance.now();

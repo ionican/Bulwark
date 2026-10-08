@@ -25,7 +25,9 @@ import { groundHeight } from './ground.ts';
 import { fbm, smoothstep } from './workshop/noise.ts';
 
 /** Distances of the scenery rings from the map edge (tiles). Ring 0 is the edge itself. */
-export const SCENERY_RINGS = [0, 1, 2, 3.5, 5, 7, 9.5, 12.5, 16, 20, 25, 31, 38, 46, 55, 66, 80, 96, 116, 140, 170, 210, 260, 330];
+export const SCENERY_RINGS = [
+  0, 1, 2, 3, 4.5, 6, 8, 10, 12.5, 15, 18, 21.5, 25, 29, 33, 37.5, 42, 47, 52, 58, 64, 71, 78, 86, 95, 105, 116, 128, 142, 158, 176, 196, 220, 250, 290, 340,
+];
 
 export interface GroundGeometry {
   geometry: BufferGeometry;
@@ -53,34 +55,41 @@ const terrace = (h: number, step: number) => {
   return (k + smoothstep(0.62, 0.95, f)) * step;
 };
 
-/** Scenery height at distance d beyond the edge, world (x, z); `edgeH` is the edge vertex's height. */
+/**
+ * Scenery height at distance d beyond the edge, world (x, z); `edgeH` is the edge vertex's height.
+ * North-east of the map (where the waves come from) the plateau ends in a cliff over a canyon floor
+ * whose far side climbs in terraces; south-west the land climbs in terraces straight from the edge.
+ * Each entry has a corridor: a ramp from the map edge down to the canyon floor. Within the first
+ * few tiles everything blends from the edge height, which the edge vertex keeps exactly.
+ */
 function sceneryHeight(t: Terrain, x: number, z: number, d: number, edgeH: number): number {
   const n1 = fbm(x * 0.021, z * 0.021, 4) * 0.5 + 0.5;
   const n2 = fbm(x * 0.06 + 17, z * 0.06 - 5, 3) * 0.5 + 0.5;
-  // canyon floor just beyond the rim, then terraced walls rising to mesas
   const floor = -5.5 + 1.2 * (n2 - 0.5);
-  const walls = floor + (4 + 12 * n1) * smoothstep(14, 70, d) + 3 * n2 * smoothstep(40, 120, d);
-  let h = terrace(walls, 1.7);
-  // approach corridors: canyons running out from each entry at floor level
+  const rise = terrace(edgeH + (3 + 9 * n1) * smoothstep(3, 40, d) + 4 * n2 * smoothstep(30, 110, d), 1.6);
+  const drop = terrace(floor + (5 + 11 * n1) * smoothstep(26, 110, d) + 3 * n2 * smoothstep(60, 160, d), 1.7);
+  // north-east-ness of the direction from the map centre (north is −z)
+  const vx = x - t.w / 2;
+  const vz = z - t.h / 2;
+  const ne = (vx - vz) / (Math.SQRT2 * (Math.hypot(vx, vz) || 1));
+  let h = rise + (drop - rise) * smoothstep(-0.25, 0.35, ne);
   for (const e of t.entries) {
-    // distance from the corridor line (from the entry outwards, against its inward direction)
     const px = x - e.x;
     const pz = z - e.z;
     const along = -(px * e.dirX + pz * e.dirZ);
     const across = Math.abs(px * e.dirZ - pz * e.dirX);
-    if (along < -4) continue;
-    const width = 9 + 4 * n2 + along * 0.08;
-    const k = 1 - smoothstep(width, width + 7, across);
-    h = h + (floor - 0.4 - h) * k;
+    if (along < -6) continue;
+    const width = 8 + 4 * n2 + Math.max(0, along) * 0.08;
+    const k = 1 - smoothstep(width, width + 6, across);
+    const ramp = edgeH + (floor - 0.3 - edgeH) * smoothstep(4, 55, along);
+    h = h + (ramp - h) * k;
   }
-  // the rim: from the edge height down into the canyon over the first few tiles
-  const rim = smoothstep(0, 5, d);
-  return edgeH + (h - edgeH) * rim;
+  return edgeH + (h - edgeH) * smoothstep(0, 4, d);
 }
 
 /** Weathering mask from noise (the dark rock patches of W17's material). */
 function darkAt(x: number, z: number): number {
-  return smoothstep(0.58, 0.82, fbm(x * 0.07 + 3.1, z * 0.07 - 1.7, 3) * 0.5 + 0.5) * 0.7;
+  return smoothstep(0.58, 0.82, fbm(x * 0.07 + 3.1, z * 0.07 - 1.7, 3) * 0.5 + 0.5) * 0.55;
 }
 
 export function buildGroundGeometry(t: Terrain): GroundGeometry {

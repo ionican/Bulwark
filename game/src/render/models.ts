@@ -119,8 +119,8 @@ const BUILDING_ICON: Record<number, IconName> = {
 };
 const ALIEN_ICON: IconName[] = ['rusher', 'hunter', 'breaker', 'saboteur'];
 const ALIEN_MODEL_NAMES = ['rusher', 'hunter', 'breaker', 'saboteur'] as const;
-/** Icon size in screen pixels (W13's icon radii × 2). */
-const ICON_PX = { building: 18, belt: 10, alien: 13, commander: 28, engineer: 16, wreck: 9 } as const;
+/** Icon quad size in screen pixels (the drawn shape fills about 70 % of it). */
+const ICON_PX = { building: 26, belt: 12, alien: 17, commander: 34, engineer: 20, wreck: 11 } as const;
 const BELT_YAW = [0, -Math.PI / 2, Math.PI, Math.PI / 2];
 export const ICON_LEVEL = 3;
 /** Thresholds (tiles from the camera) for W17 buildings, aliens and wrecks: model, or icon beyond. */
@@ -169,28 +169,29 @@ function assetOf(id: string): AssetKind {
   return 'wall';
 }
 
-/** Splitter (fan-out: one chevron in, three out) and merger (three in, one out) top markers. */
+/**
+ * Splitter and merger top markers: a raised hub on the belt with arrowhead plates on it, so neither
+ * is ever drawn like a plain belt. Splitter: one arrow in from the back, three out (front, left,
+ * right). Merger: three in (back, left, right), one out at the front. Model +x is the belt's flow.
+ */
 function beltMarker(mats: RenderMaterials['w17'], kind: 'splitter' | 'merger'): ModelDef {
   const b = new Builder(mats);
-  const y = 0.2;
-  const chev = (x: number, z: number, ang: number, s: number) => {
-    // a chevron of two slanted bars, pointing along `ang` (model +x = 0)
-    for (const side of [-1, 1]) b.add('ivory', cbox(0.24 * s, 0.07, 0.07 * s, 0.01), { x: x - Math.cos(ang) * 0.08 * s + Math.sin(ang) * side * 0.07 * s, y, z: z + Math.sin(ang) * 0.08 * s + Math.cos(ang) * side * 0.07 * s, ry: ang + side * 0.75 });
+  const y = 0.27;
+  b.add('trim', prism(8, 0.13, 0.09, 0.012), { y: y - 0.07 });
+  // an arrowhead plate pointing along `ang` (0 = +x), tip at distance r from the hub centre
+  const arrow = (ang: number, r: number, s: number) => {
+    const tri = prism(3, 0.14 * s, 0.05, 0.006, false); // a vertex on +x: the tip
+    b.add('ivory', tri, { x: Math.cos(ang) * (r - 0.07 * s), y: y + 0.02, z: -Math.sin(ang) * (r - 0.07 * s), ry: ang });
   };
-  b.add('trim', prism(8, 0.16, 0.06, 0.01), { y: y - 0.04 });
   if (kind === 'splitter') {
-    chev(-0.3, 0, 0, 0.9);
-    chev(0.3, 0, 0, 0.9);
-    chev(0, 0.3, -Math.PI / 2, 0.9);
-    chev(0, -0.3, Math.PI / 2, 0.9);
+    arrow(0, -0.2, 0.85);
+    for (const a of [0, Math.PI / 2, -Math.PI / 2]) arrow(a, 0.42, 1);
   } else {
-    chev(-0.3, 0, 0, 0.9);
-    chev(0, 0.3, Math.PI / 2, 0.9);
-    chev(0, -0.3, -Math.PI / 2, 0.9);
-    chev(0.32, 0, 0, 1.1);
+    for (const a of [Math.PI, Math.PI / 2, -Math.PI / 2]) arrow(a + Math.PI, -0.22, 0.85);
+    arrow(0, 0.44, 1.15);
   }
   const { geometry, material } = b.build();
-  return { name: `${kind}Marker`, parts: [{ name: 'marker', geometry, material, pivot: new Matrix4(), motion: { kind: 'static' }, castShadow: true }], radius: 0.5, height: 0.3 };
+  return { name: `${kind}Marker`, parts: [{ name: 'marker', geometry, material, pivot: new Matrix4(), motion: { kind: 'static' }, castShadow: true }], radius: 0.5, height: 0.36 };
 }
 
 /** W21's wreck debris (stress/aliens.ts AlienRenderer), one unit across. */

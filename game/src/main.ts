@@ -736,6 +736,7 @@ function frame(now: number) {
       distance: rig.distance,
       renderer: adapter.describe(),
       scenario: { map1: 'map 1', stress: 'stress scene', empty: 'empty map', sandbox: 'sandbox (map 1)' }[SCENARIO_NAMES[snap.globals[G_SCENARIO]!] ?? 'map1'],
+      view: renderMode === 'greybox' ? 'greybox' : `models · ${adapter.quality}`,
     });
     const g = snap.globals;
     hud.updateEconomy({
@@ -1188,6 +1189,8 @@ const game = {
   // ---- W24: wall runs, gates and the sandbox commands. Each sends one command and resolves with
   // { ok: true, tick, detail? } once it has been applied at its tick, or { ok: false, reason } if it
   // was refused when sent or at its tick (while paused, it resolves after resuming).
+  /** Debug (W24 run 2a fixtures): places a complete building at once, as the simulation's `place` command. */
+  place: (kind: string | number, tx: number, ty: number, dir = 0) => commandResult({ t: 'place', kind: buildingKindIndex(kind), tx, ty, dir }),
   buildRun: (from: [number, number], to: [number, number], depth = 1, opts: { ids?: number[]; queue?: boolean } = {}) =>
     commandResult({ t: 'buildRun', ids: opts.ids ?? allUnitIds(), from, to, depth, queue: opts.queue ?? false }),
   cancelRun: (run: number) => commandResult({ t: 'cancelRun', run }),
@@ -1242,10 +1245,11 @@ const game = {
     return inspectScene(scene, entitiesOf(s, interp.aliens, interp.units));
   },
   /**
-   * GPU+CPU cost by forced-completion timing (render/cost.ts): the frame rendered `frames` times
-   * with each part on and off. Pauses the frame loop while it runs.
+   * GPU+CPU cost by forced-completion timing (render/cost.ts): blocks of `frames` renders of each
+   * configuration (the ground, the post stack and each post pass on and off), in 7 interleaved
+   * rounds, medians. Pauses the frame loop while it runs (about 10 s).
    */
-  renderCost: (frames = 40) => measureRenderCost(adapter, view, camera, frames, (on) => (costRunning = on)),
+  renderCost: (frames = 15) => measureRenderCost(adapter, view, camera, frames, (on) => (costRunning = on)),
   camera: {
     get: (): Rig => ({ ...rig }),
     set: (r: Partial<Rig>) => {

@@ -1,12 +1,15 @@
-# Bulwark — greybox game (W13)
+# Bulwark — the game (W13 greybox slice; W24 sandbox and models)
 
-Browser base-defence slice. TypeScript + Vite + Three.js 0.186 (WebGL renderer behind `src/render/adapter.ts`). The simulation runs in a dedicated Web Worker at 10 ticks/s and sends a transferred snapshot buffer to the render thread each tick.
+Browser base-defence slice. TypeScript + Vite + Three.js 0.186 (WebGL renderer behind `src/render/adapter.ts`; W21's post stack from `postprocessing` and `n8ao`). Drawn with the W17–W23 models since W24 run 2a; `?greybox=1` shows W13's greybox renderer. The simulation runs in a dedicated Web Worker at 10 ticks/s and sends a transferred snapshot buffer to the render thread each tick.
 
 ```
 npm install
-npm run dev     # http://127.0.0.1:8822/   (sandbox: /?sandbox=1, stress scene: /?stress=1, seed: /?seed=7, debug rich start: /?rich=1)
+npm run dev     # http://127.0.0.1:8822/   (sandbox: /?sandbox=1, stress scene: /?stress=1, seed: /?seed=7, debug rich start: /?rich=1,
+                #  W13 greybox view: /?greybox=1, high quality: /?quality=high)
 npm test        # tsc + vitest, about 2 minutes (includes two headless full-map runs)
 npm run build   # static build in dist/
+node scripts/fingerprint-compare.mjs <commit>   # simulation unchanged against a commit (snapshot and save hashes)
+node scripts/check-render.mjs [--shots <dir>]   # browser check of the model view on port 8823 (agent-browser, session w24-2a)
 ```
 
 ## Layout
@@ -19,7 +22,7 @@ npm run build   # static build in dist/
   - `economy.ts` — income, energy upkeep, construction drain (worst supply ratio per build); `units.ts` — orders, A* (`pathfind.ts`), reclaim
   - `conveyor.ts` — belts, splitter, merger, machines, depot; `combat.ts` — turrets, projectiles, armour, shields
   - `aliens.ts` — movement on flow fields (`flowfield.ts`, one per target category) and attacks
-- `src/render/` — camera rig, ground-ray picking, per-object LOD with hysteresis, instanced entity drawing, procedural geometry, terrain view.
+- `src/render/` — camera rig, ground-ray picking, per-object LOD with hysteresis, instanced entity drawing, procedural geometry, terrain view. W24 run 2a (models, see below): `adapter.ts` (renderer, post, quality, timing), `view.ts` (scene per mode), `ground.ts` and `groundView.ts` (the one ground, scenery, outcrops, paving), `models.ts` (every kind from snapshots), `wallLayout.ts`, `w17Batches.ts`, `icons.ts`, `materials.ts`, `inspect.ts` (scene inspection), `cost.ts` (frame cost), and `workshop/` (the ported look/ sources; its README lists them).
 - `src/main.ts` — wiring, input, HUD, `window.__game` debug hook.
 
 Scale: 1 tile = 2 m; map 1 is 128 × 128 tiles.
@@ -67,3 +70,29 @@ Left click or drag: select. Right click with units selected: reclaim a wreck (en
 `window.__game` (read-only): `wave`, `speed`, `paused`, `checkpoints`, `research`, `endState`, `rejected` (commands the worker refused, with reasons), `notices`, `lastSave`, `tick`, `entityCounts`, `lastTickMs`, `medianTickMs` and `maxTickMs` (last 100 ticks), `drawCalls`, `lodLevelCounts` (`full`, `simple`, `icon`, `culled`), `fps`, `frameCpuMs`, `renderer`, `errors`, `selected`, `selectAt(x, y)`, `pool` (mass/energy/rare, income, spend, short), `parts`, `commanderHp`, `alienCounts`, `buildQueue`, `routes`, `stats`, `ghost`, `buildMode`, `outcome`. Test helpers: `cmd.build(kind, tx, ty, {dir, ids, queue})`, `cmd.move(ids, x, z)`, `cmd.reclaim(ids, wreckId)`, `cmd.assist`, `cmd.upgrade`, `cmd.dropTurret`, `cmd.stop`, `cmd.spawn(kind, entry, count)`, `cmd.research(node)`, `cmd.produce()`, `cmd.callWave()` (`ids` null = every commander and engineer; an unknown kind, node or entry name throws), `control.pause/speed/rewind/save/loadLastSave/loadBytes`, `camera.get/set/view`, `list(type)`, `screenOf(type, id)`, `worldToScreen(x, z)`.
 
 W24 adds: `buildRun(from, to, depth, {ids, queue})`, `cancelRun(id)`, `gate(tx, ty, {ids, axis})`, `spawnAt(kind, x, z, count)`, `tune(target, kind, field, mult)`, `tuneReset(target?, kind?)`, `setUnlimited(on)`, `grantResearch(node | 'all')`, `startWave(index)`, `clearAliens()`, `clearWrecks()`, `resetStats()`, `resetSandbox(full?)` — each resolves with its final result, `{ ok: true, tick, detail? }` once applied at its tick or `{ ok: false, reason }` if refused when sent or at its tick — and `stats()` (per-kind counters plus the W13 totals, which moved from the old `stats` getter to `counters`), `runs`, `tuning`, `unlimited`, `originRoutes`, `commanderRespawn`, `urlScenario`. `scenario` now reports the running world's scenario (a loaded save brings its own).
+
+## W24 run 2a: models from snapshots
+
+The default view draws every kind with the workshop's models, in a static pose, from snapshots only
+(render code imports only the simulation's pure data modules; `test/w24r2a-imports.test.ts`):
+
+| Kind | Model | Strategic-zoom icon |
+|---|---|---|
+| wall, gate | W23 walls and gates (autotiled; doors closed) | W23 wall / gate |
+| mass, rare extractor | W23 extractors (idle pose); bare deposits W23's | W23 extractor / dashed deposit |
+| gun, area, beam, heavy, temporary turret | W22 kit kinds bastion, anvil, lantern, rampart, lookout (heavy × 1.35, temporary × 0.6 for their footprints), yaw towards the target | W22 kit icons |
+| generator, research station, depot, shredder, smelter, assembler, shield, belt | W17 procedural models | new shape-coded icons |
+| splitter, merger | W17 belt plus an arrow marker: one in, three out / three in, one out | new icons |
+| commander, engineer | W23 rigs at rest, feet on the ground | W23 commander / engineer |
+| rusher, hunter, breaker, saboteur | W17/W21 alien models, 1.5 × | new shape-coded icons |
+
+- **Ground**: one sampler, `ground.ts groundHeight`, equal to the mesh triangles (diagonal from (x+1, z) to (x, z+1)); picking, feet, building bases and icons use it. W17's terrain material shades it: cliff from slope and rock tiles, paving under complete buildings (a per-tile texture), weathering from noise. Terraced outcrops on rock tiles; canyon scenery beyond the edge on the map's own edge vertices.
+- **Construction**: reserved = dotted outline; started = the model cut at base + height × progress (W23's cut and depth material; W17's materials patched the same way); complete = the model. Two damage states below 2/3 and 1/3 of the hit points.
+- **Foundations**: a building stands at the highest ground under its footprint on a plinth down to the lowest.
+- **Wall topology** is rebuilt only when the layout key changes (tile, tier, reserved or not, gate, gate axis and footprint).
+- **Lighting and post**: W17's sun (one shadow map fitted near the camera), HDRI light, haze and sky; W21's post stack (N8AO, bloom, ACES, SMAA). Quality medium by default (pixel ratio ≤ 1); `?quality=high` or `__game.setQuality('high')`.
+- **Overlays** (health bars, beams and work lines, shots, shields, routes, selection, entry labels) are still W13's (animation and effects are run 2b).
+
+`window.__game` adds: `renderMode`, `quality`, `setQuality(q)`, `viewport`, `timing` (CPU ms of the last frame's update and of each render pass), `wallRebuilds`, `overflowed`, `inspect()` (per kind: model and icon instances found in the scene graph on that kind's entities, greybox instances, mesh and material names), `renderCost(frames)` (forced-completion frame cost with the ground, post and each post pass switched off), `place(kind, tx, ty, dir)` (debug: the simulation's `place` command, a complete building at once). `lodLevelCounts` has `middle` in the model view.
+
+Notes, measurements and screenshots: `W24-RUN2A-NOTES.md`.
