@@ -87,10 +87,10 @@ export function faceSegment(p: PB, tier: number, z0: number, z1: number): void {
   };
   // inner frame against the core: two rails and posts at z = 0 and ±0.5 (shown by damage holes)
   const fx0 = h + 0.004;
-  const fx1 = h + Math.min(0.03, f - 0.012);
-  for (const y of [0.42, 0.86]) strip(p, 'gunmetal', () => rectProf(fx0, y, fx1, y + 0.05, 0), z0, z1, -1, 1, 'minor');
-  every([-0.5, 0, 0.5], 0.06, z0, z1, (a, b) => strip(p, 'gunmetal', () => rectProf(fx0, 0.15, fx1, DECK - 0.04, 0), z0, z1, a, b, 'minor'));
-  // the core's outer skin behind the frame is dark (core/* parts)
+  const fx1 = h + Math.min(0.035, f - 0.012);
+  for (const y of [0.3, 0.62, 0.94]) strip(p, 'gunmetal', () => rectProf(fx0, y, fx1, y + 0.06, 0), z0, z1, -1, 1, 'minor');
+  every([-0.5, -0.25, 0, 0.25, 0.5], 0.06, z0, z1, (a, b) => strip(p, 'gunmetal', () => rectProf(fx0, 0.12, fx1, DECK - 0.04, 0), z0, z1, a, b, 'minor'));
+  // behind the frame, the core's skin is dark (core/* parts), so the frame stands out in a hole
 
   if (tier === 1) {
     strip(p, 'gunmetal', (c) => rectProf(h - 0.02, 0, xf + 0.03, 0.16, c, true, false), z0, z1);

@@ -278,7 +278,7 @@ export class World {
       }
       for (let k = 0; k < t.n; k++) {
         const i = t.first + k;
-        B.push(this.wPart[i]!, lv, this.wMat, i * 16, 1, damage, cut);
+        B.push(this.wPart[i]!, lv, this.wMat, i * 16, 1, damage + 10, cut);
       }
     }
 
@@ -304,7 +304,7 @@ export class World {
       wallMatrix(_m2, cx, cy, cz, gi.rot, [0, 0, 0]);
       for (const pc of gi.parts) {
         _m.copy(_m2).multiply(wallMatrix(_base, pc.off[0], pc.off[1], pc.off[2], pc.rot, [0, 0, 0]));
-        B.push(P(pc.part), lv, _m);
+        B.push(P(pc.part), lv, _m, 0, 1, 10);
       }
       const moving = door ? door.open > 0 && door.open < 1 : false;
       const glow = moving ? 0.4 + 0.6 * (Math.sin(this.time * 14) > 0 ? 1 : 0) : open > 0.5 ? 1.4 : 0.6;
@@ -395,7 +395,7 @@ export class World {
           if (id) B.push(P(id), lv, rig.mats[k]!);
         });
       }
-      if (!ctx.noMarkers && lv >= 1) ctx.markers.push(px, py + (lv === 3 ? 0.3 : 0.9), pz, ICON.engineer, lv === 3 ? 18 : lv === 2 ? 17 : 15);
+      if (!ctx.noMarkers && lv >= 1) ctx.markers.push(px, py + (lv === 3 ? 0.3 : 0.9), pz, ICON.engineer, lv === 3 ? 22 : lv === 2 ? 18 : 15);
     }
 
     // commanders
@@ -410,7 +410,7 @@ export class World {
       B.count('commander', lv);
       ctx.badge?.(px, py + 2.6, pz, lv);
       if (lv <= 2) CMD_SEGS.forEach((s, k) => B.push(P(CMD_PARTS[s]), lv, rig.mats[k]!));
-      if (!ctx.noMarkers && lv >= 2) ctx.markers.push(px, py + (lv === 3 ? 0 : 2.4), pz, lv === 3 ? ICON.commanderRing : ICON.commander, lv === 3 ? 34 : 24);
+      if (!ctx.noMarkers && lv >= 2) ctx.markers.push(px, py + (lv === 3 ? 0 : 2.4), pz, lv === 3 ? ICON.commanderRing : ICON.commander, lv === 3 ? 40 : 24);
     });
 
     // beams, sparks and shots

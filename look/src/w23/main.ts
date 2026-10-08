@@ -22,7 +22,7 @@ import { createAssetMats } from './mats.ts';
 import { Painter, TOOL_NAMES, type PaintTool } from './painter.ts';
 import { PartSet } from './parts.ts';
 import { CMD_ACTIONS, CMD_PARTS, CMD_SEGS, commanderBuilders, type CmdAction } from './rig/commander.ts';
-import { ENG_ACTIONS, VARIANTS, engineerBuilders, segmentParts, type EngAction } from './rig/engineer.ts';
+import { ENG_ACTIONS, VARIANTS, engineerBuilders, engineerSimple, segmentParts, type EngAction } from './rig/engineer.ts';
 import { DEMO_LOOP, VIEW_NAMES, demoView, lineupView, lodView, painterExample, painterView, stressView, type View, type ViewId } from './views.ts';
 import { wallBuilders } from './walls/geometry.ts';
 import { GATE_WIDTH } from './walls/grid.ts';
@@ -99,7 +99,8 @@ async function main(): Promise<void> {
   loading.textContent = 'Building parts…';
   await new Promise((r) => setTimeout(r, 0));
   const parts = new PartSet();
-  for (const builders of [wallBuilders(), extractorBuilders(), engineerBuilders(), commanderBuilders()]) for (const [id, fn] of builders) parts.add(id, assetOf(id), fn, { shadow: !id.startsWith('flow') && !id.endsWith('/light') });
+  const engSimple = engineerSimple();
+  for (const builders of [wallBuilders(), extractorBuilders(), engineerBuilders(), commanderBuilders()]) for (const [id, fn] of builders) parts.add(id, assetOf(id), fn, { shadow: !id.startsWith('flow') && !id.endsWith('/light'), levels: engSimple.has(id) ? { 2: engSimple.get(id)! } : undefined });
   const batches = new PartBatches(parts.parts, mats);
   scene.add(batches.group);
   const atlas = w23Atlas();
@@ -492,6 +493,7 @@ async function main(): Promise<void> {
     restart: (() => viewOf('demo').restart?.()) as never,
     badges: ((v: boolean) => (s.badges = v)) as never,
     panels: ((v: boolean) => document.body.classList.toggle('nopanels', !v)) as never,
+    unitLabels: ((v: boolean) => document.body.classList.toggle('nounitlabels', !v)) as never,
     /** Advances the current view's simulation by `seconds` in fixed steps (for screenshots). */
     advance: ((seconds: number) => {
       const v = viewOf(s.view);
@@ -517,10 +519,19 @@ async function main(): Promise<void> {
       return [Math.round(r.left + ((p.x + 1) / 2) * r.width), Math.round(r.top + ((1 - p.y) / 2) * r.height)];
     }) as never,
     lineupEngineers: ((a: EngAction) => lineup.controls.engineers(a)) as never,
+    lineupEngineer: ((i: number, a: EngAction) => lineup.controls.engineer(i, a)) as never,
     lineupCommander: ((a: CmdAction) => lineup.controls.commander(a)) as never,
     lineupExtractors: ((on: boolean) => lineup.controls.extractors(on)) as never,
     lineupConstruct: (() => lineup.controls.construct()) as never,
     triangles: (() => triTable()) as never,
+    /** Client pixel position of a world point. */
+    project: ((x: number, y: number, z: number) => {
+      const p = new Vector3(x, y, z).project(cam.camera);
+      const r = canvas.getBoundingClientRect();
+      return [Math.round(r.left + ((p.x + 1) / 2) * r.width), Math.round(r.top + ((1 - p.y) / 2) * r.height)];
+    }) as never,
+    /** The current view's world (debugging). */
+    world: (() => viewOf(s.view).world) as never,
     measure: ((seconds: number) =>
       new Promise((resolve) => {
         const iv: number[] = [];

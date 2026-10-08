@@ -433,6 +433,31 @@ export function engineerBuilders(): Map<string, (p: PB) => void> {
   return m;
 }
 
+/**
+ * Simple level of the engineer parts: a few boxes per segment (the figure is a handful of pixels
+ * tall where this level is used), keeping the outline, the ivory chest and the cyan visor.
+ */
+export function engineerSimple(): Map<string, (p: PB) => void> {
+  const m = new Map<string, (p: PB) => void>();
+  const B = (k: 'gunmetal' | 'ceramic' | 'dark' | 'bronze' | 'glow', w: number, h: number, d: number, x: number, y: number, z = 0) => (p: PB) => p.box(k, w, h, d, { x, y, z }, { c: 0 });
+  const all = (...f: Array<(p: PB) => void>) => (p: PB) => f.forEach((g) => g(p));
+  m.set('eng/pelvis', B('gunmetal', 0.12, 0.11, 0.17, 0, -0.07));
+  m.set('eng/torso', all(B('gunmetal', 0.12, TORSO, 0.19, 0, 0), B('ceramic', 0.02, 0.15, 0.15, 0.065, 0.1)));
+  for (const k of [0, 1, 2]) m.set(`eng/helmet${k}`, all((p) => p.prism('ceramic', 6, 0.07, 0.13, { y: 0.02 }, { c: 0 }), B('glow', 0.02, 0.03, 0.09, 0.062, 0.07)));
+  m.set('eng/pack0', B('gunmetal', 0.08, 0.17, 0.14, -0.1, 0.07));
+  m.set('eng/pack1', B('ceramic', 0.09, 0.2, 0.1, -0.11, 0.05));
+  m.set('eng/uarm', B('gunmetal', 0.06, UARM, 0.06, 0, -UARM));
+  m.set('eng/farm', B('gunmetal', 0.055, FARM, 0.055, 0, -FARM));
+  m.set('eng/hand', B('dark', 0.04, 0.055, 0.036, 0, -0.056));
+  m.set('eng/thigh', B('gunmetal', 0.085, 0.215, 0.085, 0, -0.215));
+  m.set('eng/shin', all(B('gunmetal', 0.07, 0.215, 0.07, 0, -0.215), B('ceramic', 0.02, 0.15, 0.06, 0.04, -0.19)));
+  m.set('eng/boot', B('gunmetal', 0.135, 0.058, 0.07, 0.024, -0.045));
+  for (const k of [0, 1, 2]) m.set(`eng/tool${k}`, B('gunmetal', 0.03, 0.12, 0.03, 0.01, -0.17));
+  m.set('eng/box', B('gunmetal', 0.11, 0.1, 0.13, 0, -0.05));
+  m.set('eng/pod', all(B('gunmetal', 0.22, 0.16, 0.22, 0, 0), B('ceramic', 0.14, 0.08, 0.11, 0, 0.16)));
+  return m;
+}
+
 /** Part id drawn on each segment for a variant (null = nothing). */
 export function segmentParts(v: EngVariant, carrying: boolean): Array<string | null> {
   return ENG_SEGS.map((s) => {

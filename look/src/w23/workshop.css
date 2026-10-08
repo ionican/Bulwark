@@ -12,3 +12,4 @@
 #w23-labels .wl b { font-weight: 600; }
 body[data-view='painter'] #view { cursor: crosshair; }
 body.nopanels #bench-panel, body.nopanels #bench-readout { display: none; }
+body.nounitlabels #w23-labels .wl.unit { display: none !important; }

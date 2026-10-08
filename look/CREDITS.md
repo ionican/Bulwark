@@ -50,3 +50,5 @@ Total texture and HDRI bytes on disk: 36746484 (35.04 MiB).
 Licence texts: Poly Haven — https://polyhaven.com/license ; ambientCG — https://docs.ambientcg.com/license/ (both CC0 1.0, https://creativecommons.org/publicdomain/zero/1.0/).
 
 npm packages: three (MIT), postprocessing (Zlib), n8ao (ISC).
+
+W23 asset workshop (`assets.html`): no new textures. Walls, gates, extractors, deposits, engineers and the commander use W20's material set built from the files above (`beige_wall_001`, `metal_plate_02`, `Metal047B`), with damage, cracks, scorch and the build band drawn in shader code; icons are drawn in code on a canvas. Added texture bytes: 0.

@@ -5,7 +5,7 @@
 //
 //   r  glow level        the glow material's emissive is multiplied by it (status lights, the
 //                        flow pulse along an extractor's conduit, a gate's moving doors)
-//   g  damage state      0 intact; 1 scuffed: scorch mottling and dark crack lines; 2 heavily
+//   g  damage state      (+10 on static structures: world-space texture on upward faces) 0 intact; 1 scuffed: scorch mottling and dark crack lines; 2 heavily
 //                        damaged: heavier scorch, cracks, and holes burnt through the ivory panels
 //                        (fragments discarded where a world-space noise passes a threshold, with a
 //                        charred rim) that show the gunmetal frame and dark core behind
@@ -53,7 +53,7 @@ const LOOKS: Record<MatKey, WearLook> = {
 
 const HOLE_GLSL = /* glsl */ `
   float w23Hole(vec3 p) {
-    return texture2D(tWear, p.xz * 0.27 + p.yy * vec2(0.41, -0.33)).r * 0.65 + texture2D(tWear, p.zx * 0.83 + p.yy * vec2(-0.6, 0.7)).r * 0.35;
+    return texture2D(tWear, p.xz * 0.12 + p.yy * vec2(0.21, -0.17)).r * 0.75 + texture2D(tWear, p.zx * 0.5 + p.yy * vec2(-0.35, 0.4)).r * 0.25;
   }`;
 
 function patch(m: MeshStandardMaterial, noise: Texture, key: MatKey): void {
@@ -80,7 +80,34 @@ function patch(m: MeshStandardMaterial, noise: Texture, key: MatKey): void {
           vInst = instanceColor;
         #else
           vInst = vec3(1.0, 0.0, ${BUILT.toFixed(1)});
-        #endif`,
+        #endif
+        // damage + 10 marks a static structure whose upward faces take world-space texture
+        // coordinates, so decks of pieces turned different ways read as one surface
+        if (vInst.y > 9.5) {
+          vInst.y -= 10.0;
+          vec3 wN = mat3(modelMatrix) * objectNormal;
+          #ifdef USE_INSTANCING
+            wN = mat3(modelMatrix) * (mat3(instanceMatrix) * objectNormal);
+          #endif
+          if (normalize(wN).y > 0.9) {
+            vec3 wuv = vec3(vWP.xz, 1.0);
+            #ifdef USE_MAP
+              vMapUv = (mapTransform * wuv).xy;
+            #endif
+            #ifdef USE_NORMALMAP
+              vNormalMapUv = (normalMapTransform * wuv).xy;
+            #endif
+            #ifdef USE_ROUGHNESSMAP
+              vRoughnessMapUv = (roughnessMapTransform * wuv).xy;
+            #endif
+            #ifdef USE_METALNESSMAP
+              vMetalnessMapUv = (metalnessMapTransform * wuv).xy;
+            #endif
+            #ifdef USE_AOMAP
+              vAoMapUv = (aoMapTransform * wuv).xy;
+            #endif
+          }
+        }`,
       );
     sh.fragmentShader = sh.fragmentShader
       .replace(
@@ -95,7 +122,7 @@ function patch(m: MeshStandardMaterial, noise: Texture, key: MatKey): void {
         '#include <clipping_planes_fragment>',
         `#include <clipping_planes_fragment>
         if (vWP.y > vInst.z) discard;
-        ${panel ? 'if (vInst.y > 1.5 && w23Hole(vWP) > 0.6) discard;' : ''}`,
+        ${panel ? 'if (vInst.y > 1.5 && w23Hole(vWP) > 0.62) discard;' : ''}`,
       )
       // the instance colour carries data (glow, damage, cut), not a tint
       .replace('#include <color_fragment>', '')
@@ -111,15 +138,18 @@ function patch(m: MeshStandardMaterial, noise: Texture, key: MatKey): void {
           diffuseColor.rgb = mix(diffuseColor.rgb, uWearCol * (0.75 + 0.5 * wn), gEdge);
           float dmg = vInst.y;
           if (dmg > 0.5) {
-            vec2 duv = vWP.xz * 0.23 + vWP.yy * vec2(0.37, -0.29);
-            float n1 = texture2D(tWear, duv).r;
-            float n2 = texture2D(tWear, duv * 3.1 + 0.37).r;
+            vec2 duv = vWP.xz * 0.11 + vWP.yy * vec2(0.19, -0.15);
+            float n1 = texture2D(tWear, duv).r * 0.7 + texture2D(tWear, duv * 2.7).r * 0.3;
+            float n2 = texture2D(tWear, duv * 4.3 + 0.37).r;
+            float n3 = texture2D(tWear, duv * 9.1 + 0.61).r;
             float heavy = step(1.5, dmg);
-            float scorch = smoothstep(0.42, 0.78, n1) * (0.5 + 0.5 * heavy);
-            float crack = 1.0 - smoothstep(0.0, 0.016 + 0.01 * heavy, abs(n2 - 0.5));
-            diffuseColor.rgb *= 1.0 - 0.6 * scorch;
-            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.045, 0.04, 0.035), crack * 0.9);
-            ${panel ? 'if (heavy > 0.5) diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.05, 0.042, 0.036), smoothstep(0.5, 0.6, w23Hole(vWP)));' : ''}
+            // soot and scorch: broad, soft patches
+            float scorch = smoothstep(0.58, 0.88, n1) * (0.45 + 0.4 * heavy);
+            // cracks: thin contour lines of two noise octaves, more of them when heavily damaged
+            float crack = max(1.0 - smoothstep(0.0, 0.012 + 0.006 * heavy, abs(n2 - 0.5)), (1.0 - smoothstep(0.0, 0.01, abs(n3 - 0.5))) * smoothstep(0.45, 0.7, n1));
+            diffuseColor.rgb *= 1.0 - 0.5 * scorch;
+            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.04, 0.035, 0.03), crack * 0.85);
+            ${panel ? 'if (heavy > 0.5) diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.05, 0.042, 0.036), smoothstep(0.54, 0.62, w23Hole(vWP)));' : ''}
           }
         }`,
       )

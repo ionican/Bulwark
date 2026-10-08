@@ -51,7 +51,7 @@ const gameCam = (x: number, z: number, az = -30): CamView => ({ target: [x, 0, z
 // ---- demo ---------------------------------------------------------------------------------------------
 
 /** Demo timeline length before it loops (seconds). */
-export const DEMO_LOOP = 62;
+export const DEMO_LOOP = 66;
 
 export function demoView(parts: PartSet, ground: Ground): View {
   const view: View = {
@@ -99,7 +99,7 @@ export function demoView(parts: PartSet, ground: Ground): View {
     // salvage: carried in from a wreck to the north-west, through the gate, to a pile inside
     const pile = { x: 60.4, y: ground(60.4, 62.4), z: 62.4, n: 2 };
     w.piles.push(pile);
-    e4.then({ kind: 'wait', s: 22 }, { kind: 'walk', to: [[60.5, 49.5], [64.7, 52.4], [64.7, 58], [61.2, 61.8]] }, { kind: 'carry', on: false, onDone: () => pile.n++ }, { kind: 'wait', s: 1 }, { kind: 'walk', to: [[62, 59.5]] }, { kind: 'face', x: 64, z: 56 });
+    e4.then({ kind: 'wait', s: 27 }, { kind: 'walk', to: [[60.5, 49.5], [64.7, 52.4], [64.7, 58], [61.2, 61.8]] }, { kind: 'carry', on: false, onDone: () => pile.n++ }, { kind: 'wait', s: 1 }, { kind: 'walk', to: [[62, 59.5]] }, { kind: 'face', x: 64, z: 56 });
     w.update(0);
     view.world = w;
     t = 0;
@@ -156,6 +156,8 @@ export function painterExample(w: World): void {
 
 export interface LineupControls {
   engineers(a: EngAction): void;
+  /** One engineer (index) to an action. */
+  engineer(i: number, a: EngAction): void;
   commander(a: CmdAction): void;
   extractors(working: boolean): void;
   construct(): void;
@@ -196,33 +198,43 @@ export function lineupView(parts: PartSet, ground: Ground): View & { controls: L
     const a = start + (k / n) * Math.PI * 2;
     return [cx + Math.sin(a) * r, cz + Math.cos(a) * r] as [number, number];
   });
+  const printing: Array<{ pod: { age: number }; site: Site }> = [];
   const controls: LineupControls = {
     engAction: 'idle',
     cmdAction: 'idle',
     engineers(a) {
       controls.engAction = a;
-      engs.forEach((e, i) => {
-        e.tasks = [];
-        e.tt = 0;
-        e.carrying = a === 'carry';
-        const [hx, hz] = homes[i]!;
-        const loop = (): Task[] => [{ kind: 'walk', to: circle(hx, hz - 0.7, 0.7, 12, 0), run: a === 'run' }, { kind: 'call', fn: () => e.tasks.push(...loop()) }];
-        if (a === 'walk' || a === 'run' || a === 'carry') e.then({ kind: 'walk', to: [[hx, hz]] }, ...loop());
-        else if (a === 'build') {
-          // a wall tile in front of each engineer, printed over and over
-          const [tx, tz] = w.tileAt(hx, hz + 1.6);
-          const site = w.wallSite(tx, tz, 1 + (i % 3));
-          const again = (): Task[] => [{ kind: 'build', site }, { kind: 'call', fn: () => ((site.progress = 0), e.tasks.push(...again())) }];
-          e.then({ kind: 'walk', to: [[hx, hz]] }, { kind: 'face', x: hx, z: hz + 2 }, ...again());
-        }
-        else if (a === 'drop') e.then({ kind: 'walk', to: [[hx, hz]] }, { kind: 'face', x: hx, z: hz + 2 }, { kind: 'drop' }, { kind: 'wait', s: 1.5 }, { kind: 'call', fn: () => w.pods.splice(0, w.pods.length) }, { kind: 'call', fn: () => controls.engineers('drop') });
-        else e.then({ kind: 'walk', to: [[hx, hz]] }, { kind: 'face', x: hx, z: hz + 2 });
-      });
-      if (a !== 'drop') w.pods.length = 0;
-      if (a !== 'build') {
-        w.grid.clear();
-        w.wallSites.clear();
-      }
+      w.pods.length = 0;
+      printing.length = 0;
+      w.grid.clear();
+      w.wallSites.clear();
+      engs.forEach((_, i) => controls.engineer(i, a));
+    },
+    engineer(i, a) {
+      const e = engs[i]!;
+      e.tasks = [];
+      e.tt = 0;
+      e.carrying = a === 'carry';
+      const [hx, hz] = homes[i]!;
+      const loop = (): Task[] => [{ kind: 'walk', to: circle(hx, hz - 0.7, 0.7, 12, 0), run: a === 'run' }, { kind: 'call', fn: () => e.tasks.push(...loop()) }];
+      if (a === 'walk' || a === 'run' || a === 'carry') e.then({ kind: 'walk', to: [[hx, hz]] }, ...loop());
+      else if (a === 'build') {
+        // a temporary-turret pod printed over and over just in front of the engineer (low, so it
+        // does not hide the engineer from the line-up camera)
+        const px = hx + 0.32;
+        const pz = hz + 0.75;
+        const site = loopSite(px, pz, 0.34);
+        const pod = { x: px, y: ground(px, pz), z: pz, yaw: -Math.PI / 2, age: 0 };
+        w.pods.push(pod);
+        printing.push({ pod, site });
+        const again = (): Task[] => [{ kind: 'build', site }, { kind: 'wait', s: 0.6 }, { kind: 'call', fn: () => ((site.progress = 0), e.tasks.push(...again())) }];
+        e.then({ kind: 'walk', to: [[hx, hz]] }, { kind: 'face', x: px, z: pz + 0.3 }, ...again());
+      } else if (a === 'drop') {
+        const clear = () => {
+          for (let k = w.pods.length - 1; k >= 0; k--) if (Math.hypot(w.pods[k]!.x - hx, w.pods[k]!.z - hz) < 1) w.pods.splice(k, 1);
+        };
+        e.then({ kind: 'walk', to: [[hx, hz]] }, { kind: 'face', x: hx, z: hz + 2 }, { kind: 'call', fn: clear }, { kind: 'drop' }, { kind: 'wait', s: 2.5 }, { kind: 'call', fn: () => controls.engineer(i, 'drop') });
+      } else e.then({ kind: 'walk', to: [[hx, hz]] }, { kind: 'face', x: hx, z: hz + 2 });
     },
     commander(a) {
       controls.cmdAction = a;
@@ -231,10 +243,17 @@ export function lineupView(parts: PartSet, ground: Ground): View & { controls: L
       const [hx, hz] = cmdHome;
       const loop = (): Task[] => [{ kind: 'walk', to: circle(hx, hz - 2.4, 2.4, 16, 0) }, { kind: 'call', fn: () => cmd.tasks.push(...loop()) }];
       const turn = (): Task[] => [{ kind: 'face', x: hx + 5, z: hz }, { kind: 'face', x: hx, z: hz - 5 }, { kind: 'face', x: hx - 5, z: hz }, { kind: 'face', x: hx, z: hz + 5 }, { kind: 'call', fn: () => cmd.tasks.push(...turn()) }];
+      // the practice wall tile in front of the commander exists only while it builds
+      const [tx, tz] = w.tileAt(hx + 0.6, hz + 3.2);
+      w.grid.erase(tx, tz);
+      w.wallSites.delete(tz * w.grid.w + tx);
       if (a === 'walk') cmd.then({ kind: 'walk', to: [[hx, hz]] }, ...loop());
       else if (a === 'turn') cmd.then({ kind: 'walk', to: [[hx, hz]] }, ...turn());
-      else if (a === 'build') cmd.then({ kind: 'walk', to: [[hx, hz]] }, { kind: 'face', x: hx, z: hz + 5 }, { kind: 'build', site: loopSite(hx + 1.5, hz + 3.4, 1.4) }, { kind: 'call', fn: () => controls.commander('build') });
-      else if (a === 'fire') cmd.then({ kind: 'walk', to: [[hx, hz]] }, { kind: 'face', x: hx, z: hz + 5 }, { kind: 'fire', at: new Vector3(hx + 6, ground(hx + 6, hz + 14) + 0.6, hz + 14), s: 1e9 });
+      else if (a === 'build') {
+        const site = w.wallSite(tx, tz, 3);
+        const again = (): Task[] => [{ kind: 'build', site }, { kind: 'wait', s: 0.8 }, { kind: 'call', fn: () => ((site.progress = 0), cmd.tasks.push(...again())) }];
+        cmd.then({ kind: 'walk', to: [[hx, hz]] }, { kind: 'face', x: hx, z: hz + 5 }, ...again());
+      } else if (a === 'fire') cmd.then({ kind: 'walk', to: [[hx, hz]] }, { kind: 'face', x: hx, z: hz + 5 }, { kind: 'fire', at: new Vector3(hx + 12, ground(hx + 12, hz + 5) + 0.8, hz + 5), s: 1e9 });
       else cmd.then({ kind: 'walk', to: [[hx, hz]] }, { kind: 'face', x: hx, z: hz + 5 });
     },
     extractors(on) {
@@ -257,6 +276,8 @@ export function lineupView(parts: PartSet, ground: Ground): View & { controls: L
     labels,
     controls,
     update(dt) {
+      // pods being printed by the build pose: the print height follows the site's progress
+      for (const p of printing) p.pod.age = Math.min(1.19, p.site.progress * 1.2);
       if (buildT < 8) {
         buildT += dt;
         for (const d of w.deposits) {
@@ -305,7 +326,7 @@ export function lodView(parts: PartSet, ground: Ground): View {
   return {
     id: 'lod',
     world: w,
-    cams: { game: { target: [61.5, 0.6, 54.2], distance: 31, elevation: 36, azimuth: 0, fov: 40 }, close: () => ({ target: [52, 0.8, 55], distance: 16, elevation: 26, azimuth: 0, fov: 40 }), strategic },
+    cams: { game: { target: [62.6, 0.6, 54.4], distance: 32.5, elevation: 36, azimuth: 0, fov: 40 }, close: () => ({ target: [52, 0.8, 55], distance: 16, elevation: 26, azimuth: 0, fov: 40 }), strategic },
     labels,
   };
 }
