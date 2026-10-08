@@ -98,3 +98,7 @@ All 21 findings accepted; the cited lines were spot-checked this session (W23 `c
 Rejected: the "mutation testing" half of finding 20 (deliberate no-op mutations must fail). Out of proportion for a personal prototype; the session's own per-criterion read of each test file and its own browser probes cover the same risk.
 
 No round 2: Richard's standing rule is one plan review plus one post-build review for work at this stake (29 Sep). The plan is locked for run 1.
+
+## Act 3 — Build (run 1)
+
+`author` subagent (Opus 5.5 · high), 51 min, commits `b94cd7a`..`1b2ab8f`. Calling session's out-of-band check, 2026-10-08 17:0x: frozen Verify exit 0 (W24 files 8/8, 94 tests; `npm test` 171/171; game build; `look` tsc clean). Test bodies read for stats (sums checked every tick; ≥18 of 20 kills accepted because the sums are exact) and gate passage (route crosses gate, no alien on gate tiles incl. diagonals, passes after destruction). Browser probes on :8822: 26-tile depth-2 run built with free spending (spend 0, mass up by income only); 3 × 2 gate built; engineer crossed only at x = 64.5; 20 rushers spawned and killed, gun credited 6 kills; sandbox commands refused on map 1; 0 errors. Post-build `/adversarial-review` not yet run.
