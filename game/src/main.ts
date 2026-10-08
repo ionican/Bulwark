@@ -727,7 +727,7 @@ function frame(now: number) {
       lod: { ...entities.counts },
       distance: rig.distance,
       renderer: adapter.describe(),
-      scenario: scenario === 'stress' ? 'stress scene' : 'map 1',
+      scenario: { map1: 'map 1', stress: 'stress scene', empty: 'empty map', sandbox: 'sandbox (map 1)' }[SCENARIO_NAMES[snap.globals[G_SCENARIO]!] ?? 'map1'],
     });
     const g = snap.globals;
     hud.updateEconomy({
@@ -737,7 +737,8 @@ function frame(now: number) {
       short: [0, 1, 2].map((k) => (g[G_SHORT]! & (1 << k)) !== 0),
       parts: g[G_PARTS]!,
       commanderHp: g[G_COMMANDER_HP]!,
-      commanderMax: UNIT_INFO.commander.hp,
+      // Sandbox tuning scales the commander's maximum (unit table, commander row, hp field).
+      commanderMax: UNIT_INFO.commander.hp * snap.tuning[snap.tuning.length - UNIT_KINDS.length * TUNE_FIELDS.unit.length + U.commander * TUNE_FIELDS.unit.length]!,
       aliens: snap.aliens.count,
       kills: g[G_KILLS]!,
       upkeep: g[G_UPKEEP]!,
@@ -752,6 +753,7 @@ function frame(now: number) {
       waveCount: g[G_WAVE_COUNT]!,
       aliens: snap.aliens.count,
       preview: g[G_RESEARCH_DONE]! & (1 << RESEARCH_INDEX.scanners!) ? 2 : 1,
+      sandbox: SCENARIO_NAMES[g[G_SCENARIO]!] === 'sandbox',
     });
     timeControls.update({
       paused: runnerInfo.paused,

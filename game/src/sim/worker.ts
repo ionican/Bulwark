@@ -62,11 +62,12 @@ self.onmessage = (ev: MessageEvent<ToWorker>) => {
     }
     case 'command': {
       if (!runner) return;
-      // A wall run reports its plan (tiles to build, tiles skipped) with the acceptance.
-      const plan = msg.cmd.t === 'buildRun' ? planRun(runner.world, msg.cmd) : null;
       const problem = runner.submit(msg.cmd);
       if (problem) post({ type: 'rejected', reason: problem, cmd: msg.cmd, ref: msg.ref });
       else if (msg.ref !== undefined) {
+        // A wall run reports its plan (tiles to build, tiles skipped) with the acceptance; the
+        // plan is worked out only once validation has passed, on the same state.
+        const plan = msg.cmd.t === 'buildRun' ? planRun(runner.world, msg.cmd) : null;
         const detail = plan && typeof plan !== 'string' ? { tiles: plan.tiles.length, skipped: plan.skipped, axis: plan.axis, start: plan.start } : undefined;
         post({ type: 'accepted', ref: msg.ref, tick: runner.world.tick, detail });
       }

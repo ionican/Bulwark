@@ -60,6 +60,8 @@ export interface TickerState {
   waveCount: number;
   aliens: number;
   preview: number;
+  /** W24 sandbox: no wave schedule and no end state. */
+  sandbox?: boolean;
 }
 
 export class Ticker {
@@ -74,7 +76,9 @@ export class Ticker {
 
   update(s: TickerState): void {
     let html: string;
-    if (s.nextWave >= s.waveCount) {
+    if (s.sandbox) {
+      html = `<div class="t">SANDBOX: NO WAVE SCHEDULE</div><div>Waves come only when started; ${s.aliens} aliens on the map. The sandbox never ends.</div>`;
+    } else if (s.nextWave >= s.waveCount) {
       html = `<div class="t">ALL ${s.waveCount} WAVES HAVE ARRIVED</div><div>Destroy the remaining ${s.aliens} aliens to win</div>`;
     } else {
       html =
