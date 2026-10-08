@@ -19,6 +19,8 @@ import type { World } from './world.ts';
 
 const DT = TICK_SECONDS;
 const EPS = 1e-9;
+/** A site with less than this fraction of its work left after this tick's share completes now. */
+const PROGRESS_SNAP = 1e-4;
 
 export function stepEconomyIncome(w: World): void {
   const b = w.buildings;
@@ -116,7 +118,11 @@ export function stepConstruction(w: World): void {
     }
     if (!(c.flags[s]! & BF_STARTED)) w.startSite(s);
     const { cost, time } = w.workOf(s);
-    const p = Math.min(1 - c.progress[s]!, (bp * DT) / time);
+    let p = Math.min(1 - c.progress[s]!, (bp * DT) / time);
+    // Progress is stored as f32, so summing a tick's share can leave a residual of about 1e-6 and
+    // cost a whole extra tick (W24: an engineer took 201 ticks for a 100 BP·s site). A remainder
+    // below PROGRESS_SNAP of the build is finished in the same tick, and paid for.
+    if (1 - c.progress[s]! - p < PROGRESS_SNAP) p = 1 - c.progress[s]!;
     if (p <= 0) continue;
     jobs.push({
       cost,

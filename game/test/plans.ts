@@ -56,7 +56,11 @@ export const BALANCED: PlanStep[] = [
   b(1.5, B.generator, 55, 66),
   eng(2),
   eng(2),
-  // Minute 3: research station and core guns; research beam (anti-hunter), shield, heavy, gun T2.
+  // W24: the two core guns at minute 2 (were 3). At commander build power 8 the minute-3 timing
+  // let wave 2 and 3 hunters wear the commander down and the plan lost at wave 11 (28:15).
+  b(2, B.gun, 60, 59),
+  b(2, B.gun, 67, 59),
+  // Minute 3: research station; research beam (anti-hunter), shield, heavy, gun T2.
   b(3, B.lab, 66, 70),
   b(3, B.rareExtractor, 55, 26),
   b(3, B.gun, 64, 31),
@@ -66,8 +70,6 @@ export const BALANCED: PlanStep[] = [
   r(3, 'shield'),
   r(3, 'heavy'),
   r(3, 'gunT2'),
-  b(3, B.gun, 60, 59),
-  b(3, B.gun, 67, 59),
   b(4, B.area, 63, 49),
   b(4, B.generator, 72, 66),
   // Minute 5: the salvage chain along z = 74: depot -> shredder -> smelter -> assembler.
