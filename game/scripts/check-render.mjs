@@ -260,8 +260,13 @@ async function main() {
       // the wall run partly built: a second run at normal build power
       // resume (commands apply at a tick), drop the build-power tuning, lay the run
       js(`(async () => { if (__game.paused) __game.control.pause(); await __game.tuneReset('unit'); return __game.buildRun([56, 66], [70, 66], 1); })()`);
-      await until('a partly built run', `__game.list('building').filter((b) => b.kindName === 'wall' && b.state === 'started').length >= 1 && __game.list('building').filter((b) => b.kindName === 'wall' && b.state === 'reserved').length >= 4`, 90);
-      js(`(__game.control.pause(), true)`);
+      const row66 = (state) => `__game.list('building').filter((b) => b.kindName === 'wall' && b.ty === 66 && b.state === '${state}').length`;
+      await until('a partly built run', `${row66('complete')} >= 3 && ${row66('started')} >= 1 && ${row66('reserved')} >= 3`, 180);
+      // a fresh temporary turret (the first one expires after 30 s): every engineer tries, one is off cooldown
+      js(`(() => { for (const u of __game.list('unit')) if (u.kindName === 'engineer') __game.cmd.dropTurret(u.id); return true; })()`);
+      await until('a temporary turret', `__game.list('building').some((b) => b.kindName === 'tempTurret')`, 30);
+      // fresh aliens of every kind close together for their close-up, then hold everything still
+      js(`(async () => { for (const [k, x] of [['rusher', 58.5], ['hunter', 62.5], ['breaker', 66.5], ['saboteur', 70.5]]) await __game.spawnAt(k, x, 36.5, 1); __game.control.pause(); return true; })()`);
       await until('paused', `__game.paused === true`, 10);
       camera({ x: 63, z: 62, distance: 34, yaw: 0.35 });
       await shot('base-wall-run-gate');
@@ -273,13 +278,16 @@ async function main() {
       await shot('turrets-heavy-shield');
       camera({ x: 61, z: 61, distance: 14, yaw: -0.5 });
       await shot('gate-and-units');
+      const tt = js(`__game.list('building').find((b) => b.kindName === 'tempTurret')`);
+      camera({ x: tt.tx + 0.5, z: tt.ty + 0.5, distance: 9, yaw: 0.4 });
+      await shot('turret-lookout-temporary');
       camera({ x: 50, z: 46, distance: 18, yaw: 0.3 });
       await shot('economy-generator-lab-extractor');
       camera({ x: 72, z: 46, distance: 20, yaw: 0.3 });
       await shot('chain-depot-shredder-smelter-assembler');
       camera({ x: 72.5, z: 70.5, distance: 12, yaw: 0.6 });
       await shot('belt-splitter-merger');
-      camera({ x: 64, z: 35, distance: 22, yaw: 0.2 });
+      camera({ x: 64.5, z: 37.5, distance: 13, yaw: 0.2 });
       await shot('aliens-static');
       camera({ x: 64, z: 64, distance: 200, yaw: 0 });
       await shot('strategic-zoom');
