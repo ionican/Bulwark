@@ -102,3 +102,14 @@ No round 2: Richard's standing rule is one plan review plus one post-build revie
 ## Act 3 — Build (run 1)
 
 `author` subagent (Opus 5.5 · high), 51 min, commits `b94cd7a`..`1b2ab8f`. Calling session's out-of-band check, 2026-10-08 17:0x: frozen Verify exit 0 (W24 files 8/8, 94 tests; `npm test` 171/171; game build; `look` tsc clean). Test bodies read for stats (sums checked every tick; ≥18 of 20 kills accepted because the sums are exact) and gate passage (route crosses gate, no alien on gate tiles incl. diagonals, passes after destruction). Browser probes on :8822: 26-tile depth-2 run built with free spending (spend 0, mass up by income only); 3 × 2 gate built; engineer crossed only at x = 64.5; 20 rushers spawned and killed, gun credited 6 kills; sandbox commands refused on map 1; 0 errors. Post-build `/adversarial-review` not yet run.
+
+## Act 3 — /simplify and post-build adversarial review (run 1)
+
+`/simplify`: four read-only reviewers (reuse, simplification, efficiency, altitude); 17 merged fixes applied by the run 1 author in `b2d503a`. Calling session's check: frozen Verify green (171/171), 0 test assertion lines changed, 112 snapshot/save fingerprint hashes identical before and after (temporary worktree at `37cb7c6` with the same script), balanced plan tick 31,468, commander 6,000 HP. Skipped by decision: scenario-rules table, full passability unification, footprint-scaling kind property.
+
+`/adversarial-review` (Codex GPT-6.1 Sol · high, thread 01a11c8a-de94-7d00-a707-07c81e7d4ce8), verdict needs-attention, four reproduced failures:
+- high: startWave at alien capacity throws 'entity table full' and stops the worker (validate.ts:139).
+- high: speed tuning lets a saboteur cross a complete gate in one tick (aliens.ts:91; movement checks only the destination tile).
+- medium: apply-time refusals are never reported (worker.ts:65).
+- medium: the reservation draw batch caps at 1,024 while three valid max runs make 1,536 (entities.ts:215).
+All four accepted; sent to the author test-first. Run 2 waits for these fixes.
