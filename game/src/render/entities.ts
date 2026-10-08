@@ -202,6 +202,8 @@ export interface FrameInput {
   units: MobileView;
   projectiles: MobileView;
   selection: readonly Pick[];
+  /** Seconds since the last frame, 0 while paused (models.ts walking). */
+  dt?: number;
 }
 
 export class EntityRenderer {

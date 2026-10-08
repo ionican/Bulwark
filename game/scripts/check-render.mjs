@@ -19,6 +19,7 @@
 //       no greybox anywhere, no batch overflow
 //   budgets, reported, not gated: terrain + scenery and post-processing cost at the game camera
 //     (__game.renderCost: forced-completion timing) against 5 ms and 3.5 ms
+//   walking benchmark (reported, not gated): 40 engineers and 300 aliens walking in the sandbox
 //   static benchmark (reported, not gated): the stress scene (/?stress=1, 300 buildings, 500
 //     aliens) paused, fps and frame cost at the game camera and at the full zoom-out
 //
@@ -352,9 +353,23 @@ async function main() {
     errorsNow('sandbox');
 
     // ---- budgets at the game camera (sandbox fixture, medium, 1440 × 900)
+    // the budget is a rendering cost: measured on a still frame (simulation paused), three times,
+    // each figure the median of the three runs (each run itself interleaved medians, cost.ts)
+    js(`(__game.paused || __game.control.pause(), true)`);
+    await until('paused', `__game.paused === true`, 10);
     camera(GAME_CAMERA);
     await frames(10);
-    const cost = js('__game.renderCost(15)');
+    const runs = [0, 1, 2].map(() => js('__game.renderCost(15)'));
+    const med = (f) => runs.map(f).sort((x, y) => x - y)[1];
+    const cost = {
+      buffer: runs[0].buffer,
+      terrainMs: med((c) => c.terrainMs),
+      terrainIsolatedMs: med((c) => c.terrainIsolatedMs),
+      postMs: med((c) => c.postMs),
+      fullMs: med((c) => c.fullMs),
+      passMs: Object.fromEntries(Object.keys(runs[0].passMs).map((k) => [k, med((c) => c.passMs[k])])),
+    };
+    note(`budget runs (terrain, post): ${runs.map((c) => `${c.terrainMs.toFixed(2)} / ${c.postMs.toFixed(2)} ms`).join('; ')}`);
     const flag = (v, b) => `${v.toFixed(2)} ms (budget ${b} ms${v > b ? ': OVER' : ''})`;
     note(`budget, game camera, ${js('__game.quality')}, buffer ${cost.buffer.join(' × ')}: terrain + scenery ${flag(cost.terrainMs, BUDGET.terrainMs)} [ground alone, no post: ${cost.terrainIsolatedMs.toFixed(2)} ms]; post ${flag(cost.postMs, BUDGET.postMs)} [by pass: ${Object.entries(cost.passMs).map(([k, v]) => `${k} ${v.toFixed(2)} ms`).join(', ')}]; full frame ${cost.fullMs.toFixed(2)} ms`);
 
@@ -373,6 +388,27 @@ async function main() {
       note(`benchmark (stress scene, ${js('JSON.stringify(__game.entityCounts)')}, paused), ${label}: ${fps} fps (display-capped); ${c.fullMs.toFixed(2)} ms per frame forced-complete (${(1000 / c.fullMs).toFixed(0)} fps uncapped equivalent); draw calls ${js('__game.drawCalls')}; LOD ${JSON.stringify(js('__game.lodLevelCounts'))}`);
     }
     errorsNow('stress scene');
+
+    // ---- walking benchmark (reported, not gated): 40 engineers and 300 aliens walking, game camera
+    await load('/?sandbox=1');
+    js(`(async () => { const g = __game; await g.setUnlimited(true); await g.tune('unit', 'commander', 'buildRate', 10); for (let i = 0; i < 40; i++) g.cmd.produce(); return true; })()`);
+    await until('40 engineers', `__game.list('unit').filter((u) => u.kindName === 'engineer').length >= 40`, 180);
+    const walk = js(`(async () => {
+      const g = __game;
+      const ids = g.list('unit').filter((u) => u.kindName === 'engineer').map((u) => u.id);
+      ids.forEach((id, i) => g.cmd.move([id], 50 + (i % 8) * 4, 48 + Math.floor(i / 8) * 4));
+      for (const [k, x] of [['rusher', 40], ['hunter', 50], ['breaker', 60], ['saboteur', 70], ['rusher', 80], ['hunter', 90]]) await g.spawnAt(k, x, 30.5, 50);
+      g.camera.set(${JSON.stringify(GAME_CAMERA)});
+      await new Promise((r) => setTimeout(r, 2500));
+      const upd = [];
+      for (let i = 0; i < 60; i++) { await new Promise((r) => requestAnimationFrame(r)); upd.push(g.timing.updateMs); }
+      upd.sort((a, b) => a - b);
+      const walking = g.list('unit').filter((u) => u.state === 1).length;
+      return { aliens: g.entityCounts.aliens, engineers: ids.length, walkingUnits: walking, updateMs: upd[30], frameCpuMs: g.frameCpuMs, fps: g.fps, drawCalls: g.drawCalls };
+    })()`);
+    const wc = js('__game.renderCost(15)');
+    note(`walking benchmark (sandbox, ${walk.engineers} engineers (${walk.walkingUnits} walking at the sample) and ${walk.aliens} aliens, game camera, medium): scene update ${walk.updateMs.toFixed(2)} ms CPU per frame (median, rigs and gait included); frame CPU ${walk.frameCpuMs.toFixed(2)} ms; ${walk.fps} fps (display-capped); ${wc.fullMs.toFixed(2)} ms per frame forced-complete; terrain + scenery ${wc.terrainMs.toFixed(2)} ms; post ${wc.postMs.toFixed(2)} ms; draw calls ${walk.drawCalls}`);
+    errorsNow('walking benchmark');
   } catch (e) {
     fail(String(e?.message ?? e));
   } finally {

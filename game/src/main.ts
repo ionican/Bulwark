@@ -729,6 +729,8 @@ function frame(now: number) {
         units: interp.units,
         projectiles: interp.projectiles,
         selection,
+        // walking advances by distance; paused, nothing moves and the feet do not settle
+        dt: runnerInfo.paused ? 0 : dt,
       },
       rig.distance,
       (x, y, z) => worldPerPixel(camera, Math.hypot(x - camera.position.x, y - camera.position.y, z - camera.position.z), vh),

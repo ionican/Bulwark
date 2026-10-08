@@ -4,7 +4,12 @@
 // sampled surface; the scenery shares the map's edge vertices; plinths reach the lowest ground.
 
 import { describe, expect, it } from 'vitest';
-import { InstancedMesh, Mesh, MeshBasicMaterial, Raycaster, Vector2, type BufferAttribute } from 'three';
+import { InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, Raycaster, Vector2, Vector3, type BufferAttribute } from 'three';
+import { slotOf } from '../src/sim/table.ts';
+import { standInMaterials } from '../src/render/materials.ts';
+import { ALIEN_SCALE } from '../src/render/models.ts';
+import { motionAt } from '../src/render/walk.ts';
+import { ALIEN_MAKERS } from '../src/render/workshop/models/procedural/aliens.ts';
 import { B } from '../src/sim/kinds.ts';
 import { TILE_GROUND, TILE_ROCK } from '../src/sim/terrain.ts';
 import { footprintRange, groundHeight } from '../src/render/ground.ts';
@@ -128,12 +133,29 @@ describe('criterion 3: one ground', () => {
       }
     });
     expect(boots).toBeGreaterThanOrEqual(4);
-    // aliens: the model's origin on the ground at its position
-    r.group.traverse((o) => {
-      if (!(o instanceof InstancedMesh) || !o.visible || !o.name.startsWith('w17/') || !['rusher', 'hunter', 'breaker', 'saboteur'].includes(o.userData.model)) return;
-      const a = o.instanceMatrix.array as Float32Array;
-      for (let i = 0; i < o.count; i++) expect(Math.abs(a[i * 16 + 13]! - groundHeight(terrain, a[i * 16 + 12]!, a[i * 16 + 14]!))).toBeLessThan(1e-5);
-    });
+    // aliens: each part instance is base · S(1.5) · pivot · motion (walk.ts); undoing the part's own
+    // transform gives the base, whose origin must be on the sampled ground at the alien's position
+    const mats = standInMaterials().alien;
+    const based = new Set<string>();
+    for (const k of ['rusher', 'hunter', 'breaker', 'saboteur'] as const) {
+      const def = ALIEN_MAKERS[k](mats);
+      const part = def.parts[0]!;
+      const id = f.aliens[k]!;
+      const slot = slotOf(id);
+      const own = new Matrix4().makeScale(ALIEN_SCALE, ALIEN_SCALE, ALIEN_SCALE).multiply(part.pivot).multiply(motionAt(part.motion, r.alienTracks.phase[slot]!, r.alienTracks.seed[slot]!, new Matrix4()));
+      const inv = own.clone().invert();
+      r.group.traverse((o) => {
+        if (!(o instanceof InstancedMesh) || !o.visible || o.userData.model !== `${k}/${part.name}`) return;
+        const a = o.instanceMatrix.array as Float32Array;
+        for (let i = 0; i < o.count; i++) {
+          const base = new Matrix4().fromArray(a, i * 16).multiply(inv);
+          const p = new Vector3().setFromMatrixPosition(base);
+          expect(Math.abs(p.y - groundHeight(terrain, p.x, p.z)), k).toBeLessThan(1e-4);
+          based.add(k);
+        }
+      });
+    }
+    expect(based.size).toBe(4);
     // W17 buildings: origin at the footprint centre, at the highest sampled ground under it
     const s = f.snap;
     for (const k of ['generator', 'lab', 'depot', 'shredder', 'smelter', 'assembler', 'shield'] as const) {

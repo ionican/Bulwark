@@ -14,6 +14,8 @@ import { CAPACITY, World } from '../src/sim/world.ts';
 import { WallGrid } from '../src/render/workshop/w23/walls/grid.ts';
 import { wallInstances } from '../src/render/workshop/w23/walls/layout.ts';
 import { draw, renderer, snapshotOf } from './w24r2a-fixtures.ts';
+import { standInMaterials } from '../src/render/materials.ts';
+import { ALIEN_MAKERS } from '../src/render/workshop/models/procedural/aliens.ts';
 
 const { r } = renderer();
 
@@ -113,8 +115,9 @@ describe('criterion 8: capacity', () => {
     expect(s.units.count).toBe(CAPACITY.units);
     draw(r, s, { level: 0 });
     const n = submitted(r.group);
-    // belts and rushers are one W17 model each (all materials share one count)
-    expect(n.w17).toBe(CAPACITY.buildings + CAPACITY.aliens);
+    // belts are one W17 model each (all materials share one count)
+    // a rusher is drawn as its parts (body and four legs, walk.ts): one instance each per rusher
+    expect(n.w17).toBe(CAPACITY.buildings + CAPACITY.aliens * ALIEN_MAKERS.rusher(standInMaterials().alien).parts.length);
     // engineers: one instance per drawn segment of the rig; the commander likewise
     expect(n.parts).toBeGreaterThan(CAPACITY.units * 10);
     expect(r.overflowed).toBe(false);

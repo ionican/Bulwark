@@ -135,3 +135,64 @@ Stand-in for the 2b population, which is not defined yet: the W13 stress scene (
   the sand photo's tiling shows at the full zoom-out.
 - The scenery's north-east/south-west blend shows at the north-west and south-east corners.
 - The look needs Richard's sign-off; a green Verify is not a visual pass.
+
+## Richard's feedback round (8 Oct, after the first screenshots)
+
+1. **Camera.** The workshop camera's feel (`look/src/render/camera.ts`: OrbitControls, damping 0.08, at
+   most 80° from vertical, ground-plane panning). `render/cameraRig.ts` `Orbit` applies OrbitControls'
+   rotate, pan and dolly equations with the same damping to the game's `Rig`, which now carries the
+   user's `pitch` (10°–89° above the horizon); distance limits kept at the game's 10–200 tiles (the
+   map is 128 across; the workshop's 3–400 would let the camera inside a turret or past the haze).
+   `pitchFor` is only the tilt of a preset view and of a rig without a pitch. `src/input.ts` decides
+   per press: left-drag orbits, right-drag pans, middle-drag dollies, Shift + left-drag box-selects, in
+   a build or upgrade mode left-drag lays the wall run (`buildRun`) or belt line; a press that moves
+   5 px or less is a click (select, place, order or cancel as before) and sends nothing to the orbit.
+   OrbitControls itself is not attached: its own pointer handlers would rotate on a click's jitter
+   and take the left button from box selection and building. Wheel zoom to the cursor, WASD, edge
+   pan, Q/E and Home kept. Tests: `w24r2a-camera.test.ts`; `check-render.mjs` repeats the click, box,
+   build-drag, orbit and pan with real mouse input (Shift by pointer events).
+2. **No routes.** `entities.ts` draws no route markers in either view; the simulation still computes
+   routes and the snapshot still carries them. Test: no route geometry in any scene.
+3. **Undulation.** `sim/terrain.ts rollingHeight`: value noise at 37, 17 and 7 tiles (heights now
+   0.74–4.79 tiles, was 0.41–3.93), flattened to 30 % within 10 tiles of the base and to 40 % within
+   2.5 tiles of each deposit centre. Integer hashing and polynomial smoothing as before. Nothing in
+   the simulation reads heights (only `save.ts` stores them, and only for non-map-1 terrain); tiles and
+   the rock RNG are unchanged. `fingerprint-compare.mjs 60ebba6` stays IDENTICAL in strict mode, so no
+   heights-excluded mode was needed. Scenery: `rollingHeight` carries the ground on past the edge;
+   the canyon country starts 3–33 tiles out on a noise outline, distances measured from the map
+   rectangle (round corners; ring normals turn gradually at the corners); north-east cliffs over a
+   floor with terraced mesas, south-west terraced hills; only the hills are terraced. Entry ramps kept.
+4. **Aliens.** `materials.ts` `alien` set: hull `#8f8a84`, metalness 0.4, roughness 0.55; trim
+   `#c2c3c8`; both with a warm rim light. The hunter's dart still reads dark from some angles.
+5. **Texture.** No weathering mask, no rubble patches on the flats, sand photo detail fades between 60
+   and 170 tiles from the camera.
+6. **Walking** (from run 2b). `render/walk.ts`: per slot the last drawn position, a heading turning
+   towards the movement (smoothed), and for aliens W21's gait phase advanced by distance × the kind's
+   rate (rusher 5.5 rad per tile, as W21; hunter 2.5, breaker 3.9, saboteur 3.0 for the hover bob,
+   wheels and drill). The W23 rigs walk: `update(dt, x, z, heading)` with the interpolated position,
+   so the gait advances by distance and planted feet stay on their touchdown points on the sampler;
+   idle when standing. Reset (rig placed afresh, phase back to the seed's): a new id in the slot, a jump
+   over 2 tiles, the snapshot tick going backwards, or a unit not drawn last frame. Paused: dt 0 and no
+   movement, so nothing advances or settles. Aliens are now drawn part by part (one batch per distinct
+   part geometry; a rusher's four legs share one), each part at its pivot with its motion. Tests:
+   `w24r2a-walk.test.ts`. Build beams, carry poses and turret aim stay in 2b.
+
+### Measurements in this round
+
+The machine was under heavy load from another session (load average 9–49 during the runs), and the
+forced-completion figures moved with it. An A/B with both builds served side by side and measured
+alternately in one browser session (the pre-feedback commit `d04cd2c` against this tree, paused sandbox,
+game camera): terrain + scenery 5.66, 3.19 ms (old) against 4.52, 5.09 ms (new); ground alone 4.82, 2.55
+(old) against 3.48, 4.77 (new). The rise from the 2.6 ms of the first round is the machine, not this
+change. `check-render` now measures the budget on a paused frame, three times, and reports the median.
+
+| Run | Terrain + scenery (≤ 5 ms) | Post (≤ 3.5 ms) | Full frame |
+|---|---|---|---|
+| check-render with shots (three runs: 5.05, 5.00, 3.07 / 2.18, 2.03, 2.35 ms) | 5.00 ms | 2.18 ms | 10.15 ms |
+
+Walking benchmark (sandbox, 40 engineers and 300 aliens walking, game camera, medium): scene update
+0.60–0.90 ms CPU per frame (median, rigs and gait included), frame CPU 2.0–3.0 ms, 61 fps display-capped,
+7.86–9.83 ms per frame forced-complete, 216 draw calls.
+
+Screenshots (replacing the `w24-2a-*` set): `Resources/Bulwark Art Reference/w24-2a2-game-camera.png`,
+`-game-camera-tilted-low.png`, `-map-edge.png`, `-aliens-close.png`, `-strategic-zoom.png`.

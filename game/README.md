@@ -91,7 +91,8 @@ The default view draws every kind with the workshop's models, in a static pose, 
 - **Foundations**: a building stands at the highest ground under its footprint on a plinth down to the lowest.
 - **Wall topology** is rebuilt only when the layout key changes (tile, tier, reserved or not, gate, gate axis and footprint).
 - **Lighting and post**: W17's sun (one shadow map fitted near the camera), HDRI light, haze and sky; W21's post stack (N8AO, bloom, ACES, SMAA). Quality medium by default (pixel ratio ≤ 1); `?quality=high` or `__game.setQuality('high')`.
-- **Overlays** (health bars, beams and work lines, shots, shields, routes, selection, entry labels) are still W13's (animation and effects are run 2b).
+- **Walking** (brought forward from 2b, `walk.ts`): the commander and engineers walk with W23's gait and planted feet, aliens with W21's gait phase, both advanced by the distance moved between frames; a new id, a jump over 2 tiles or the tick going backwards resets; paused, nothing advances.
+- **Overlays** (health bars, beams and work lines, shots, shields, selection, entry labels) are still W13's (effects are run 2b). Alien routes are not drawn (Richard, 8 Oct); the simulation still computes them.
 
 `window.__game` adds: `renderMode`, `quality`, `setQuality(q)`, `viewport`, `timing` (CPU ms of the last frame's update and of each render pass), `wallRebuilds`, `overflowed`, `inspect()` (per kind: model and icon instances found in the scene graph on that kind's entities, greybox instances, mesh and material names), `renderCost(frames)` (forced-completion frame cost with the ground, post and each post pass switched off), `place(kind, tx, ty, dir)` (debug: the simulation's `place` command, a complete building at once). `lodLevelCounts` has `middle` in the model view.
 

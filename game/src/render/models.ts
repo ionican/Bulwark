@@ -38,6 +38,7 @@ import type { MobileView } from './interp.ts';
 import type { RenderMaterials } from './materials.ts';
 import { W17Batches, bakeModel, type BakedModel } from './w17Batches.ts';
 import { WallLayout, type BuildingRows } from './wallLayout.ts';
+import { ALIEN_PHASE_PER_TILE, Tracks, motionAt } from './walk.ts';
 import { worldPerPixel } from './cameraRig.ts';
 import type { TurretMats } from './workshop/bench/surface.ts';
 import { buildTurret } from './workshop/bench/turretModel.ts';
@@ -47,7 +48,7 @@ import { writePart, writePivots } from './workshop/kit/pose.ts';
 import { Builder, cbox, prism } from './workshop/models/kit.ts';
 import { BUILDING_MAKERS } from './workshop/models/procedural/buildings.ts';
 import { ALIEN_MAKERS } from './workshop/models/procedural/aliens.ts';
-import type { ModelDef } from './workshop/models/types.ts';
+import type { ModelDef, Motion } from './workshop/models/types.ts';
 import { Rand } from './workshop/noise.ts';
 import { PartBatches } from './workshop/w23/batches.ts';
 import { EXTRACTOR_HEIGHT, FLOW_SEGS, extractorBuilders, extractorMatrix, extractorPose, flowSegment, pivotMatrix, type ExtractorPose } from './workshop/w23/extractors.ts';
@@ -141,6 +142,8 @@ export interface ModelFrame {
   snapshot: Snapshot;
   aliens: MobileView;
   units: MobileView;
+  /** Seconds since the last frame, 0 while paused (walking: rigs ease and feet settle by it). */
+  dt?: number;
 }
 
 export interface ModelCounts {
@@ -263,8 +266,25 @@ class SimpleBatch {
   }
 }
 
+interface AlienPart {
+  batch: number;
+  /** Alien space (scaled 1.5 ×) → part, at rest. */
+  pivot: Matrix4;
+  motion: Motion;
+}
+
+/** W21's test for parts that can share a batch: identical position arrays. */
+function samePositions(a: BufferGeometry, b: BufferGeometry): boolean {
+  const pa = a.getAttribute('position').array;
+  const pb = b.getAttribute('position').array;
+  if (pa.length !== pb.length) return false;
+  for (let i = 0; i < pa.length; i++) if (pa[i] !== pb[i]) return false;
+  return true;
+}
+
 const _m = new Matrix4();
 const _m2 = new Matrix4();
+const _mot = new Matrix4();
 const _q = new Quaternion();
 const _qt = new Quaternion();
 const _p = new Vector3();
@@ -298,6 +318,14 @@ export class ModelRenderer {
   private readonly rigs: Array<EngineerRig | CommanderRig | null>;
   private readonly rigId: Uint32Array;
   private readonly alienRow: Int32Array;
+  /** Per alien kind: its parts (batch, scaled pivot, motion) and its drawn radius. */
+  private readonly alienParts: Array<{ parts: AlienPart[]; radius: number }> = [];
+  /** Walking state from snapshots (walk.ts): units' last position and heading, aliens' also their phase. */
+  readonly unitTracks: Tracks;
+  readonly alienTracks: Tracks;
+  /** Frame number each unit's rig was last posed in (a rig not posed last frame is placed afresh). */
+  private readonly rigFrame: Uint32Array;
+  private frameNo = 0;
   private readonly extractorAt = new Map<number, number>();
   private readonly frustum = new Frustum();
   private readonly projView = new Matrix4();
@@ -357,11 +385,30 @@ export class ModelRenderer {
     for (const name of new Set(W17_BUILDING_MODEL.values())) addModel(name, BUILDING_MAKERS[name as keyof typeof BUILDING_MAKERS](w));
     addModel('splitterMarker', beltMarker(w, 'splitter'));
     addModel('mergerMarker', beltMarker(w, 'merger'));
-    for (const a of ALIEN_MODEL_NAMES) addModel(a, ALIEN_MAKERS[a](materials.alien), ALIEN_SCALE);
+    // aliens: one batch per distinct part geometry (W21: a rusher's four legs share one), each part
+    // drawn at its pivot with its motion at the alien's gait phase (walk.ts)
+    const alienBatchMax = new Map<number, number>();
+    for (const a of ALIEN_MODEL_NAMES) {
+      const def = ALIEN_MAKERS[a](materials.alien);
+      const parts: AlienPart[] = [];
+      const groups: Array<{ geo: BufferGeometry; mat: unknown; batch: number; n: number }> = [];
+      for (const pd of def.parts) {
+        let g = groups.find((x) => x.mat === pd.material && samePositions(x.geo, pd.geometry));
+        if (!g) {
+          const key = `${a}/${pd.name}`;
+          addModel(key, { name: key, parts: [{ ...pd, pivot: new Matrix4() }], radius: def.radius, height: def.height });
+          g = { geo: pd.geometry, mat: pd.material, batch: this.modelIndex.get(key)!, n: 0 };
+          groups.push(g);
+        }
+        g.n++;
+        parts.push({ batch: g.batch, pivot: new Matrix4().makeScale(ALIEN_SCALE, ALIEN_SCALE, ALIEN_SCALE).multiply(pd.pivot), motion: pd.motion });
+      }
+      for (const g of groups) alienBatchMax.set(g.batch, C.aliens * g.n);
+      this.alienParts.push({ parts, radius: def.radius * ALIEN_SCALE });
+    }
     addModel('wreck', wreckModel(w));
-    const alienModel = new Set(ALIEN_MODEL_NAMES.map((a) => this.modelIndex.get(a)!));
     const wreckIdx = this.modelIndex.get('wreck')!;
-    this.w17 = new W17Batches(this.models, materials.depth, (i) => (alienModel.has(i) ? C.aliens : i === wreckIdx ? C.wrecks : C.buildings));
+    this.w17 = new W17Batches(this.models, materials.depth, (i) => alienBatchMax.get(i) ?? (i === wreckIdx ? C.wrecks : C.buildings));
     this.group.add(this.w17.group);
     // ---- icons, plinths, reserved outlines
     this.icons = new IconBatches(makeAtlas(ModelRenderer.turretIcons(this.kit, this.kitKinds)), C.buildings + C.aliens + C.units + C.wrecks);
@@ -383,6 +430,9 @@ export class ModelRenderer {
     this.rigs = new Array(C.units).fill(null);
     this.rigId = new Uint32Array(C.units).fill(0xffffffff);
     this.alienRow = new Int32Array(C.aliens);
+    this.unitTracks = new Tracks(C.units);
+    this.alienTracks = new Tracks(C.aliens);
+    this.rigFrame = new Uint32Array(C.units);
   }
 
   /** Kit icon spec of each game turret kind, for the atlas. */
@@ -453,10 +503,14 @@ export class ModelRenderer {
     this.alienRow.fill(-1);
     for (let r = 0; r < f.aliens.count; r++) this.alienRow[slotOf(f.aliens.id[r]!)] = r;
     this.walls.update(rowsOf(snap));
+    this.frameNo++;
+    this.unitTracks.tick(snap.tick);
+    this.alienTracks.tick(snap.tick);
+    const dt = f.dt ?? 0;
     this.drawBuildings(f);
     this.drawDeposits();
-    this.drawUnits(f.units);
-    this.drawAliens(f.aliens);
+    this.drawUnits(f.units, dt);
+    this.drawAliens(f.aliens, dt);
     this.drawWrecks(snap);
     this.batches.commit();
     this.w17.commit();
@@ -640,12 +694,16 @@ export class ModelRenderer {
     });
   }
 
-  private drawUnits(v: MobileView): void {
+  private drawUnits(v: MobileView, dt: number): void {
+    const T = this.unitTracks;
     for (let r = 0; r < v.count; r++) {
       const id = v.id[r]!;
       const kind = v.kind[r]!;
       const x = v.x[r]!;
       const z = v.z[r]!;
+      const slot = slotOf(id);
+      // walking: distance moved and heading from the interpolated positions (walk.ts)
+      const step = T.step(slot, id, x, z, Math.atan2(-v.fz[r]!, v.fx[r]!), dt);
       const y = this.ground(x, z);
       const commander = kind === U.commander;
       const h = commander ? 3.6 : 0.9;
@@ -653,7 +711,6 @@ export class ModelRenderer {
         this.counts.culled++;
         continue;
       }
-      const slot = slotOf(id);
       const lv = this.level(this.lv.u, this.lv.uId, slot, id, this.dist(x, y + h / 2, z), commander ? THRESHOLDS.commander : THRESHOLDS.engineer);
       this.tally(lv);
       if (lv === ICON_LEVEL) {
@@ -661,16 +718,27 @@ export class ModelRenderer {
         else this.icon('engineer', x, y + 0.4, z, 0.9, ICON_PX.engineer);
         continue;
       }
-      const yaw = Math.atan2(-v.fz[r]!, v.fx[r]!);
+      const yaw = T.heading[slot]!;
       let rig = this.rigs[slot];
+      let fresh = step.reset || this.rigFrame[slot] !== this.frameNo - 1;
       if (this.rigId[slot] !== id || !rig || rig instanceof CommanderRig !== commander) {
         rig = commander ? new CommanderRig() : new EngineerRig(VARIANTS[id % VARIANTS.length]!);
         this.rigs[slot] = rig;
         this.rigId[slot] = id;
+        fresh = true;
       }
-      // static pose (2a): stand at rest on the ground, both feet planted on the sampled surface
-      rig.place(x, z, yaw, this.ground);
-      rig.update(0, x, z, yaw, this.ground);
+      this.rigFrame[slot] = this.frameNo;
+      if (fresh) {
+        // first sight, a jump or a rewind: stand at rest, both feet planted on the sampled ground
+        rig.place(x, z, yaw, this.ground);
+        rig.update(0, x, z, yaw, this.ground);
+      } else {
+        // W23's gait: advances by the distance moved; planted feet stay on their touchdown points
+        const moving = step.dist > 1e-5 && dt > 0;
+        if (rig instanceof EngineerRig) rig.setAction(moving ? 'walk' : 'idle');
+        else rig.setAction(moving ? 'walk' : 'idle');
+        rig.update(dt, x, z, yaw, this.ground);
+      }
       if (rig instanceof CommanderRig) {
         CMD_SEGS.forEach((s, k) => this.batches.push(this.parts.get(CMD_PARTS[s]), lv, rig.mats[k]!));
         if (lv >= 2) this.icon('commander', x, y + 4.2, z, 0, ICON_PX.commander * 0.8);
@@ -690,33 +758,42 @@ export class ModelRenderer {
     return this.rigId[s] === id ? this.rigs[s]! : null;
   }
 
-  private drawAliens(v: MobileView): void {
+  private drawAliens(v: MobileView, dt: number): void {
     const g = this.ground;
+    const T = this.alienTracks;
     for (let r = 0; r < v.count; r++) {
       const id = v.id[r]!;
       const kind = v.kind[r]!;
       const x = v.x[r]!;
       const z = v.z[r]!;
+      const slot = slotOf(id);
+      // walking: heading, W21 gait phase (by distance) and seed derived here (walk.ts)
+      T.step(slot, id, x, z, Math.atan2(-v.fz[r]!, v.fx[r]!), dt, ALIEN_PHASE_PER_TILE[kind] ?? 0);
       const y = g(x, z);
-      const mi = this.modelIndex.get(ALIEN_MODEL_NAMES[kind]!)!;
-      const model = this.models[mi]!;
-      if (!this.visible(x, y + 0.6, z, model.radius + 1)) {
+      const ak = this.alienParts[kind]!;
+      if (!this.visible(x, y + 0.6, z, ak.radius + 1)) {
         this.counts.culled++;
         continue;
       }
-      const lv = this.level(this.lv.a, this.lv.aId, slotOf(id), id, this.dist(x, y, z), W17_THRESHOLDS);
+      const lv = this.level(this.lv.a, this.lv.aId, slot, id, this.dist(x, y, z), W17_THRESHOLDS);
       this.tally(lv);
+      const heading = T.heading[slot]!;
       if (lv === ICON_LEVEL) {
-        this.icon(ALIEN_ICON[kind]!, x, y + 0.4, z, model.radius, ICON_PX.alien, Math.atan2(-v.fz[r]!, v.fx[r]!));
+        this.icon(ALIEN_ICON[kind]!, x, y + 0.4, z, ak.radius / ALIEN_SCALE, ICON_PX.alien, heading);
         continue;
       }
-      // tilt to the ground (W21), then the heading
+      // tilt to the ground (W21), then the heading; each part at its pivot with its motion
       const e = 0.6;
       _n.set(g(x - e, z) - g(x + e, z), 2 * e, g(x, z - e) - g(x, z + e)).normalize();
       _qt.setFromUnitVectors(UP, _n);
-      _q.setFromAxisAngle(UP, Math.atan2(-v.fz[r]!, v.fx[r]!)).premultiply(_qt);
+      _q.setFromAxisAngle(UP, heading).premultiply(_qt);
       _m.compose(_p.set(x, y, z), _q, _s);
-      this.w17.push(mi, _m.elements);
+      const phase = T.phase[slot]!;
+      const seed = T.seed[slot]!;
+      for (const pt of ak.parts) {
+        _m2.multiplyMatrices(_m, pt.pivot).multiply(motionAt(pt.motion, phase, seed, _mot));
+        this.w17.push(pt.batch, _m2.elements);
+      }
     }
   }
 
