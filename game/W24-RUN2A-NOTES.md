@@ -189,10 +189,11 @@ change. `check-render` now measures the budget on a paused frame, three times, a
 | Run | Terrain + scenery (≤ 5 ms) | Post (≤ 3.5 ms) | Full frame |
 |---|---|---|---|
 | check-render with shots (three runs: 5.05, 5.00, 3.07 / 2.18, 2.03, 2.35 ms) | 5.00 ms | 2.18 ms | 10.15 ms |
+| final Verify (three runs: 5.05, 4.99, 5.03 / 2.03, 1.97, 2.10 ms) | 5.03 ms (0.03 over) | 2.03 ms | 10.11 ms |
 
 Walking benchmark (sandbox, 40 engineers and 300 aliens walking, game camera, medium): scene update
 0.60–0.90 ms CPU per frame (median, rigs and gait included), frame CPU 2.0–3.0 ms, 61 fps display-capped,
-7.86–9.83 ms per frame forced-complete, 216 draw calls.
+6.08–9.83 ms per frame forced-complete (terrain + scenery 2.57–4.83 ms, post 0.83–2.63 ms), 216 draw calls.
 
 Screenshots (replacing the `w24-2a-*` set): `Resources/Bulwark Art Reference/w24-2a2-game-camera.png`,
 `-game-camera-tilted-low.png`, `-map-edge.png`, `-aliens-close.png`, `-strategic-zoom.png`.
