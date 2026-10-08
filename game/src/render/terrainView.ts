@@ -1,5 +1,8 @@
 // Map 1 terrain drawn from code: a heightfield ground mesh with a canvas-drawn tile texture,
 // instanced rock outcrops, deposit pads and entry markers. Static; built once.
+// W24 run 2a: this is the greybox view's terrain. The default view draws the ground with W17's
+// material (groundView.ts) and the deposits with W23's models (models.ts), and keeps only the entry
+// markers and labels from here (`ground: false`). Heights come from the drawn ground (ground.ts).
 
 import {
   BufferAttribute,
@@ -19,7 +22,8 @@ import {
   Euler,
 } from 'three';
 import { hash2 } from '../sim/rng.ts';
-import { TILE_MASS, TILE_RARE, TILE_ROCK, heightAt, type Terrain } from '../sim/terrain.ts';
+import { TILE_MASS, TILE_RARE, TILE_ROCK, type Terrain } from '../sim/terrain.ts';
+import { groundHeight as heightAt } from './ground.ts';
 import { depositGeometry, depositIconGeometry, entryGeometry, rockGeometry } from './geometry.ts';
 
 const PX = 8; // texture pixels per tile
@@ -129,9 +133,10 @@ export interface TerrainView {
 /** Deposit icon radius in pixels. */
 const DEPOSIT_ICON_PX = 8;
 
-export function buildTerrainView(t: Terrain): TerrainView {
+export function buildTerrainView(t: Terrain, opts: { ground: boolean } = { ground: true }): TerrainView {
   const group = new Group();
-  group.add(new Mesh(groundGeometry(t), new MeshLambertMaterial({ map: groundTexture(t) })));
+  group.name = opts.ground ? 'greybox/terrain' : 'entries';
+  if (opts.ground) group.add(new Mesh(groundGeometry(t), new MeshLambertMaterial({ map: groundTexture(t) })));
 
   const m = new Matrix4();
   const q = new Quaternion();
@@ -140,6 +145,8 @@ export function buildTerrainView(t: Terrain): TerrainView {
   const sc = new Vector3();
   const vc = new MeshLambertMaterial({ vertexColors: true, flatShading: true });
 
+  const depositIcons: Array<{ mesh: InstancedMesh; at: Array<[number, number, number]> }> = [];
+  if (opts.ground) {
   // Rocks: one or two jittered boulders per rock tile.
   const rockTiles: number[] = [];
   for (let i = 0; i < t.tiles.length; i++) if (t.tiles[i] === TILE_ROCK) rockTiles.push(i);
@@ -162,7 +169,6 @@ export function buildTerrainView(t: Terrain): TerrainView {
   group.add(rocks);
 
   const iconMat = new MeshBasicMaterial({ vertexColors: true, depthTest: false, depthWrite: false });
-  const depositIcons: Array<{ mesh: InstancedMesh; at: Array<[number, number, number]> }> = [];
   for (const kind of ['mass', 'rare'] as const) {
     const ds = t.deposits.filter((d) => d.kind === kind);
     const mesh = new InstancedMesh(depositGeometry(kind), vc, ds.length);
@@ -182,6 +188,8 @@ export function buildTerrainView(t: Terrain): TerrainView {
     icons.visible = false;
     group.add(icons);
     depositIcons.push({ mesh: icons, at });
+  }
+
   }
 
   // Entry markers: chevrons pointing into the map, plus a label.

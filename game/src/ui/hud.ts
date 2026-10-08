@@ -7,7 +7,8 @@ export interface HudStats {
   drawCalls: number;
   triangles: number;
   counts: { buildings: number; aliens: number; units: number };
-  lod: { full: number; simple: number; icon: number; culled: number };
+  /** Objects per detail level: W13's full / simple / icon, or the model view's full / middle / simple / icon. */
+  lod: { full: number; middle?: number; simple: number; icon: number; culled: number };
   distance: number;
   renderer: string;
   scenario: string;
@@ -63,7 +64,7 @@ export class Hud {
       `fps ${s.fps.toFixed(0).padStart(4)}   worker tick ${s.tickMs.toFixed(2)} ms   tick ${s.tick}\n` +
       `draw calls ${s.drawCalls}   triangles ${s.triangles}\n` +
       `buildings ${s.counts.buildings}   aliens ${s.counts.aliens}   units ${s.counts.units}\n` +
-      `LOD full ${s.lod.full} · simple ${s.lod.simple} · icon ${s.lod.icon} · off-screen ${s.lod.culled}\n` +
+      `LOD full ${s.lod.full}${s.lod.middle !== undefined ? ` · middle ${s.lod.middle}` : ''} · simple ${s.lod.simple} · icon ${s.lod.icon} · off-screen ${s.lod.culled}\n` +
       `camera distance ${s.distance.toFixed(0)}\n` +
       `${s.renderer.length > 56 ? `${s.renderer.slice(0, 55)}…` : s.renderer}`;
   }

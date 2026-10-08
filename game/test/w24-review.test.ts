@@ -6,11 +6,12 @@
 
 import { describe, expect, it } from 'vitest';
 import { PerspectiveCamera, Scene } from 'three';
-import { World } from '../src/sim/world.ts';
+import { CAPACITY, World } from '../src/sim/world.ts';
 import { createWorld } from '../src/sim/scenarios.ts';
 import { A, B, U } from '../src/sim/kinds.ts';
 import { flatTerrain } from '../src/sim/terrain.ts';
 import { serializeWorld } from '../src/sim/save.ts';
+import { MAX_SPAWN_ORIGINS } from '../src/sim/sandbox.ts';
 import { decodeSnapshot, encodeSnapshot } from '../src/sim/snapshot.ts';
 import { SimRunner, type CommandResult } from '../src/sim/runner.ts';
 import { setTune, TA_SPEED, TU_SPEED } from '../src/sim/tuning.ts';
@@ -235,8 +236,8 @@ describe('review 4: the renderer draws every reserved site', () => {
     expect(w.buildings.count).toBe(1536);
     const snap = decodeSnapshot(encodeSnapshot(w));
     const scene = new Scene();
-    const renderer = new EntityRenderer(scene, terrain);
-    const interp = new Interpolator();
+    const renderer = new EntityRenderer(scene, terrain, CAPACITY, MAX_SPAWN_ORIGINS, { models: true });
+    const interp = new Interpolator(CAPACITY);
     interp.push(snap, 0);
     const camera = new PerspectiveCamera(60, 1, 0.5, 2000);
     applyRig(camera, { x: 64, z: 64, distance: 400, yaw: 0 }, 0);

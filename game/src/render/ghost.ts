@@ -4,7 +4,8 @@
 
 import { Group, Mesh, MeshBasicMaterial, MeshLambertMaterial, type Scene } from 'three';
 import { BUILDING_KINDS, buildingFootprint, isBelt } from '../sim/kinds.ts';
-import { heightAt, type Terrain } from '../sim/terrain.ts';
+import type { Terrain } from '../sim/terrain.ts';
+import { groundHeight as heightAt } from './ground.ts';
 import { buildingGeometries, ghostMarkGeometry, ghostOutlineGeometry } from './geometry.ts';
 
 const BDX = [1, 0, -1, 0];

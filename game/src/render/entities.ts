@@ -8,6 +8,11 @@
 // site as the scaffold frame round its growing model, a complete building as its model. A gate is
 // its 3 × depth footprint box with the centre column open (the corridor), turned to its axis.
 // Sandbox spawn-origin routes are drawn with the same markers as the entry routes.
+// W24 run 2a: this is W13's greybox renderer. With `models: false` (the default view; models.ts
+// draws every building, unit, alien and wreck) it draws only the overlays: belt items, health bars,
+// beams and work lines, shields, shots, routes and selection markers. With `models: true`
+// (`?greybox=1`) it draws everything, as in W13. Heights come from the drawn ground (ground.ts).
+// Its model batches are named `greybox/…`, so a scene inspection can tell them apart.
 
 import {
   DoubleSide,
@@ -25,10 +30,9 @@ import {
 } from 'three';
 import { B, BUILDING_KINDS, CATEGORY_COUNT, ITEM_PART, SHIELD, U, UNIT_KINDS, ALIEN_KINDS, alienInfo, isBelt, unitInfo } from '../sim/kinds.ts';
 import { BF_COMPLETE, BF_FIRING, BF_UPGRADING, isReserved } from '../sim/schema.ts';
-import { AXIS_Z, gateDepth } from '../sim/gate.ts';
-import { MAX_SPAWN_ORIGINS } from '../sim/sandbox.ts';
-import { CAPACITY } from '../sim/world.ts';
-import { heightAt, type Terrain } from '../sim/terrain.ts';
+import type { Terrain } from '../sim/terrain.ts';
+import { groundHeight as heightAt } from './ground.ts';
+import { GATE_AXIS_Z as AXIS_Z, gateDepthOf as gateDepth } from './wallLayout.ts';
 import { slotOf } from '../sim/table.ts';
 import type { Snapshot } from '../sim/snapshot.ts';
 import {
@@ -99,11 +103,12 @@ class Batch {
   overflowed = false;
   private readonly max: number;
 
-  constructor(scene: Scene, geoms: BufferGeometry[], materials: Material[], capacity: number, order = 0, max = capacity) {
+  constructor(scene: Scene, geoms: BufferGeometry[], materials: Material[], capacity: number, order = 0, max = capacity, name = 'overlay') {
     this.max = Math.max(capacity, max);
     this.counts = new Int32Array(geoms.length);
     geoms.forEach((g, i) => {
       const m = new InstancedMesh(g, materials[i] ?? materials[0]!, capacity);
+      m.name = `${name}/${i}`;
       m.frustumCulled = false;
       m.count = 0;
       m.visible = false;
@@ -137,6 +142,7 @@ class Batch {
     const cap = old.instanceMatrix.count;
     if (cap >= this.max) return false;
     const m = new InstancedMesh(old.geometry, old.material, Math.min(this.max, cap * 2));
+    m.name = old.name;
     m.frustumCulled = false;
     m.count = 0;
     m.visible = old.visible;
@@ -165,18 +171,27 @@ class Batch {
 }
 
 /** Kinds × three detail levels: mesh index = kind * LOD_LEVELS + lod. */
-function kindBatch(scene: Scene, geoms: KindGeometry[], capacity: number, max: number, model: Material, icon: Material, iconOrder: number): Batch {
+function kindBatch(scene: Scene, geoms: KindGeometry[], capacity: number, max: number, model: Material, icon: Material, iconOrder: number, name: string): Batch {
   const list: BufferGeometry[] = [];
   const mats: Material[] = [];
   for (const g of geoms) {
     list.push(g.full, g.simple, g.icon);
     mats.push(model, model, icon);
   }
-  const b = new Batch(scene, list, mats, capacity, 0, max);
+  const b = new Batch(scene, list, mats, capacity, 0, max, `greybox/${name}`);
   b.meshes.forEach((m, i) => {
     if (i % LOD_LEVELS === LOD_ICON) m.renderOrder = iconOrder;
   });
   return b;
+}
+
+/** Table capacities of the simulation (sim/world.ts CAPACITY), passed in by the caller. */
+export interface Capacity {
+  buildings: number;
+  aliens: number;
+  units: number;
+  wrecks: number;
+  projectiles: number;
 }
 
 export interface FrameInput {
@@ -205,20 +220,13 @@ export class EntityRenderer {
   private readonly bars: Batch; // 0 back, 1 fill
   private readonly routes: Batch;
   private readonly markers: Batch;
-  private readonly lod = {
-    b: new Uint8Array(CAPACITY.buildings).fill(255),
-    bId: new Uint32Array(CAPACITY.buildings),
-    a: new Uint8Array(CAPACITY.aliens).fill(255),
-    aId: new Uint32Array(CAPACITY.aliens),
-    u: new Uint8Array(CAPACITY.units).fill(255),
-    uId: new Uint32Array(CAPACITY.units),
-    w: new Uint8Array(CAPACITY.wrecks).fill(255),
-    wId: new Uint32Array(CAPACITY.wrecks),
-  };
+  private readonly lod: { b: Uint8Array; bId: Uint32Array; a: Uint8Array; aId: Uint32Array; u: Uint8Array; uId: Uint32Array; w: Uint8Array; wId: Uint32Array };
   /** Row of each live alien / building / wreck by slot, for id lookups this frame. */
-  private readonly alienRow = new Int32Array(CAPACITY.aliens);
-  private readonly buildingRow = new Int32Array(CAPACITY.buildings);
-  private readonly wreckRow = new Int32Array(CAPACITY.wrecks);
+  private readonly alienRow: Int32Array;
+  private readonly buildingRow: Int32Array;
+  private readonly wreckRow: Int32Array;
+  /** Draw building, unit, alien and wreck models (greybox view); false: overlays only. */
+  readonly models: boolean;
   private readonly frustum = new Frustum();
   private readonly projView = new Matrix4();
   private readonly sphere = new Sphere();
@@ -227,17 +235,23 @@ export class EntityRenderer {
   private readonly terrain: Terrain;
   private wppPerDist = 0;
 
-  constructor(scene: Scene, terrain: Terrain) {
+  constructor(scene: Scene, terrain: Terrain, capacity: Capacity, maxSpawnOrigins: number, opts: { models: boolean }) {
     this.terrain = terrain;
+    this.models = opts.models;
+    const C = capacity;
+    const L = (n: number) => new Uint8Array(n).fill(255);
+    this.lod = { b: L(C.buildings), bId: new Uint32Array(C.buildings), a: L(C.aliens), aId: new Uint32Array(C.aliens), u: L(C.units), uId: new Uint32Array(C.units), w: L(C.wrecks), wId: new Uint32Array(C.wrecks) };
+    this.alienRow = new Int32Array(C.aliens);
+    this.buildingRow = new Int32Array(C.buildings);
+    this.wreckRow = new Int32Array(C.wrecks);
     const model = new MeshLambertMaterial({ vertexColors: true, flatShading: true });
     const icon = new MeshBasicMaterial({ vertexColors: true, depthTest: false, depthWrite: false });
     const flat = new MeshBasicMaterial({ vertexColors: true });
     // Starting sizes as before; each grows up to what the simulation's tables allow.
-    const C = CAPACITY;
-    this.buildings = kindBatch(scene, buildingGeometries(), 1536, C.buildings, model, icon, 10);
-    this.aliens = kindBatch(scene, alienGeometries(), 2048, C.aliens, model, icon, 11);
-    this.units = kindBatch(scene, unitGeometries(), 64, C.units, model, icon, 12);
-    this.wrecks = kindBatch(scene, [wreckGeometry()], 2048, C.wrecks, model, icon, 9);
+    this.buildings = kindBatch(scene, buildingGeometries(), 1536, C.buildings, model, icon, 10, 'building');
+    this.aliens = kindBatch(scene, alienGeometries(), 2048, C.aliens, model, icon, 11, 'alien');
+    this.units = kindBatch(scene, unitGeometries(), 64, C.units, model, icon, 12, 'unit');
+    this.wrecks = kindBatch(scene, [wreckGeometry()], 2048, C.wrecks, model, icon, 9, 'wreck');
     this.items = new Batch(scene, itemGeometries(), [model], 1536, 0, C.buildings);
     this.shots = new Batch(scene, projectileGeometries(), [flat], 2048, 0, C.projectiles);
     this.lines = new Batch(scene, [lineGeometry(0.12, '#cfeeff'), lineGeometry(0.05, '#a8f5df')], [flat], 512, 0, C.buildings + C.units);
@@ -250,7 +264,7 @@ export class EntityRenderer {
     this.bars = new Batch(scene, [barGeometry(), barGeometry()], [back, fill], 1024, 13, C.buildings + C.aliens + C.units);
     this.bars.meshes[1]!.renderOrder = 14;
     // Route markers: at least 3 tiles apart on routes of at most 601 tiles, 4 per entry plus 8 origins.
-    this.routes = new Batch(scene, routeMarkerGeometries(), [icon], 1024, 8, Math.ceil(601 / 3) * (terrain.entries.length * CATEGORY_COUNT + MAX_SPAWN_ORIGINS));
+    this.routes = new Batch(scene, routeMarkerGeometries(), [icon], 1024, 8, Math.ceil(601 / 3) * (terrain.entries.length * CATEGORY_COUNT + maxSpawnOrigins));
     this.markers = new Batch(scene, [selectionMarkerGeometry()], [icon], 2048, 15, C.buildings + C.aliens + C.units + C.wrecks);
     if (BUILDING_KINDS.length + ALIEN_KINDS.length + UNIT_KINDS.length === 0) throw new Error('no kinds');
   }
@@ -379,11 +393,14 @@ export class EntityRenderer {
       const k = kind * LOD_LEVELS + lod;
       // Reserved: no build power yet, so nothing stands there: a dotted outline only.
       if (reserved) {
+        if (!this.models) continue;
         const pad = Math.max(0, (ICON_PX.building + 3) * wppd * dist - size / 2) * (lod === LOD_ICON ? 1 : 0);
         this.reserved.push(0, 1, 0, fw / 2 + pad, 1, fh / 2 + pad, x, y + 0.1, z);
         continue;
       }
-      if (lod === LOD_ICON) {
+      if (!this.models) {
+        // models.ts draws the building; nothing here
+      } else if (lod === LOD_ICON) {
         const s = Math.max(size * 0.45, (belt ? ICON_PX.belt : ICON_PX.building) * wppd * dist) * (complete ? 1 : 0.7);
         if (belt) this.buildings.push(k, rc, rs, s, 1, s, x, y + 0.3, z);
         else this.buildings.push(k, yc, ys, s, 1, s, x, y + 0.3, z);
@@ -391,8 +408,9 @@ export class EntityRenderer {
         const sy = complete ? 1 : 0.15 + 0.85 * c.progress[r]!;
         this.buildings.push(k, rc, rs, 1, sy, depth, x, y, z);
       }
-      // Construction or upgrade under way: a scaffold frame round the footprint.
-      if (!complete || flags & BF_UPGRADING) {
+      // Construction or upgrade under way: a scaffold frame round the footprint (models view: the
+      // build cut shows construction, so the frame marks upgrades only).
+      if (this.models ? !complete || flags & BF_UPGRADING : complete && flags & BF_UPGRADING) {
         const pad = Math.max(0.15, (ICON_PX.building + 3) * wppd * dist - size / 2);
         this.frames.push(0, 1, 0, fw / 2 + pad, 1, fh / 2 + pad, x, y + 0.12, z);
       }
@@ -452,10 +470,10 @@ export class EntityRenderer {
       const k = kind * LOD_LEVELS + lod;
       if (lod === LOD_ICON) {
         const s = Math.max(rad, iconPx(kind) * wppd * dist);
-        set.push(k, yc, ys, s, 1, s, x, y + 0.4, z);
+        if (this.models) set.push(k, yc, ys, s, 1, s, x, y + 0.4, z);
       } else {
         const s = lod === LOD_FULL ? 1 : 1.6;
-        set.push(k, v.fx[r]!, -v.fz[r]!, s, s, s, x, y, z);
+        if (this.models) set.push(k, v.fx[r]!, -v.fz[r]!, s, s, s, x, y, z);
         const m = maxHp(kind);
         if (hp[r]! < m - 0.5) this.bar(x, y + rad * 2 + 0.9, z, hp[r]! / m, Math.max(0.8, rad * 2), yc, ys);
       }
@@ -490,6 +508,7 @@ export class EntityRenderer {
   }
 
   private drawWrecks(snap: Snapshot, yc: number, ys: number) {
+    if (!this.models) return;
     const W_ = snap.wrecks;
     const t = this.terrain;
     for (let r = 0; r < W_.count; r++) {

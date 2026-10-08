@@ -5,11 +5,12 @@ import { describe, expect, it } from 'vitest';
 import { createWorld } from '../src/sim/scenarios.ts';
 import { decodeSnapshot, encodeSnapshot } from '../src/sim/snapshot.ts';
 import { Interpolator } from '../src/render/interp.ts';
+import { CAPACITY } from '../src/sim/world.ts';
 
 describe('interpolator and recycled snapshots', () => {
   it('views stay readable after the dropped snapshot buffer is transferred away', () => {
     const w = createWorld(1, 'map1');
-    const interp = new Interpolator();
+    const interp = new Interpolator(CAPACITY);
     const snaps = [];
     for (let i = 0; i < 3; i++) {
       w.step();

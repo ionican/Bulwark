@@ -1,11 +1,12 @@
-// Selection without mesh raycasting. The cursor ray is intersected with the ground (the terrain
-// heightfield, refined from a plane guess), and the hit is looked up in the simulation's own
+// Selection without mesh raycasting. The cursor ray is intersected with the drawn ground
+// (ground.ts: the same triangles as the ground mesh), and the hit is looked up in the simulation's own
 // tables: the building occupancy grid for buildings, a radius test on positions for mobiles.
 // The result does not depend on which LOD is drawn, so it works the same at every zoom level.
 
 import { Vector3, type PerspectiveCamera } from 'three';
 import { alienInfo, unitInfo } from '../sim/kinds.ts';
-import { heightAt, type Terrain } from '../sim/terrain.ts';
+import type { Terrain } from '../sim/terrain.ts';
+import { heightRange, rayGround } from './ground.ts';
 import { worldPerPixel } from './cameraRig.ts';
 
 export type PickType = 'unit' | 'building' | 'alien' | 'wreck';
@@ -74,21 +75,19 @@ export function screenToGround(camera: PerspectiveCamera, sx: number, sy: number
   const o = camera.position;
   dir.copy(tmp).sub(o).normalize();
   if (dir.y >= -1e-6) return null;
-  // Fixed-point refinement: intersect the horizontal plane at the height found at the last guess.
-  let y = 1;
-  let t = 0;
-  for (let i = 0; i < 10; i++) {
-    t = (y - o.y) / dir.y;
-    const ny = heightAt(terrain, o.x + dir.x * t, o.z + dir.z * t);
-    if (Math.abs(ny - y) < 1e-4) {
-      y = ny;
-      break;
-    }
-    y = ny;
+  const r = rangeOf(terrain);
+  const hit = rayGround(terrain, o.x, o.y, o.z, dir.x, dir.y, dir.z, r.lo, r.hi);
+  return hit ? { x: hit.x, z: hit.z, y: hit.y, dist: hit.dist } : null;
+}
+
+const ranges = new WeakMap<Terrain, { lo: number; hi: number }>();
+function rangeOf(t: Terrain): { lo: number; hi: number } {
+  let r = ranges.get(t);
+  if (!r) {
+    r = heightRange(t);
+    ranges.set(t, r);
   }
-  t = (y - o.y) / dir.y;
-  if (t <= 0) return null;
-  return { x: o.x + dir.x * t, z: o.z + dir.z * t, y, dist: t };
+  return r;
 }
 
 function nearestMobile(rows: MobileRows, gx: number, gz: number, pad: number, radius: (kind: number) => number): number {

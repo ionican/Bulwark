@@ -2,7 +2,6 @@
 // Rendering runs one tick behind the simulation: at time `now` it shows prev -> curr at
 // alpha = (now - arrival of curr) / tick length.
 
-import { CAPACITY } from '../sim/world.ts';
 import { TICK_SECONDS } from '../sim/kinds.ts';
 import { slotOf } from '../sim/table.ts';
 import type { Snapshot } from '../sim/snapshot.ts';
@@ -36,12 +35,22 @@ export class Interpolator {
   prev: Snapshot | null = null;
   curr: Snapshot | null = null;
   private currAt = 0;
-  readonly aliens = mobileView(CAPACITY.aliens);
-  readonly units = mobileView(CAPACITY.units);
-  readonly projectiles = mobileView(CAPACITY.projectiles);
-  private readonly prevRowAliens = new Int32Array(CAPACITY.aliens);
-  private readonly prevRowUnits = new Int32Array(CAPACITY.units);
-  private readonly prevRowProjectiles = new Int32Array(CAPACITY.projectiles);
+  readonly aliens: MobileView;
+  readonly units: MobileView;
+  readonly projectiles: MobileView;
+  private readonly prevRowAliens: Int32Array;
+  private readonly prevRowUnits: Int32Array;
+  private readonly prevRowProjectiles: Int32Array;
+
+  /** `capacity`: the simulation's table capacities (sim/world.ts CAPACITY; W24 run 2a passes them in). */
+  constructor(capacity: { aliens: number; units: number; projectiles: number }) {
+    this.aliens = mobileView(capacity.aliens);
+    this.units = mobileView(capacity.units);
+    this.projectiles = mobileView(capacity.projectiles);
+    this.prevRowAliens = new Int32Array(capacity.aliens);
+    this.prevRowUnits = new Int32Array(capacity.units);
+    this.prevRowProjectiles = new Int32Array(capacity.projectiles);
+  }
 
   /** Adds a snapshot; returns the snapshot that dropped out (its buffer can be recycled). */
   push(snap: Snapshot, now: number): Snapshot | null {

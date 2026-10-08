@@ -2,18 +2,21 @@
 // thread only receives snapshots, interpolates them and sends commands back.
 //
 // URL parameters: ?stress=1 (stress scene), ?sandbox=1 (W24 mechanics sandbox), ?seed=<n>
-// (simulation seed, default 1), ?rich=1 (debug: start with 1,000,000 of each resource).
+// (simulation seed, default 1), ?rich=1 (debug: start with 1,000,000 of each resource),
+// ?greybox=1 (W13's greybox renderer, for comparison), ?quality=high (default medium).
 // The scenario shown is the one in the snapshot: loading a save switches to the save's scenario.
 
-import { AmbientLight, Color, DirectionalLight, HemisphereLight, PerspectiveCamera, Scene } from 'three';
-import { createRenderer } from './render/adapter.ts';
+import { PerspectiveCamera } from 'three';
+import { createRenderer, type Quality } from './render/adapter.ts';
+import { measureRenderCost } from './render/cost.ts';
 import { applyRig, clampRig, worldPerPixel, type Rig } from './render/cameraRig.ts';
-import { EntityRenderer } from './render/entities.ts';
 import { Ghost } from './render/ghost.ts';
+import { groundHeight } from './render/ground.ts';
+import { entitiesOf, inspectScene } from './render/inspect.ts';
 import { LOD_THRESHOLDS } from './render/lod.ts';
 import { Interpolator } from './render/interp.ts';
 import { boxSelect, buildOccupancy, pickScreen, screenToGround, type Pick, type PickView } from './render/picking.ts';
-import { buildTerrainView } from './render/terrainView.ts';
+import { createView } from './render/view.ts';
 import {
   ALIEN_INFO,
   ALIEN_KINDS,
@@ -72,11 +75,11 @@ import {
   decodeSnapshot,
   type Snapshot,
 } from './sim/snapshot.ts';
-import { SCENARIO_NAMES } from './sim/world.ts';
+import { CAPACITY, SCENARIO_NAMES } from './sim/world.ts';
 import { statsReport } from './sim/stats.ts';
 import { TUNE_FIELDS, TUNE_KINDS, TUNE_TARGETS, TU_HP, tuneIndex, type TuneTarget } from './sim/tuning.ts';
-import { WRECK_COMMANDER } from './sim/sandbox.ts';
-import { heightAt, map1Terrain } from './sim/terrain.ts';
+import { MAX_SPAWN_ORIGINS, WRECK_COMMANDER } from './sim/sandbox.ts';
+import { map1Terrain } from './sim/terrain.ts';
 import { canPlaceOn } from './sim/world.ts';
 import type { Command } from './sim/commands.ts';
 import type { FromWorker, RunnerInfo, ToWorker } from './sim/protocol.ts';
@@ -94,16 +97,12 @@ const scenario: ScenarioName = params.get('stress') === '1' ? 'stress' : params.
 const seed = (Number(params.get('seed') ?? '1') || 1) >>> 0;
 
 const terrain = map1Terrain();
-const adapter = createRenderer();
+const renderMode = params.get('greybox') === '1' ? 'greybox' : 'models';
+const adapter = createRenderer(renderMode, params.get('quality') === 'high' ? 'high' : 'medium');
 document.body.appendChild(adapter.canvas);
-
-const scene = new Scene();
-scene.background = new Color('#1d1916');
-scene.add(new HemisphereLight('#ffe9d2', '#3a2a20', 1.9));
-scene.add(new AmbientLight('#ffffff', 0.25));
-const sun = new DirectionalLight('#fff0dc', 2.2);
-sun.position.set(-40, 90, -30);
-scene.add(sun);
+let consoleErrors = 0;
+window.addEventListener('error', () => consoleErrors++);
+window.addEventListener('unhandledrejection', () => consoleErrors++);
 
 const camera = new PerspectiveCamera(45, 1, 0.5, 1000);
 const VIEWS = {
@@ -113,9 +112,14 @@ const VIEWS = {
 } as const;
 const rig: Rig = { x: terrain.base.x, z: terrain.base.z - 2, distance: 50, yaw: 0 };
 
-const terrainView = buildTerrainView(terrain);
-scene.add(terrainView.group);
-const entities = new EntityRenderer(scene, terrain);
+const loading = document.createElement('div');
+loading.style.cssText = 'position:fixed;inset:0;display:grid;place-items:center;color:#f4efe6;font:600 18px system-ui,sans-serif;background:#1d1916;z-index:50';
+loading.textContent = 'Loading…';
+document.body.appendChild(loading);
+const view = await createView(adapter, terrain, camera, CAPACITY, MAX_SPAWN_ORIGINS, (t) => (loading.textContent = t));
+loading.remove();
+const scene = view.scene;
+const entities = view.entities;
 const ghost = new Ghost(scene, terrain);
 const hud = new Hud();
 
@@ -130,7 +134,7 @@ function resize() {
 }
 function applyCamera() {
   clampRig(rig, terrain.w, terrain.h);
-  applyRig(camera, rig, heightAt(terrain, rig.x, rig.z));
+  applyRig(camera, rig, groundHeight(terrain, rig.x, rig.z));
 }
 window.addEventListener('resize', resize);
 resize();
@@ -139,12 +143,10 @@ resize();
 
 const worker = new Worker(new URL('./sim/worker.ts', import.meta.url), { type: 'module' });
 const send = (msg: ToWorker, transfer: Transferable[] = []) => worker.postMessage(msg, transfer);
-const interp = new Interpolator();
+const interp = new Interpolator(CAPACITY);
 const occupancy = new Int32Array(terrain.w * terrain.h);
 let lastTickMs = 0;
 const tickSamples: number[] = [];
-let consoleErrors = 0;
-window.addEventListener('error', () => consoleErrors++);
 
 let runnerInfo: RunnerInfo = { speed: 1, paused: false, checkpoints: [] };
 const rejected: Array<{ reason: string; cmd: Command }> = [];
@@ -680,9 +682,13 @@ let lastFrame = performance.now();
 let hudAt = 0;
 let drawCalls = 0;
 let frames = 0;
+/** CPU ms of the last frame's scene update (interpolation, instance filling, lighting fit). */
+let updateMs = 0;
 
+let costRunning = false;
 function frame(now: number) {
   requestAnimationFrame(frame);
+  if (costRunning) return;
   const cpu0 = performance.now();
   const dt = Math.min(0.1, (now - lastFrame) / 1000);
   lastFrame = now;
@@ -690,27 +696,29 @@ function frame(now: number) {
   while (frameTimes.length && frameTimes[0]! < now - 1000) frameTimes.shift();
   steer(dt);
   const snap = interp.curr;
+  const tUpdate = performance.now();
   if (snap) {
     interp.update(now);
-    entities.update({
-      camera,
-      viewportHeight: vh,
-      yaw: rig.yaw,
-      snapshot: snap,
-      aliens: interp.aliens,
-      units: interp.units,
-      projectiles: interp.projectiles,
-      selection,
-      showRoutes: true,
-    });
+    view.update(
+      {
+        camera,
+        viewportHeight: vh,
+        yaw: rig.yaw,
+        snapshot: snap,
+        aliens: interp.aliens,
+        units: interp.units,
+        projectiles: interp.projectiles,
+        selection,
+        showRoutes: true,
+      },
+      rig.distance,
+      (x, y, z) => worldPerPixel(camera, Math.hypot(x - camera.position.x, y - camera.position.y, z - camera.position.z), vh),
+      rig.distance > LOD_THRESHOLDS[1]!,
+    );
   }
   updateGhost();
-  terrainView.update(
-    (x, y, z) => worldPerPixel(camera, Math.hypot(x - camera.position.x, y - camera.position.y, z - camera.position.z), vh),
-    rig.distance > LOD_THRESHOLDS[1]!,
-    rig.yaw,
-  );
-  adapter.render(scene, camera);
+  updateMs = performance.now() - tUpdate;
+  adapter.render(dt);
   drawCalls = adapter.drawCalls();
   frames++;
   frameCpu.push(performance.now() - cpu0);
@@ -724,7 +732,7 @@ function frame(now: number) {
       drawCalls,
       triangles: adapter.triangles(),
       counts: entityCounts(snap),
-      lod: { ...entities.counts },
+      lod: lodCounts(),
       distance: rig.distance,
       renderer: adapter.describe(),
       scenario: { map1: 'map 1', stress: 'stress scene', empty: 'empty map', sandbox: 'sandbox (map 1)' }[SCENARIO_NAMES[snap.globals[G_SCENARIO]!] ?? 'map1'],
@@ -798,6 +806,11 @@ function frame(now: number) {
 }
 requestAnimationFrame(frame);
 
+/** Objects per detail level last frame (model view: full, middle, simple, icon; greybox: W13's three). */
+function lodCounts(): { full: number; middle?: number; simple: number; icon: number; culled: number } {
+  return view.models ? { ...view.models.counts } : { ...entities.counts };
+}
+
 function entityCounts(s: Snapshot | null) {
   return {
     buildings: s?.buildings.count ?? 0,
@@ -838,7 +851,7 @@ function screenOf(type: EntityType, id: number): { x: number; y: number } | null
 }
 
 function worldToScreen(x: number, z: number) {
-  const p = camera.position.clone().set(x, heightAt(terrain, x, z), z).project(camera);
+  const p = camera.position.clone().set(x, groundHeight(terrain, x, z), z).project(camera);
   return { x: ((p.x + 1) / 2) * vw, y: ((1 - p.y) / 2) * vh };
 }
 
@@ -937,7 +950,7 @@ const game = {
     return drawCalls;
   },
   get lodLevelCounts() {
-    return { ...entities.counts };
+    return lodCounts();
   },
   get fps() {
     return frameTimes.length;
@@ -1192,6 +1205,47 @@ const game = {
   clearWrecks: () => commandResult({ t: 'clearWrecks' }),
   resetStats: () => commandResult({ t: 'resetStats' }),
   resetSandbox: (full = false) => commandResult({ t: 'resetSandbox', full }),
+  // ---- W24 run 2a: renderer
+  /** 'models' (default) or 'greybox' (?greybox=1). */
+  renderMode,
+  get quality(): Quality {
+    return adapter.quality;
+  },
+  setQuality: (q: Quality) => {
+    adapter.setQuality(q);
+    return adapter.quality;
+  },
+  /** Drawing buffer size and pixel ratio. */
+  get viewport() {
+    return { css: [vw, vh], buffer: [adapter.canvas.width, adapter.canvas.height], pixelRatio: adapter.renderer.getPixelRatio() };
+  },
+  /** CPU ms of the last frame: scene update, then each render pass (composer passes, or 'scene'). */
+  get timing() {
+    return { updateMs, renderMs: adapter.timing.renderMs, passes: { ...adapter.timing.passes } };
+  },
+  /** Wall topology rebuilds so far (layout key changes); null in the greybox view. */
+  get wallRebuilds() {
+    return view.models?.walls.rebuilds ?? null;
+  },
+  /** A batch dropped an instance past its capacity (model view and overlays). */
+  get overflowed() {
+    return (view.models?.overflowed ?? false) || entities.overflowed;
+  },
+  /**
+   * Scene inspection (render/inspect.ts): per kind, what the scene graph actually holds on that
+   * kind's entities — model and icon instances, greybox instances, mesh and material names, and how
+   * many of the kind's entities got a model or icon.
+   */
+  inspect: () => {
+    const s = interp.curr;
+    if (!s) return null;
+    return inspectScene(scene, entitiesOf(s, interp.aliens, interp.units));
+  },
+  /**
+   * GPU+CPU cost by forced-completion timing (render/cost.ts): the frame rendered `frames` times
+   * with each part on and off. Pauses the frame loop while it runs.
+   */
+  renderCost: (frames = 40) => measureRenderCost(adapter, view, camera, frames, (on) => (costRunning = on)),
   camera: {
     get: (): Rig => ({ ...rig }),
     set: (r: Partial<Rig>) => {
