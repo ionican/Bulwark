@@ -49,10 +49,11 @@ function perimeter(t: Terrain): Array<[number, number]> {
   return out;
 }
 
-const terrace = (h: number, step: number) => {
+/** Terraces: flat ledges `step` apart joined by risers over the last (1 − flat) of each step. */
+const terrace = (h: number, step: number, flat = 0.62) => {
   const k = Math.floor(h / step);
   const f = h / step - k;
-  return (k + smoothstep(0.62, 0.95, f)) * step;
+  return (k + smoothstep(flat, 0.97, f)) * step;
 };
 
 /**
@@ -66,8 +67,8 @@ function sceneryHeight(t: Terrain, x: number, z: number, d: number, edgeH: numbe
   const n1 = fbm(x * 0.021, z * 0.021, 4) * 0.5 + 0.5;
   const n2 = fbm(x * 0.06 + 17, z * 0.06 - 5, 3) * 0.5 + 0.5;
   const floor = -5.5 + 1.2 * (n2 - 0.5);
-  const rise = terrace(edgeH + (3 + 9 * n1) * smoothstep(3, 40, d) + 4 * n2 * smoothstep(30, 110, d), 1.6);
-  const drop = terrace(floor + (5 + 11 * n1) * smoothstep(26, 110, d) + 3 * n2 * smoothstep(60, 160, d), 1.7);
+  const rise = terrace(edgeH + (7 + 12 * n1) * smoothstep(3, 34, d) + 8 * n2 * smoothstep(40, 120, d), 2.2, 0.8);
+  const drop = terrace(floor + (10 + 12 * n1) * smoothstep(28, 70, d) + 6 * n2 * smoothstep(80, 180, d), 2.4, 0.8);
   // north-east-ness of the direction from the map centre (north is −z)
   const vx = x - t.w / 2;
   const vz = z - t.h / 2;
