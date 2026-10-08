@@ -62,10 +62,11 @@ configurations interleaved over 7 rounds, medians; the sandbox fixture of `check
 |---|---|---|---|---|
 | check-render, shots run 1 | 2.68 ms | 2.41 ms | 2.00 ms | 7.04 ms |
 | check-render, shots run 2 | 2.69 ms | 2.42 ms | 2.09 ms | 6.98 ms |
+| final Verify (check-render) | 2.67 ms | 2.41 ms | 2.22 ms | 7.09 ms |
 
 Both within budget. The post split by pass (frame minus the frame without it) is within the noise except
-ambient occlusion: N8AO 0.98–1.01 ms, bloom + tone map 0.00–0.19 ms, SMAA −0.16–0.12 ms, remainder (half-float
-scene target and copies) 0.80–1.15 ms. An earlier version of the measurement ran each configuration once in
+ambient occlusion: N8AO 0.98–1.23 ms, bloom + tone map 0.00–0.21 ms, SMAA −0.16–0.12 ms, remainder (half-float
+scene target and copies) 0.67–1.15 ms. An earlier version of the measurement ran each configuration once in
 sequence; its figures drifted with the GPU clock (terrain 4.04–4.81 ms, post 3.38–4.37 ms, full 8.4–9.2 ms
 across three runs, post over budget in two) and the per-pass parts did not add up, so it was replaced by the
 interleaved medians above. Those earlier figures are an upper bound, not the measurement.
@@ -77,8 +78,8 @@ Stand-in for the 2b population, which is not defined yet: the W13 stress scene (
 
 | Camera | fps (display-capped) | Forced-complete frame | Uncapped equivalent | Draw calls |
 |---|---|---|---|---|
-| Game camera | 60–61 | 7.17–7.22 ms | 139 fps | 375 |
-| Full zoom-out (distance 200) | 61 | 8.74–8.78 ms | 114 fps | 177 |
+| Game camera | 60–61 | 7.14–7.22 ms | 139–140 fps | 375 |
+| Full zoom-out (distance 200) | 61 | 8.73–8.78 ms | 114–115 fps | 177 |
 
 ## Screenshots
 
