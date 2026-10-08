@@ -101,6 +101,7 @@ function check(w: World, cmd: Command): string | null {
       if (!tile(cmd.from) || !tile(cmd.to)) return 'buildRun needs integer tiles from: [tx, ty] and to: [tx, ty]';
       if (!isInt(cmd.depth) || cmd.depth < 1 || cmd.depth > MAX_RUN_DEPTH) return `run depth must be 1..${MAX_RUN_DEPTH}`;
       const plan = planRun(w, cmd);
+      w.validated = { cmd, result: plan }; // the apply step and the worker reuse it
       if (typeof plan === 'string') return plan;
       if (plan.tiles.length === 0) return `nothing to build: all ${plan.skipped.total} tiles skipped (rock ${plan.skipped.rock}, wall ${plan.skipped.wall}, blocked ${plan.skipped.blocked})`;
       return runCapacityProblem(w, plan.tiles.length);
@@ -120,6 +121,7 @@ function check(w: World, cmd: Command): string | null {
       if (!isNum(cmd.x) || !isNum(cmd.z)) return 'spawnAt needs a point x, z';
       if (!isInt(cmd.count) || cmd.count < 1 || cmd.count > SPAWN_AT_MAX) return `spawnAt count must be 1..${SPAWN_AT_MAX}`;
       const p = spawnPlaces(w, cmd.kind, cmd.x, cmd.z, cmd.count);
+      w.validated = { cmd, result: p };
       return typeof p === 'string' ? p : null;
     }
     case 'tune':

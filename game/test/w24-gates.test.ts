@@ -13,6 +13,7 @@ import { TILE_ROCK, flatTerrain } from '../src/sim/terrain.ts';
 import { GATE_MAX_DEPTH, GATE_WIDTH, checkGate, type GateGrid } from '../src/sim/gate.ts';
 import { GATE_COST_MULT } from '../src/sim/balance.ts';
 import { DX, DZ } from '../src/sim/grid.ts';
+import { flatWorld } from './fixtures.ts';
 
 // ---- the W23 predicate, ported: W23's own test cases (look/test/w23-walls.test.ts) ------------
 
@@ -104,11 +105,7 @@ const onAxis = (axis: 'x' | 'z', u: number, v: number): [number, number] => (axi
 function wallBlock(w: World, axis: 'x' | 'z', depth: number) {
   for (let v = 10; v < 10 + depth; v++) for (let u = 5; u <= 13; u++) w.placeBuilding(B.wall, ...onAxis(axis, u, v), true);
 }
-const flat = () => {
-  const w = new World(1, flatTerrain(MAP, MAP), { waves: false });
-  w.pool.set([1e6, 1e6, 1e6]);
-  return w;
-};
+const flat = () => flatWorld(MAP, MAP, { rich: true });
 const gateSlot = (w: World) => {
   for (let s = 0; s < w.buildings.highWater; s++) if (w.buildings.alive[s] && w.buildings.cols.kind[s] === B.gate) return s;
   return -1;

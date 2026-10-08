@@ -22,6 +22,7 @@ import {
   BF_STARTED,
   BF_UPGRADING,
   BUILDING_FIELDS,
+  isReserved,
   PROJECTILE_FIELDS,
   UNIT_FIELDS,
   US_IDLE,
@@ -60,11 +61,13 @@ import { validateCommand, upgradeProblem } from './validate.ts';
 import { COMMANDER_WRECK_SALVAGE, RESEARCH, RESEARCH_INDEX, SANDBOX_RESPAWN_TICKS, callEarlyBonus, EXTRACTOR_BOOST, FIELD_ENG_TURRET_COOLDOWN } from './balance.ts';
 import { map1 } from '../../../model/data/map1.ts';
 import { START_ENGINEERS, TICK_HZ } from './kinds.ts';
-import { TB_HP, TUNE_FIELDS, Tuning, alienMaxHp, resetTune, setTune, tuneFieldIndex, unitMaxHp, type TuneTarget } from './tuning.ts';
+import { TB_HP, Tuning, alienMaxHp, resetTune, setTune, tuneFieldIndex, unitMaxHp } from './tuning.ts';
+import { visitRings } from './grid.ts';
+import { createWorld } from './scenarios.ts';
 import { STAT_COUNT, recordKilled, recordSpawned } from './stats.ts';
 import { RUN_CAPACITY, cancelRun, createRun, planRun, stepRuns, type WallRun } from './runs.ts';
 import { gateBaseHp, gateBuildWork, gateDepth, gateFootprint, gateUpgradeWork, inGateCorridor, planGate } from './gate.ts';
-import { WRECK_COMMANDER, applySpawnAt, clearAliens, clearWrecks, originRoutes, type SpawnOrigin } from './sandbox.ts';
+import { WRECK_COMMANDER, applySpawnAt, clearAliens, clearWrecks, originRoutes, spawnPlaces, type SpawnOrigin } from './sandbox.ts';
 
 /** Orders a unit can hold queued; more are refused (validate.ts) rather than dropped. */
 export const MAX_ORDERS = 64;
@@ -87,8 +90,7 @@ export interface Route {
 export const SCENARIO_NAMES = ['map1', 'stress', 'empty', 'sandbox'] as const;
 export type ScenarioName = (typeof SCENARIO_NAMES)[number];
 
-/** True for a site no build power has reached yet (W24 construction state "reserved"). */
-export const isReserved = (flags: number): boolean => (flags & (BF_STARTED | BF_COMPLETE)) === 0;
+export { isReserved, constructionState } from './schema.ts';
 
 export interface PendingGroup {
   kind: number;
@@ -233,6 +235,10 @@ export class World {
   commanderRespawnTick = -1;
   /** Sandbox: commanders lost (each one respawns). */
   commanderDeaths = 0;
+  /** Not saved: categories whose field was rebuilt since the origin routes were traced (all, at first). */
+  readonly originStale = new Uint8Array(CATEGORY_COUNT).fill(1);
+  /** Not saved: what validation worked out for the command it last passed (validate.ts). */
+  validated: { cmd: Command; result: unknown } | null = null;
   buildingsLost = 0;
   unitsLost = 0;
 
@@ -351,13 +357,35 @@ export class World {
 
   private stepWaves(): void {
     if (!(this.nextWave < this.waveTicks.length && this.tick >= this.waveTicks[this.nextWave]!)) return;
-    const wave = map1.waves[this.nextWave]!;
-    for (const g of wave.groups) {
+    this.queueWave(this.nextWave);
+    this.nextWave++;
+    this.lastWaveTick = this.tick;
+  }
+
+  /** Queues map 1 wave `index`'s groups at their entry points, starting now. */
+  queueWave(index: number): void {
+    for (const g of map1.waves[index]!.groups) {
       const entry = this.terrain.entries.findIndex((e) => e.name === g.entry);
       this.pending.push({ kind: ALIEN_KINDS.indexOf(g.kind), entry: entry < 0 ? 0 : entry, left: g.count, nextTick: this.tick });
     }
-    this.nextWave++;
-    this.lastWaveTick = this.tick;
+  }
+
+  /** Marks research node i done (the station finished it, or the sandbox granted it). */
+  completeResearch(i: number): void {
+    this.researchDone |= 1 << i;
+    if (this.researchCurrent === i) {
+      this.researchCurrent = -1;
+      this.researchProgress = 0;
+    }
+    this.researchQueue = this.researchQueue.filter((q) => q !== i);
+  }
+
+  /** Gives every live unit in `ids` (that `accept` takes) its own copy of an order. */
+  private orderAll(ids: number[], make: () => Order, queue: boolean | undefined, accept?: (slot: number) => boolean): void {
+    for (const id of ids) {
+      const slot = this.units.slotForId(id);
+      if (slot >= 0 && (!accept || accept(slot))) this.giveOrder(slot, make(), queue ?? false);
+    }
   }
 
   /** Brings the next wave forward to the next tick and pays the bonus for the time skipped. */
@@ -399,38 +427,21 @@ export class World {
       }
       case 'build': {
         const site = this.placeBuilding(cmd.kind, cmd.tx, cmd.ty, false, cmd.dir ?? 0);
-        if (site < 0) break;
-        for (const id of cmd.ids) {
-          const slot = this.units.slotForId(id);
-          if (slot >= 0) this.giveOrder(slot, { t: 'build', id: site }, cmd.queue ?? false);
-        }
+        if (site >= 0) this.orderAll(cmd.ids, () => ({ t: 'build', id: site }), cmd.queue);
         break;
       }
       case 'assist': {
-        const b = this.buildings.slotForId(cmd.target);
-        if (b < 0) break;
-        for (const id of cmd.ids) {
-          const slot = this.units.slotForId(id);
-          if (slot >= 0) this.giveOrder(slot, { t: 'build', id: cmd.target }, cmd.queue ?? false);
-        }
+        if (this.buildings.slotForId(cmd.target) >= 0) this.orderAll(cmd.ids, () => ({ t: 'build', id: cmd.target }), cmd.queue);
         break;
       }
       case 'upgrade': {
         const b = this.buildings.slotForId(cmd.target);
-        if (b < 0 || !this.startUpgrade(b)) break;
-        for (const id of cmd.ids) {
-          const slot = this.units.slotForId(id);
-          if (slot >= 0) this.giveOrder(slot, { t: 'build', id: cmd.target }, cmd.queue ?? false);
-        }
+        if (b >= 0 && this.startUpgrade(b)) this.orderAll(cmd.ids, () => ({ t: 'build', id: cmd.target }), cmd.queue);
         break;
       }
       case 'reclaim': {
         if (this.wrecks.slotForId(cmd.wreck) < 0) break;
-        for (const id of cmd.ids) {
-          const slot = this.units.slotForId(id);
-          if (slot >= 0 && this.units.cols.kind[slot] === U.engineer)
-            this.giveOrder(slot, { t: 'reclaim', id: cmd.wreck, phase: 0, x: 0, z: 0 }, cmd.queue ?? false);
-        }
+        this.orderAll(cmd.ids, () => ({ t: 'reclaim', id: cmd.wreck, phase: 0, x: 0, z: 0 }), cmd.queue, (slot) => this.units.cols.kind[slot] === U.engineer);
         break;
       }
       case 'stop':
@@ -464,14 +475,11 @@ export class World {
         this.placeBuilding(cmd.kind, cmd.tx, cmd.ty, true, cmd.dir ?? 0);
         break;
       case 'buildRun': {
-        const plan = planRun(this, cmd);
+        // The plan validation made a moment ago, on this state (validate.ts).
+        const plan = this.validatedResult<ReturnType<typeof planRun>>(cmd) ?? planRun(this, cmd);
         if (typeof plan === 'string' || plan.tiles.length === 0) break;
         const run = createRun(this, plan);
-        if (run < 0) break;
-        for (const id of cmd.ids) {
-          const slot = this.units.slotForId(id);
-          if (slot >= 0) this.giveOrder(slot, { t: 'run', run, site: -1 }, cmd.queue ?? false);
-        }
+        if (run >= 0) this.orderAll(cmd.ids, () => ({ t: 'run', run, site: -1 }), cmd.queue);
         break;
       }
       case 'cancelRun':
@@ -479,15 +487,11 @@ export class World {
         break;
       case 'gate': {
         const site = this.convertToGate(cmd.tx, cmd.ty, cmd.axis);
-        if (site < 0) break;
-        for (const id of cmd.ids) {
-          const slot = this.units.slotForId(id);
-          if (slot >= 0) this.giveOrder(slot, { t: 'build', id: site }, cmd.queue ?? false);
-        }
+        if (site >= 0) this.orderAll(cmd.ids, () => ({ t: 'build', id: site }), cmd.queue);
         break;
       }
       case 'spawnAt':
-        applySpawnAt(this, cmd.kind, cmd.x, cmd.z, cmd.count);
+        applySpawnAt(this, cmd.kind, cmd.x, cmd.z, cmd.count, this.validatedResult<ReturnType<typeof spawnPlaces>>(cmd));
         break;
       case 'tune':
         setTune(this, cmd.target, cmd.kind, tuneFieldIndex(cmd.target, cmd.field), cmd.mult);
@@ -499,23 +503,11 @@ export class World {
         this.unlimited = cmd.on;
         break;
       case 'grantResearch':
-        for (let i = 0; i < RESEARCH.length; i++) {
-          if (!cmd.all && RESEARCH[i]!.id !== cmd.node) continue;
-          this.researchDone |= 1 << i;
-          if (this.researchCurrent === i) {
-            this.researchCurrent = -1;
-            this.researchProgress = 0;
-          }
-          this.researchQueue = this.researchQueue.filter((q) => q !== i);
-        }
+        for (let i = 0; i < RESEARCH.length; i++) if (cmd.all || RESEARCH[i]!.id === cmd.node) this.completeResearch(i);
         break;
-      case 'startWave': {
-        for (const g of map1.waves[cmd.index]!.groups) {
-          const entry = this.terrain.entries.findIndex((e) => e.name === g.entry);
-          this.pending.push({ kind: ALIEN_KINDS.indexOf(g.kind), entry: entry < 0 ? 0 : entry, left: g.count, nextTick: this.tick });
-        }
+      case 'startWave':
+        this.queueWave(cmd.index);
         break;
-      }
       case 'clearAliens':
         clearAliens(this);
         break;
@@ -555,31 +547,17 @@ export class World {
    * Tuning and unlimited spending are kept unless `full`.
    */
   resetSandbox(full: boolean): void {
-    const fresh = new World(this.seed, this.terrain, { waves: false });
-    fresh.scenario = 'sandbox';
-    fresh.spawnStartUnits();
-    fresh.computeRoutes();
+    // The fresh start is made with the kept multipliers already set, so its units are created tuned.
+    const fresh = createWorld(this.seed, 'sandbox', full ? { terrain: this.terrain } : { terrain: this.terrain, tuning: this.tuning, unlimited: this.unlimited });
     const keep = new Set(['tick', 'seq', 'queue', 'log', 'applyRejected', 'terrain', 'seed']);
-    if (!full) {
-      keep.add('tuning');
-      keep.add('unlimited');
-    }
     const self = this as unknown as Record<string, unknown>;
     const src = fresh as unknown as Record<string, unknown>;
     for (const k of Object.keys(src)) if (!keep.has(k)) self[k] = src[k];
-    if (!full) {
-      // Kept multipliers apply to the fresh entities as they would have at creation.
-      for (const t of ['building', 'alien', 'unit'] as TuneTarget[]) {
-        const n = TUNE_FIELDS[t].length;
-        const arr = this.tuning[t];
-        for (let k = 0; k * n < arr.length; k++) {
-          const m = arr[k * n + TB_HP]!;
-          if (m === 1) continue;
-          arr[k * n + TB_HP] = 1;
-          setTune(this, t, k, TB_HP, m);
-        }
-      }
-    }
+  }
+
+  /** The result validation stored for `cmd` just now (validate.ts), or undefined. */
+  validatedResult<T>(cmd: Command): T | undefined {
+    return this.validated && this.validated.cmd === cmd ? (this.validated.result as T) : undefined;
   }
 
   giveOrder(slot: number, order: Order, queue: boolean): void {
@@ -675,33 +653,32 @@ export class World {
   startSite(slot: number): void {
     const c = this.buildings.cols;
     c.flags[slot] = c.flags[slot]! | BF_STARTED;
-    this.structureChanged();
+    // Movement and flow costs change; the belt order depends only on which belts exist.
+    this.gridsDirty = true;
+    this.fieldDirty.fill(1);
+    if (isBelt(c.kind[slot]!)) this.beltsDirty = true;
     const x0 = c.tx[slot]!;
     const z0 = c.ty[slot]!;
     const x1 = x0 + c.fw[slot]!;
     const z1 = z0 + c.fh[slot]!;
-    const on = (x: number, z: number) => {
-      const tx = Math.floor(x);
-      const tz = Math.floor(z);
-      return tx >= x0 && tx < x1 && tz >= z0 && tz < z1;
+    const W = this.terrain.w;
+    /** Moves every live entity of `table` standing on the footprint to the nearest cell `passable` accepts. */
+    const evict = (table: { highWater: number; alive: Uint8Array; cols: { x: Float32Array; z: Float32Array } }, passable: (cell: number) => boolean, onMove?: (s: number) => void) => {
+      const { x, z } = table.cols;
+      for (let s = 0; s < table.highWater; s++) {
+        if (!table.alive[s]) continue;
+        const tx = Math.floor(x[s]!);
+        const tz = Math.floor(z[s]!);
+        if (tx < x0 || tx >= x1 || tz < z0 || tz >= z1) continue;
+        const cell = this.nearestFree(x[s]!, z[s]!, passable);
+        if (cell < 0) continue;
+        x[s] = (cell % W) + 0.5;
+        z[s] = Math.floor(cell / W) + 0.5;
+        onMove?.(s);
+      }
     };
-    const u = this.units;
-    for (let s = 0; s < u.highWater; s++) {
-      if (!u.alive[s] || !on(u.cols.x[s]!, u.cols.z[s]!)) continue;
-      const cell = this.nearestFree(u.cols.x[s]!, u.cols.z[s]!, (i) => this.unitPassable(i));
-      if (cell < 0) continue;
-      u.cols.x[s] = (cell % this.terrain.w) + 0.5;
-      u.cols.z[s] = Math.floor(cell / this.terrain.w) + 0.5;
-      this.paths[s] = null;
-    }
-    const a = this.aliens;
-    for (let s = 0; s < a.highWater; s++) {
-      if (!a.alive[s] || !on(a.cols.x[s]!, a.cols.z[s]!)) continue;
-      const cell = this.nearestFree(a.cols.x[s]!, a.cols.z[s]!, (i) => this.alienPassable(i));
-      if (cell < 0) continue;
-      a.cols.x[s] = (cell % this.terrain.w) + 0.5;
-      a.cols.z[s] = Math.floor(cell / this.terrain.w) + 0.5;
-    }
+    evict(this.units, (i) => this.unitPassable(i), (s) => (this.paths[s] = null));
+    evict(this.aliens, (i) => this.alienPassable(i));
   }
 
   /** A player unit may stand on `cell` now (live state, not the grids, which refresh next tick). */
@@ -728,20 +705,14 @@ export class World {
    * 1..16) and within a ring by (ty, tx). -1 if none.
    */
   nearestFree(x: number, z: number, ok: (cell: number) => boolean): number {
-    const t = this.terrain;
-    const x0 = Math.floor(x);
-    const z0 = Math.floor(z);
-    for (let r = 1; r <= 16; r++) {
-      for (let ty = z0 - r; ty <= z0 + r; ty++) {
-        for (let tx = x0 - r; tx <= x0 + r; tx++) {
-          if (Math.max(Math.abs(tx - x0), Math.abs(ty - z0)) !== r) continue;
-          if (tx < 0 || ty < 0 || tx >= t.w || ty >= t.h) continue;
-          const cell = ty * t.w + tx;
-          if (ok(cell)) return cell;
-        }
-      }
-    }
-    return -1;
+    const W = this.terrain.w;
+    let found = -1;
+    visitRings(Math.floor(x), Math.floor(z), 1, 16, W, this.terrain.h, (tx, ty) => {
+      if (!ok(ty * W + tx)) return false;
+      found = ty * W + tx;
+      return true;
+    });
+    return found;
   }
 
   structureChanged(): void {
@@ -958,6 +929,7 @@ export class World {
     this.fields[cat]!.build(bypass ? this.costBypass : this.cost, this.open, cells, cells.length);
     this.fields[cat]!.builtAt = this.tick;
     this.fieldDirty[cat] = 0;
+    this.originStale[cat] = 1;
     this.fieldBuilds++;
   }
 
@@ -997,17 +969,30 @@ export class World {
       for (let c = 0; c < CATEGORY_COUNT; c++) routes.push({ entry: ei, category: c, cells: this.fields[c]!.trace(cell, 600) });
     });
     this.routes = routes;
-    this.originRoutes = originRoutes(this);
+    // Origin routes: re-trace only those whose category's field was rebuilt since the last trace
+    // (a trace depends on nothing but the field and the origin cell).
+    this.originRoutes = originRoutes(this, this.originStale);
+    this.originStale.fill(0);
     this.routesVersion++;
   }
 
-  /** Recomputes only the sandbox spawn-origin routes (after a spawnAt). */
+  /** Re-traces every sandbox spawn-origin route (after a spawnAt changes the origins). */
   computeOriginRoutes(): void {
     this.originRoutes = originRoutes(this);
     this.routesVersion++;
   }
 
   // ---- deaths ------------------------------------------------------------------------------
+
+  /** Leaves a wreck (when the wreck table has room). */
+  addWreck(kind: number, x: number, z: number, salvage: number): void {
+    if (this.wrecks.count >= this.wrecks.capacity) return;
+    const w = this.wrecks.create();
+    this.wrecks.cols.kind[w] = kind;
+    this.wrecks.cols.x[w] = x;
+    this.wrecks.cols.z[w] = z;
+    this.wrecks.cols.salvage[w] = salvage;
+  }
 
   private removeDead(): void {
     const a = this.aliens;
@@ -1017,13 +1002,7 @@ export class World {
       const kind = ac.kind[s]!;
       const info = alienInfo(kind);
       recordKilled(this, kind);
-      if (this.wrecks.count < this.wrecks.capacity) {
-        const w = this.wrecks.create();
-        this.wrecks.cols.kind[w] = kind;
-        this.wrecks.cols.x[w] = ac.x[s]!;
-        this.wrecks.cols.z[w] = ac.z[s]!;
-        this.wrecks.cols.salvage[w] = info.salvage;
-      }
+      this.addWreck(kind, ac.x[s]!, ac.z[s]!, info.salvage);
       this.kills++;
       this.salvageFromKills += info.salvage;
       a.remove(s);
@@ -1056,13 +1035,7 @@ export class World {
         if (this.scenario === 'sandbox') {
           this.commanderDeaths++;
           this.commanderRespawnTick = this.tick + SANDBOX_RESPAWN_TICKS;
-          if (this.wrecks.count < this.wrecks.capacity) {
-            const wr = this.wrecks.create();
-            this.wrecks.cols.kind[wr] = WRECK_COMMANDER;
-            this.wrecks.cols.x[wr] = u.cols.x[s]!;
-            this.wrecks.cols.z[wr] = u.cols.z[s]!;
-            this.wrecks.cols.salvage[wr] = COMMANDER_WRECK_SALVAGE;
-          }
+          this.addWreck(WRECK_COMMANDER, u.cols.x[s]!, u.cols.z[s]!, COMMANDER_WRECK_SALVAGE);
         } else {
           this.outcome = 1;
           this.endTick = this.tick;

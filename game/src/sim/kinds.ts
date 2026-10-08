@@ -6,7 +6,7 @@
 
 import { map1 } from '../../../model/data/map1.ts';
 import type { BuildingDef, WeaponDef } from '../../../model/src/types.ts';
-import { BUILD_RATE, GATE_COST_MULT, HEAVY_T2, RARE_EXTRACTOR_OUTPUT } from './balance.ts';
+import { BUILD_RATE, HEAVY_T2, RARE_EXTRACTOR_OUTPUT, gateStats } from './balance.ts';
 
 export const METRES_PER_TILE = 2;
 export const TICK_HZ = 10;
@@ -137,6 +137,7 @@ const machineOf = (d: BuildingDef, input: number, output: number) => ({
   energyPerSecond: d.machine!.energyPerSecond,
 });
 
+const GATE_1 = gateStats(3);
 const INFO: Record<BuildingKind, BuildingInfo> = {
   massExtractor: { label: bd.massExtractor.label, fw: 2, fh: 2, hp: bd.massExtractor.hp, cost: costOf(bd.massExtractor), buildTime: bd.massExtractor.buildTime, role: 'economy', income: [1, 0, 0], key: 'm' },
   generator: { label: bd.generator.label, fw: 2, fh: 2, hp: bd.generator.hp, cost: costOf(bd.generator), buildTime: bd.generator.buildTime, role: 'economy', income: [0, bd.generator.income!.energy!, 0], key: 'g' },
@@ -158,15 +159,15 @@ const INFO: Record<BuildingKind, BuildingInfo> = {
   splitter: { label: 'Splitter', fw: 1, fh: 1, hp: 150, cost: [10, 20, 0], buildTime: 10, role: 'floor', key: 'v' },
   merger: { label: 'Merger', fw: 1, fh: 1, hp: 150, cost: [10, 20, 0], buildTime: 10, role: 'floor', key: 'n' },
   // W24 gate: converted from finished walls only (gate.ts), never placed from the build bar. Its
-  // footprint, hit points, cost and build time scale with the footprint (balance.ts gateWork);
+  // footprint, hit points, cost and build time scale with the footprint (balance.ts gateStats);
   // these per-kind values are the depth-1 gate (3 wall tiles). Tiers follow the wall's tiers.
   gate: {
     label: 'Gate',
     fw: 3,
     fh: 1,
-    hp: bd.wall.hp * 3,
-    cost: [bd.wall.cost.mass * 3 * GATE_COST_MULT, bd.wall.cost.energy * 3 * GATE_COST_MULT, bd.wall.cost.rare * 3 * GATE_COST_MULT],
-    buildTime: bd.wall.buildTime * 3 * GATE_COST_MULT,
+    hp: GATE_1.hp,
+    cost: GATE_1.cost,
+    buildTime: GATE_1.time,
     role: 'wall',
     tiers: tiersOf(bd.wall),
     key: '',

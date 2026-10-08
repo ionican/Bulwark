@@ -6,7 +6,7 @@ import { World } from '../src/sim/world.ts';
 import { createWorld } from '../src/sim/scenarios.ts';
 import { A, ALIEN_KINDS, B, START_STOCK, U, alienInfo, buildingInfo, unitInfo } from '../src/sim/kinds.ts';
 import { BF_COMPLETE, T_BUILDING } from '../src/sim/schema.ts';
-import { TILE_ROCK, flatTerrain } from '../src/sim/terrain.ts';
+import { TILE_ROCK } from '../src/sim/terrain.ts';
 import { decodeSnapshot, encodeSnapshot, G_SCENARIO } from '../src/sim/snapshot.ts';
 import { deserializeWorld, serializeWorld } from '../src/sim/save.ts';
 import { SimRunner } from '../src/sim/runner.ts';
@@ -16,19 +16,14 @@ import { TB_DAMAGE, TUNE_FIELDS } from '../src/sim/tuning.ts';
 import { RESEARCH, SANDBOX_RESPAWN_TICKS } from '../src/sim/balance.ts';
 import { SH_SHOTS, shooterIndex } from '../src/sim/stats.ts';
 import { map1 } from '../../model/data/map1.ts';
+import { flatWorld, unitIds } from './fixtures.ts';
 
 const sandbox = () => createWorld(1, 'sandbox');
 /** A flat sandbox (no commander unless added): for checks that need a quiet map. */
 const flatSandbox = (rocks: Array<[number, number]> = []) => {
-  const w = new World(1, flatTerrain(40, 40, { rocks, base: { x: 20, z: 36 } }), { waves: false });
+  const w = flatWorld(40, 40, { rich: true, terrain: { rocks, base: { x: 20, z: 36 } } });
   w.scenario = 'sandbox';
-  w.pool.set([1e6, 1e6, 1e6]);
   return w;
-};
-const unitIds = (w: World, kind?: number) => {
-  const out: number[] = [];
-  for (let s = 0; s < w.units.highWater; s++) if (w.units.alive[s] && (kind === undefined || w.units.cols.kind[s] === kind)) out.push(w.units.id(s));
-  return out;
 };
 /** Records every alien spawn (kind, x, z) as it happens, before the aliens move. */
 function recordSpawns(w: World) {

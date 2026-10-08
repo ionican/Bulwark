@@ -24,7 +24,8 @@ import {
   type Scene,
 } from 'three';
 import { B, BUILDING_KINDS, CATEGORY_COUNT, ITEM_PART, SHIELD, U, UNIT_KINDS, ALIEN_KINDS, alienInfo, isBelt, unitInfo } from '../sim/kinds.ts';
-import { BF_COMPLETE, BF_FIRING, BF_STARTED, BF_UPGRADING } from '../sim/schema.ts';
+import { BF_COMPLETE, BF_FIRING, BF_UPGRADING, isReserved } from '../sim/schema.ts';
+import { AXIS_Z, gateDepth } from '../sim/gate.ts';
 import { CAPACITY } from '../sim/world.ts';
 import { heightAt, type Terrain } from '../sim/terrain.ts';
 import { slotOf } from '../sim/table.ts';
@@ -336,13 +337,13 @@ export class EntityRenderer {
       const lod = this.lodFor(this.lod.b, this.lod.bId, B_.id[r]!, dist);
       this.count(lod);
       const belt = isBelt(kind);
-      const gate = kind === B.gate;
       // Gates: modelled along x, 1 deep; axis z turns local x onto world +z. Depth stretches local z.
-      const rc = belt ? BDX[c.dir[r]!]! : gate && c.dir[r] === 1 ? 0 : 1;
-      const rs = belt ? -BDZ[c.dir[r]!]! : gate && c.dir[r] === 1 ? -1 : 0;
-      const depth = gate ? (c.dir[r] === 1 ? fw : fh) : 1;
+      const gateZ = kind === B.gate && c.dir[r] === AXIS_Z;
+      const rc = belt ? BDX[c.dir[r]!]! : gateZ ? 0 : 1;
+      const rs = belt ? -BDZ[c.dir[r]!]! : gateZ ? -1 : 0;
+      const depth = kind === B.gate ? gateDepth(fw, fh, c.dir[r]!) : 1;
       const complete = (flags & BF_COMPLETE) !== 0;
-      const reserved = (flags & (BF_COMPLETE | BF_STARTED)) === 0;
+      const reserved = isReserved(flags);
       const k = kind * LOD_LEVELS + lod;
       // Reserved: no build power yet, so nothing stands there: a dotted outline only.
       if (reserved) {
@@ -495,45 +496,51 @@ export class EntityRenderer {
    * categories that pass, so a shared stretch shows every alien kind that will use it.
    */
   private drawRoutes(snap: Snapshot) {
+    if (this.routeCatsVersion !== snap.routesVersion) {
+      this.routeCats.clear();
+      for (const list of [snap.routes, snap.originRoutes])
+        for (const r of list) for (const c of r.cells) this.routeCats.set(c, (this.routeCats.get(c) ?? 0) | (1 << r.category));
+      this.routeCatsVersion = snap.routesVersion;
+    }
+    for (const r of snap.routes) this.drawRoute(r.cells, r.category);
+    for (const r of snap.originRoutes) this.drawRoute(r.cells, r.category);
+  }
+
+  private readonly cats: number[] = [];
+
+  /** Markers along one route (entry or spawn origin), spaced to a constant screen distance. */
+  private drawRoute(cells: Uint16Array, category: number) {
     const t = this.terrain;
     const W = t.w;
     const wppd = this.wppPerDist;
-    if (this.routeCatsVersion !== snap.routesVersion) {
-      this.routeCats.clear();
-      for (const r of [...snap.routes, ...snap.originRoutes]) for (const c of r.cells) this.routeCats.set(c, (this.routeCats.get(c) ?? 0) | (1 << r.category));
-      this.routeCatsVersion = snap.routesVersion;
-    }
-    const cats: number[] = [];
-    for (const route of [...snap.routes, ...snap.originRoutes]) {
-      const cells = route.cells;
-      if (cells.length < 2) continue;
-      let i = 1;
-      let n = 0;
-      while (i < cells.length - 1) {
-        const c0 = cells[i]!;
-        const mask = this.routeCats.get(c0) ?? 0;
-        // Only the lowest category through this tile draws it.
-        if ((mask & ((1 << route.category) - 1)) === 0) {
-          const c1 = cells[i + 1]!;
-          const x = (c0 % W) + 0.5;
-          const z = Math.floor(c0 / W) + 0.5;
-          const dx = (c1 % W) - (c0 % W);
-          const dz = Math.floor(c1 / W) - Math.floor(c0 / W);
-          const l = Math.sqrt(dx * dx + dz * dz) || 1;
-          const y = heightAt(t, x, z) + 0.2;
-          const wpp = wppd * this.distTo(x, y, z);
-          if (this.visible(x, y, z, 1)) {
-            cats.length = 0;
-            for (let k = 0; k < CATEGORY_COUNT; k++) if (mask & (1 << k)) cats.push(k);
-            const cat = cats[n % cats.length]!;
-            const s = Math.max(0.35, ICON_PX.route * wpp);
-            // Marker "up" (-Z) turned onto the route direction: rotation (cos, sin) = (-uz, -ux).
-            this.routes.push(cat, -dz / l, -dx / l, s, 1, s, x, y, z);
-          }
-          n++;
-          i += Math.max(3, Math.round(ICON_PX.route * 5 * wpp));
-        } else i++;
-      }
+    const cats = this.cats;
+    if (cells.length < 2) return;
+    let i = 1;
+    let n = 0;
+    while (i < cells.length - 1) {
+      const c0 = cells[i]!;
+      const mask = this.routeCats.get(c0) ?? 0;
+      // Only the lowest category through this tile draws it.
+      if ((mask & ((1 << category) - 1)) === 0) {
+        const c1 = cells[i + 1]!;
+        const x = (c0 % W) + 0.5;
+        const z = Math.floor(c0 / W) + 0.5;
+        const dx = (c1 % W) - (c0 % W);
+        const dz = Math.floor(c1 / W) - Math.floor(c0 / W);
+        const l = Math.sqrt(dx * dx + dz * dz) || 1;
+        const y = heightAt(t, x, z) + 0.2;
+        const wpp = wppd * this.distTo(x, y, z);
+        if (this.visible(x, y, z, 1)) {
+          cats.length = 0;
+          for (let k = 0; k < CATEGORY_COUNT; k++) if (mask & (1 << k)) cats.push(k);
+          const cat = cats[n % cats.length]!;
+          const s = Math.max(0.35, ICON_PX.route * wpp);
+          // Marker "up" (-Z) turned onto the route direction: rotation (cos, sin) = (-uz, -ux).
+          this.routes.push(cat, -dz / l, -dx / l, s, 1, s, x, y, z);
+        }
+        n++;
+        i += Math.max(3, Math.round(ICON_PX.route * 5 * wpp));
+      } else i++;
     }
   }
 

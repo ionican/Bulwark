@@ -6,7 +6,8 @@
 // The scenario is stored on the world (World.scenario), so saves and snapshots carry it.
 
 import { ALIEN_KINDS, B, BUILDING_KINDS } from './kinds.ts';
-import { TILE_ROCK, tileAt } from './terrain.ts';
+import { TILE_ROCK, tileAt, type Terrain } from './terrain.ts';
+import type { Tuning } from './tuning.ts';
 import { World, type ScenarioName } from './world.ts';
 
 export type { ScenarioName };
@@ -14,9 +15,19 @@ export type { ScenarioName };
 export const STRESS_ALIENS = 500;
 export const STRESS_BUILDINGS = 300;
 
-export function createWorld(seed: number, scenario: ScenarioName): World {
-  const w = new World(seed, undefined, { waves: scenario !== 'sandbox' });
+/**
+ * A world at a scenario's start. `opts` (the sandbox reset): the terrain to use, and the tuning
+ * and unlimited spending to carry over, set before any unit is created.
+ */
+export function createWorld(seed: number, scenario: ScenarioName, opts: { terrain?: Terrain; tuning?: Tuning; unlimited?: boolean } = {}): World {
+  const w = new World(seed, opts.terrain, { waves: scenario !== 'sandbox' });
   w.scenario = scenario;
+  if (opts.tuning) {
+    w.tuning.building.set(opts.tuning.building);
+    w.tuning.alien.set(opts.tuning.alien);
+    w.tuning.unit.set(opts.tuning.unit);
+  }
+  if (opts.unlimited) w.unlimited = true;
   if (scenario === 'map1' || scenario === 'sandbox') w.spawnStartUnits();
   else if (scenario === 'stress') setupStress(w);
   w.computeRoutes();

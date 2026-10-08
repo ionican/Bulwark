@@ -11,9 +11,9 @@
 
 import { BF_COMPLETE, BF_UPGRADING, US_BUILDING, US_IDLE, US_MOVING, US_RECLAIMING, US_UNLOADING, US_WAITING } from './schema.ts';
 import { B, CARRY_CAPACITY, RECLAIM_RATE, TICK_SECONDS, U, unitInfo } from './kinds.ts';
-import { FIELD_ENG_BUILD_MULT } from './balance.ts';
 import { centreOf, distToBuilding } from './combat.ts';
-import { TU_BUILD_RATE, TU_SPEED } from './tuning.ts';
+import { unitBuildRate, unitSpeed } from './tuning.ts';
+import { PROGRESS_EPS } from './economy.ts';
 import { claimNext, runById } from './runs.ts';
 import type { World } from './world.ts';
 
@@ -61,7 +61,7 @@ function walk(w: World, s: number, key: string, gx: number, gz: number, isGoal: 
   const next = path[w.pathPos[s]!]!;
   const nx = (next % W) + 0.5;
   const nz = Math.floor(next / W) + 0.5;
-  const speed = unitSpeed(w, s);
+  const speed = unitSpeed(w, c.kind[s]!);
   const dx = nx - c.x[s]!;
   const dz = nz - c.z[s]!;
   const d = Math.sqrt(dx * dx + dz * dz);
@@ -82,7 +82,7 @@ function walk(w: World, s: number, key: string, gx: number, gz: number, isGoal: 
 /** Straight-line step to an exact point (the last part of a move order). */
 function stepTo(w: World, s: number, x: number, z: number): boolean {
   const c = w.units.cols;
-  const speed = unitSpeed(w, s);
+  const speed = unitSpeed(w, c.kind[s]!);
   const dx = x - c.x[s]!;
   const dz = z - c.z[s]!;
   const d = Math.sqrt(dx * dx + dz * dz);
@@ -99,12 +99,6 @@ function stepTo(w: World, s: number, x: number, z: number): boolean {
   return false;
 }
 
-/** Tiles per tick, tuned. */
-function unitSpeed(w: World, s: number): number {
-  const kind = w.units.cols.kind[s]!;
-  return unitInfo(kind).speed * w.tuning.u(kind, TU_SPEED);
-}
-
 /**
  * Builder s works on site slot b (id `id`): adds its build power when in range, otherwise walks
  * there. Returns false when the site cannot be reached (the caller drops the order).
@@ -112,7 +106,10 @@ function unitSpeed(w: World, s: number): number {
 function workOnSite(w: World, s: number, b: number, id: number, range: number, buildRate: number): boolean {
   const c = w.units.cols;
   const W = w.terrain.w;
-  const [bx, bz] = centreOf(w, b);
+  // Footprint centre, inline (combat.ts centreOf allocates; this runs per builder per tick).
+  const bcols = w.buildings.cols;
+  const bx = bcols.tx[b]! + bcols.fw[b]! / 2;
+  const bz = bcols.ty[b]! + bcols.fh[b]! / 2;
   if (distToBuilding(w, b, c.x[s]!, c.z[s]!) <= range) {
     c.state[s] = US_BUILDING;
     c.work[s] = id + 1;
@@ -199,14 +196,13 @@ export function stepUnits(w: World): void {
       continue;
     }
     const info = unitInfo(c.kind[s]!);
-    const baseRate = c.kind[s] === U.engineer && w.researched('fieldEng') ? info.buildRate * FIELD_ENG_BUILD_MULT : info.buildRate;
-    const buildRate = baseRate * w.tuning.u(c.kind[s]!, TU_BUILD_RATE);
+    const buildRate = unitBuildRate(w, c.kind[s]!);
     if (order.t === 'produce') {
       if (c.kind[s] !== U.commander) {
         orders.shift();
         continue;
       }
-      if (order.progress >= 1 - 1e-9) {
+      if (order.progress >= 1 - PROGRESS_EPS) {
         // Out it walks, just south of the commander.
         w.spawnUnit(U.engineer, w.clampX(c.x[s]! + 1.5), w.clampZ(c.z[s]! + 1.5));
         orders.shift();

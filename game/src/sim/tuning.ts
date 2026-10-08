@@ -11,8 +11,8 @@
 // building hit-point change marks the cost grids and flow fields for rebuilding, because hit points
 // feed the flow cost (world.ts buildingPathCost).
 
-import { ALIEN_KINDS, BUILDING_KINDS, METRES_PER_TILE, TICK_SECONDS, UNIT_KINDS, alienInfo, buildingInfo, unitInfo } from './kinds.ts';
-import { TUNE_MAX, TUNE_MIN } from './balance.ts';
+import { ALIEN_KINDS, BUILDING_KINDS, U, UNIT_KINDS, alienInfo, buildingInfo, unitInfo } from './kinds.ts';
+import { FIELD_ENG_BUILD_MULT, TUNE_MAX, TUNE_MIN } from './balance.ts';
 import type { World } from './world.ts';
 
 export type TuneTarget = 'building' | 'alien' | 'unit';
@@ -36,22 +36,34 @@ export const TU_HP = 0;
 export const TU_SPEED = 1;
 export const TU_BUILD_RATE = 2;
 
-const kindCount: Record<TuneTarget, number> = { building: BUILDING_KINDS.length, alien: ALIEN_KINDS.length, unit: UNIT_KINDS.length };
+/** The kinds of each target, in kind-index order (the tables' row order). */
+export const TUNE_KINDS: Record<TuneTarget, readonly string[]> = { building: BUILDING_KINDS, alien: ALIEN_KINDS, unit: UNIT_KINDS };
+
+// Row strides: one entry per field.
+const SB = TUNE_FIELDS.building.length;
+const SA = TUNE_FIELDS.alien.length;
+const SU = TUNE_FIELDS.unit.length;
+/** Entries per target table, and in all three (the snapshot's tuning block). */
+export const TUNE_SIZE: Record<TuneTarget, number> = { building: BUILDING_KINDS.length * SB, alien: ALIEN_KINDS.length * SA, unit: UNIT_KINDS.length * SU };
+export const TUNE_COUNT = TUNE_SIZE.building + TUNE_SIZE.alien + TUNE_SIZE.unit;
+
+/** Position of (kind, field) in `target`'s table. */
+export const tuneIndex = (target: TuneTarget, kind: number, field: number): number => kind * TUNE_FIELDS[target].length + field;
 
 /** One Float64Array per target: kind × field, every entry 1 at the start. */
 export class Tuning {
-  readonly building = new Float64Array(BUILDING_KINDS.length * TUNE_FIELDS.building.length).fill(1);
-  readonly alien = new Float64Array(ALIEN_KINDS.length * TUNE_FIELDS.alien.length).fill(1);
-  readonly unit = new Float64Array(UNIT_KINDS.length * TUNE_FIELDS.unit.length).fill(1);
+  readonly building = new Float64Array(TUNE_SIZE.building).fill(1);
+  readonly alien = new Float64Array(TUNE_SIZE.alien).fill(1);
+  readonly unit = new Float64Array(TUNE_SIZE.unit).fill(1);
 
   b(kind: number, field: number): number {
-    return this.building[kind * 4 + field]!;
+    return this.building[kind * SB + field]!;
   }
   a(kind: number, field: number): number {
-    return this.alien[kind * 3 + field]!;
+    return this.alien[kind * SA + field]!;
   }
   u(kind: number, field: number): number {
-    return this.unit[kind * 3 + field]!;
+    return this.unit[kind * SU + field]!;
   }
 }
 
@@ -64,7 +76,7 @@ export function tuneFieldIndex(target: TuneTarget, field: string): number {
 export function tuneFieldProblem(target: unknown, kind: unknown, field: unknown): string | null {
   if (!TUNE_TARGETS.includes(target as TuneTarget)) return `tune target must be one of ${TUNE_TARGETS.join(', ')}`;
   const t = target as TuneTarget;
-  if (typeof kind !== 'number' || !Number.isInteger(kind) || kind < 0 || kind >= kindCount[t]) return `unknown ${t} kind ${JSON.stringify(kind)}`;
+  if (typeof kind !== 'number' || !Number.isInteger(kind) || kind < 0 || kind >= TUNE_KINDS[t].length) return `unknown ${t} kind ${JSON.stringify(kind)}`;
   const f = tuneFieldIndex(t, field as string);
   if (f < 0) return `${t}s have no tunable field ${JSON.stringify(field)} (fields: ${TUNE_FIELDS[t].join(', ')})`;
   if (t === 'building') {
@@ -90,11 +102,11 @@ function table(w: World, target: TuneTarget): Float64Array {
  * hit-point change dirties the cost grids and flow fields.
  */
 export function setTune(w: World, target: TuneTarget, kind: number, field: number, mult: number): void {
-  const n = TUNE_FIELDS[target].length;
   const arr = table(w, target);
-  const old = arr[kind * n + field]!;
+  const i = tuneIndex(target, kind, field);
+  const old = arr[i]!;
   if (old === mult) return;
-  arr[kind * n + field] = mult;
+  arr[i] = mult;
   if (field !== 0) return; // hp is field 0 for every target
   const ratio = mult / old;
   if (target === 'building') {
@@ -120,51 +132,42 @@ export function setTune(w: World, target: TuneTarget, kind: number, field: numbe
 export function resetTune(w: World, target?: TuneTarget, kind?: number): void {
   for (const t of target ? [target] : TUNE_TARGETS) {
     const n = TUNE_FIELDS[t].length;
-    for (let k = 0; k < kindCount[t]; k++) {
+    for (let k = 0; k < TUNE_KINDS[t].length; k++) {
       if (kind !== undefined && k !== kind) continue;
       for (let f = 0; f < n; f++) setTune(w, t, k, f, 1);
     }
   }
 }
 
-/** Maximum hit points of a unit kind, tuned. */
-export const unitMaxHp = (w: World, kind: number): number => unitInfo(kind).hp * w.tuning.u(kind, TU_HP);
-/** Maximum hit points of an alien kind, tuned. */
-export const alienMaxHp = (w: World, kind: number): number => alienInfo(kind).hp * w.tuning.a(kind, TA_HP);
+// ---- effective values: base × tier/research × tune, one accessor per stat family ----------------
+// The simulation reads these; the multiplication order is fixed (floating-point results must not
+// move). Run 3's panel shows them.
 
-/**
- * Effective values of one kind in display units, for the panel (run 3) and the debug hook:
- * hit points, damage per shot, range in tiles, seconds between shots, speed in m/s, build power.
- */
-export function effectiveValues(w: World, target: TuneTarget, kind: number): Record<string, { mult: number; value: number; unit: string }> {
-  const out: Record<string, { mult: number; value: number; unit: string }> = {};
-  const fields = TUNE_FIELDS[target] as readonly string[];
-  const mults = table(w, target);
-  const n = fields.length;
-  fields.forEach((f, i) => {
-    const mult = mults[kind * n + i]!;
-    let value = NaN;
-    let unit = '';
-    if (target === 'building') {
-      const info = buildingInfo(kind);
-      if (f === 'hp') [value, unit] = [info.hp * mult, 'hp'];
-      else if (info.weapon) {
-        if (f === 'damage') [value, unit] = [info.weapon.damage * mult, 'hp per shot'];
-        else if (f === 'range') [value, unit] = [info.weapon.range * mult, 'tiles'];
-        else [value, unit] = [info.weapon.interval * mult, 's'];
-      } else return;
-    } else if (target === 'alien') {
-      const info = alienInfo(kind);
-      if (f === 'hp') [value, unit] = [info.hp * mult, 'hp'];
-      else if (f === 'dps') [value, unit] = [info.dps * mult, 'hp/s'];
-      else [value, unit] = [(info.speed * mult * METRES_PER_TILE) / TICK_SECONDS, 'm/s'];
-    } else {
-      const info = unitInfo(kind);
-      if (f === 'hp') [value, unit] = [info.hp * mult, 'hp'];
-      else if (f === 'speed') [value, unit] = [(info.speed * mult * METRES_PER_TILE) / TICK_SECONDS, 'm/s'];
-      else [value, unit] = [info.buildRate * mult, 'BP'];
-    }
-    out[f] = { mult, value, unit };
-  });
-  return out;
+/** Maximum hit points of a unit kind. */
+export const unitMaxHp = (w: World, kind: number): number => unitInfo(kind).hp * w.tuning.u(kind, TU_HP);
+/** Unit speed, tiles per tick. */
+export const unitSpeed = (w: World, kind: number): number => unitInfo(kind).speed * w.tuning.u(kind, TU_SPEED);
+/** Build power: W12 rate, × Field engineering for engineers once researched, × tune. */
+export function unitBuildRate(w: World, kind: number): number {
+  const info = unitInfo(kind);
+  const base = kind === U.engineer && w.researched('fieldEng') ? info.buildRate * FIELD_ENG_BUILD_MULT : info.buildRate;
+  return base * w.tuning.u(kind, TU_BUILD_RATE);
 }
+
+/** Maximum hit points of an alien kind. */
+export const alienMaxHp = (w: World, kind: number): number => alienInfo(kind).hp * w.tuning.a(kind, TA_HP);
+/** Alien damage per second. */
+export const alienDps = (w: World, kind: number): number => alienInfo(kind).dps * w.tuning.a(kind, TA_DPS);
+/** Alien speed, tiles per tick. */
+export const alienSpeed = (w: World, kind: number): number => alienInfo(kind).speed * w.tuning.a(kind, TA_SPEED);
+
+/** Raw damage per shot of a turret kind at `tier` (tier 2 multiplies by W12's damageMult). */
+export function turretDamage(w: World, kind: number, tier: number): number {
+  const info = buildingInfo(kind);
+  const tierMult = tier > 1 ? (info.tiers?.[tier - 2]?.damageMult ?? 1) : 1;
+  return info.weapon!.damage * tierMult * w.tuning.b(kind, TB_DAMAGE);
+}
+/** Turret range in tiles. */
+export const turretRange = (w: World, kind: number): number => buildingInfo(kind).weapon!.range * w.tuning.b(kind, TB_RANGE);
+/** Seconds between a turret's shots. */
+export const turretInterval = (w: World, kind: number): number => buildingInfo(kind).weapon!.interval * w.tuning.b(kind, TB_INTERVAL);

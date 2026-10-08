@@ -16,8 +16,8 @@
 // resources drain while each tile is built. Runs are always tier 1 (upgrades are the paid path).
 // `stop` on the builders leaves the remaining reserved tiles; `cancelRun` removes them.
 
-import { B } from './kinds.ts';
-import { BF_COMPLETE, BF_STARTED } from './schema.ts';
+import { B, buildingInfo } from './kinds.ts';
+import { BF_COMPLETE, constructionState, isReserved } from './schema.ts';
 import { TILE_ROCK, tileAt } from './terrain.ts';
 import type { World } from './world.ts';
 
@@ -97,7 +97,7 @@ export function planRun(w: World, cmd: RunCommand): RunPlan | string {
       else if (tileAt(w.terrain, x, y) === TILE_ROCK) skipped.rock++;
       else {
         const occ = w.occupancy[y * W + x]! - 1;
-        if (occ >= 0 && (w.buildings.cols.kind[occ] === B.wall || w.buildings.cols.kind[occ] === B.gate)) skipped.wall++;
+        if (occ >= 0 && buildingInfo(w.buildings.cols.kind[occ]!).role === 'wall') skipped.wall++; // wall or gate
         else if (!w.canPlace(B.wall, x, y)) skipped.blocked++;
         else {
           tiles.push([x, y]);
@@ -143,7 +143,7 @@ export function cancelRun(w: World, id: number): void {
   const run = w.runs[i]!;
   for (const site of run.sites) {
     const s = w.buildings.slotForId(site);
-    if (s >= 0 && !(w.buildings.cols.flags[s]! & (BF_STARTED | BF_COMPLETE))) w.removeBuilding(s);
+    if (s >= 0 && isReserved(w.buildings.cols.flags[s]!)) w.removeBuilding(s);
   }
   w.runs[i] = null;
 }
@@ -176,8 +176,21 @@ export function claimNext(w: World, run: WallRun, self: number): number {
 export function stepRuns(w: World): void {
   for (let i = 0; i < w.runs.length; i++) {
     const r = w.runs[i];
-    if (r && !r.sites.some((id) => open(w, id))) w.runs[i] = null;
+    if (!r) continue;
+    let anyOpen = false;
+    for (let k = 0; k < r.sites.length && !anyOpen; k++) anyOpen = open(w, r.sites[k]!);
+    if (!anyOpen) w.runs[i] = null;
   }
+}
+
+/** Complete tiles of a run, counted now (the snapshot's run table). */
+export function runCompleteCount(w: World, run: WallRun): number {
+  let n = 0;
+  for (const id of run.sites) {
+    const s = w.buildings.slotForId(id);
+    if (s >= 0 && w.buildings.cols.flags[s]! & BF_COMPLETE) n++;
+  }
+  return n;
 }
 
 /** Reserved, started and complete tile counts of a run (debug hook, tests). */
@@ -186,12 +199,7 @@ export function runProgress(w: World, run: WallRun): { reserved: number; started
   for (const id of run.sites) {
     const s = w.buildings.slotForId(id);
     if (s < 0) out.gone++;
-    else {
-      const f = w.buildings.cols.flags[s]!;
-      if (f & BF_COMPLETE) out.complete++;
-      else if (f & BF_STARTED) out.started++;
-      else out.reserved++;
-    }
+    else out[constructionState(w.buildings.cols.flags[s]!)]++;
   }
   return out;
 }

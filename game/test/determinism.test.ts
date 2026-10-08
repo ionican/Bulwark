@@ -4,14 +4,10 @@ import { encodeSnapshot, snapshotBytes } from '../src/sim/snapshot.ts';
 import { B } from '../src/sim/kinds.ts';
 import type { Command } from '../src/sim/commands.ts';
 import type { World } from '../src/sim/world.ts';
+import { unitIds } from './fixtures.ts';
 
 type Script = Array<{ tick: number; cmd: (w: World) => Command }>;
 
-const unitIds = (w: World) => {
-  const ids: number[] = [];
-  for (let s = 0; s < w.units.highWater; s++) if (w.units.alive[s]) ids.push(w.units.id(s));
-  return ids;
-};
 
 const SCRIPT: Script = [
   { tick: 5, cmd: (w) => ({ t: 'move', ids: unitIds(w), x: 40, z: 30 }) },

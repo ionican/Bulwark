@@ -15,13 +15,9 @@ import { TA_HP, TB_DAMAGE, TU_BUILD_RATE } from '../src/sim/tuning.ts';
 import { map1 } from '../../model/data/map1.ts';
 import type { Command } from '../src/sim/commands.ts';
 import type { World } from '../src/sim/world.ts';
+import { unitIds } from './fixtures.ts';
 
 const SEED = 3;
-const unitIds = (w: World) => {
-  const out: number[] = [];
-  for (let s = 0; s < w.units.highWater; s++) if (w.units.alive[s]) out.push(w.units.id(s));
-  return out;
-};
 
 const SCRIPT: Array<[number, (w: World) => Command]> = [
   [1, () => ({ t: 'setUnlimited', on: true })],

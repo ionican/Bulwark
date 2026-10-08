@@ -12,9 +12,9 @@
 // stops them cutting diagonally past a gate's corners. Each footprint tile's flow cost uses the
 // gate's hit points ÷ depth, so breaking the gate is charged once along a route (flowfield.ts).
 
-import { B, BUILDING_INFO } from './kinds.ts';
-import { BF_COMPLETE, BF_STARTED } from './schema.ts';
-import { GATE_COST_MULT } from './balance.ts';
+import { B, BUILDING_INFO, buildingInfo } from './kinds.ts';
+import { constructionState } from './schema.ts';
+import { gateStats } from './balance.ts';
 import type { Cost } from './kinds.ts';
 import type { World } from './world.ts';
 
@@ -111,7 +111,7 @@ export function worldGateGrid(w: World): GateGrid {
   return {
     solid: (x, z) => {
       const k = kindAt(x, z);
-      return k === B.wall || k === B.gate;
+      return k >= 0 && buildingInfo(k).role === 'wall'; // a wall or a gate
     },
     plainWall: (x, z) => kindAt(x, z) === B.wall,
   };
@@ -128,10 +128,9 @@ export function planGate(w: World, cx: number, cz: number, axis?: 'x' | 'z'): Ga
   const c = w.buildings.cols;
   for (const [x, z] of check.tiles) {
     const b = w.occupancy[z * w.terrain.w + x]! - 1;
-    const f = c.flags[b]!;
-    if (!(f & BF_COMPLETE)) {
-      const state = f & BF_STARTED ? 'under construction' : 'reserved (not started)';
-      return { ...check, ok: false, reason: `every gate tile must be a finished wall: the wall at ${x},${z} is ${state}`, tiles: [] };
+    const state = constructionState(c.flags[b]!);
+    if (state !== 'complete') {
+      return { ...check, ok: false, reason: `every gate tile must be a finished wall: the wall at ${x},${z} is ${state === 'started' ? 'under construction' : 'reserved (not started)'}`, tiles: [] };
     }
   }
   return check;
@@ -160,19 +159,17 @@ export function inGateCorridor(tx: number, ty: number, dir: number, x: number, z
   return dir === AXIS_X ? x === tx + 1 : z === ty + 1;
 }
 
-const wall = BUILDING_INFO.wall;
-
 /** Tier-1 maximum hit points of a gate with `tiles` footprint tiles (wall hp × tiles), before tuning. */
-export const gateBaseHp = (tiles: number): number => wall.hp * tiles;
+export const gateBaseHp = (tiles: number): number => gateStats(tiles).hp;
 
 /** Cost and build-power-seconds to build a gate with `tiles` footprint tiles. */
 export function gateBuildWork(tiles: number): { cost: Cost; time: number } {
-  const m = tiles * GATE_COST_MULT;
-  return { cost: [wall.cost[0] * m, wall.cost[1] * m, wall.cost[2] * m], time: wall.buildTime * m };
+  const g = gateStats(tiles);
+  return { cost: g.cost, time: g.time };
 }
 
 /** Cost and time of upgrading a gate from `tier`: the wall's tier upgrade × footprint tiles. */
 export function gateUpgradeWork(tiles: number, tier: number): { cost: Cost; time: number } {
-  const t = wall.tiers![tier - 1]!;
+  const t = BUILDING_INFO.wall.tiers![tier - 1]!;
   return { cost: [t.cost[0] * tiles, t.cost[1] * tiles, t.cost[2] * tiles], time: t.time * tiles };
 }

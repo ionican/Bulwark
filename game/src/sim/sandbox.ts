@@ -10,6 +10,7 @@
 
 import { ALIEN_KINDS, alienInfo } from './kinds.ts';
 import { TILE_ROCK, tileAt } from './terrain.ts';
+import { visitRings } from './grid.ts';
 import type { World } from './world.ts';
 
 export const SPAWN_AT_MAX = 50;
@@ -50,27 +51,22 @@ export function spawnPlaces(w: World, kind: number, x: number, z: number, count:
     }
     return true;
   };
-  for (let r = 0; r <= SPAWN_RADIUS && out.length < count; r++) {
-    for (let ty = z0 - r; ty <= z0 + r && out.length < count; ty++) {
-      for (let tx = x0 - r; tx <= x0 + r && out.length < count; tx++) {
-        if (Math.max(Math.abs(tx - x0), Math.abs(ty - z0)) !== r) continue;
-        if (tx < 0 || ty < 0 || tx >= t.w || ty >= t.h) continue;
-        const px = tx + 0.5;
-        const pz = ty + 0.5;
-        if ((px - x) ** 2 + (pz - z) ** 2 > SPAWN_RADIUS * SPAWN_RADIUS) continue;
-        if (tileAt(t, tx, ty) === TILE_ROCK || w.occupancy[ty * t.w + tx] !== 0) continue;
-        if (!clear(px, pz)) continue;
-        out.push([px, pz]);
-      }
-    }
-  }
+  visitRings(x0, z0, 0, SPAWN_RADIUS, t.w, t.h, (tx, ty) => {
+    const px = tx + 0.5;
+    const pz = ty + 0.5;
+    if ((px - x) ** 2 + (pz - z) ** 2 > SPAWN_RADIUS * SPAWN_RADIUS) return false;
+    if (tileAt(t, tx, ty) === TILE_ROCK || w.occupancy[ty * t.w + tx] !== 0) return false;
+    if (!clear(px, pz)) return false;
+    out.push([px, pz]);
+    return out.length >= count;
+  });
   if (out.length < count) return `only ${out.length} of ${count} ${ALIEN_KINDS[kind]}s fit within ${SPAWN_RADIUS} tiles of ${x.toFixed(1)},${z.toFixed(1)} (passable, free, ${SPAWN_SPACING} apart)`;
   return out;
 }
 
 /** Spawns the aliens at the planned points and records the origin for the route overlay. */
-export function applySpawnAt(w: World, kind: number, x: number, z: number, count: number): void {
-  const places = spawnPlaces(w, kind, x, z, count);
+export function applySpawnAt(w: World, kind: number, x: number, z: number, count: number, planned?: ReturnType<typeof spawnPlaces>): void {
+  const places = planned ?? spawnPlaces(w, kind, x, z, count);
   if (typeof places === 'string') return;
   for (const [px, pz] of places) w.spawnAlien(kind, px, pz);
   w.spawnOrigins.push({ x, z, kind });
@@ -79,12 +75,20 @@ export function applySpawnAt(w: World, kind: number, x: number, z: number, count
 }
 
 /** The predicted route of each recent spawn origin's aliens (their category's flow field). */
-export function originRoutes(w: World): Array<{ origin: number; category: number; cells: number[] }> {
+/** The map tile of a spawn origin, clamped to the map. */
+export function originTile(w: World, o: SpawnOrigin): [number, number] {
+  return [Math.min(w.terrain.w - 1, Math.max(0, Math.floor(o.x))), Math.min(w.terrain.h - 1, Math.max(0, Math.floor(o.z)))];
+}
+
+export function originRoutes(w: World, stale?: Uint8Array): Array<{ origin: number; category: number; cells: number[] }> {
   const t = w.terrain;
+  // Reuse the current traces for categories whose field has not been rebuilt since (`stale` 0),
+  // as long as they line up one-to-one with the origins.
+  const prev = stale && w.originRoutes.length === w.spawnOrigins.length ? w.originRoutes : null;
   return w.spawnOrigins.map((o, i) => {
-    const cx = Math.min(t.w - 1, Math.max(0, Math.floor(o.x)));
-    const cz = Math.min(t.h - 1, Math.max(0, Math.floor(o.z)));
     const category = alienInfo(o.kind).category;
+    if (prev && !stale![category] && prev[i]!.category === category) return prev[i]!;
+    const [cx, cz] = originTile(w, o);
     return { origin: i, category, cells: w.fields[category]!.trace(cz * t.w + cx, 600) };
   });
 }

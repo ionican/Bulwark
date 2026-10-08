@@ -1,7 +1,8 @@
 // Name → kind lookups for anything typed by a person or a test. Unknown names throw, listing the
 // valid ones, so a typo is never silently ignored.
 
-import { ALIEN_KINDS, BUILDING_KINDS, UNIT_KINDS } from './kinds.ts';
+import { ALIEN_KINDS, BUILDING_KINDS } from './kinds.ts';
+import { TUNE_KINDS, type TuneTarget } from './tuning.ts';
 import { RESEARCH_INDEX } from './balance.ts';
 
 function lookup(what: string, names: readonly string[], v: string | number): number {
@@ -16,7 +17,8 @@ function lookup(what: string, names: readonly string[], v: string | number): num
 
 export const buildingKindIndex = (v: string | number) => lookup('building kind', BUILDING_KINDS, v);
 export const alienKindIndex = (v: string | number) => lookup('alien kind', ALIEN_KINDS, v);
-export const unitKindIndex = (v: string | number) => lookup('unit kind', UNIT_KINDS, v);
+/** Kind index for a tuning target (building, alien or unit kind). */
+export const tuneKindIndex = (target: TuneTarget, v: string | number) => lookup(`${target} kind`, TUNE_KINDS[target], v);
 export const researchNodeId = (v: string) => {
   if (!(v in RESEARCH_INDEX)) throw new TypeError(`unknown research node "${v}"; valid: ${Object.keys(RESEARCH_INDEX).join(', ')}`);
   return v;

@@ -61,6 +61,11 @@ export const BF_ACTIVE = 16;
  */
 export const BF_STARTED = 32;
 
+/** True for a site no build power has reached yet (W24 construction state "reserved"). */
+export const isReserved = (flags: number): boolean => (flags & (BF_STARTED | BF_COMPLETE)) === 0;
+export type ConstructionState = 'reserved' | 'started' | 'complete';
+export const constructionState = (flags: number): ConstructionState => (flags & BF_COMPLETE ? 'complete' : flags & BF_STARTED ? 'started' : 'reserved');
+
 export const ALIEN_FIELDS = [
   { name: 'kind', type: 'u8' },
   /** AS_* */

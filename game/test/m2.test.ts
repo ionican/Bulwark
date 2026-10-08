@@ -9,6 +9,7 @@ import { BF_COMPLETE } from '../src/sim/schema.ts';
 import { flatTerrain, map1Terrain } from '../src/sim/terrain.ts';
 import { encodeSnapshot, snapshotBytes } from '../src/sim/snapshot.ts';
 import type { Command } from '../src/sim/commands.ts';
+import { flatWorld } from './fixtures.ts';
 
 const DT = TICK_SECONDS;
 
@@ -26,7 +27,7 @@ function ticksToComplete(w: World, id: number, max = 20000): number {
 }
 
 /** A world on flat ground with no commander (so no commander income). */
-const flat = (w = 40, h = 40) => new World(1, flatTerrain(w, h), { waves: false });
+const flat = (w = 40, h = 40) => flatWorld(w, h);
 
 // ---- map 1 start --------------------------------------------------------------------------
 

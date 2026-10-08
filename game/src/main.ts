@@ -29,7 +29,7 @@ import {
   isBelt,
   type BuildingKind,
 } from './sim/kinds.ts';
-import { BF_COMPLETE, BF_STARTED, BF_UPGRADING } from './sim/schema.ts';
+import { BF_COMPLETE, BF_UPGRADING, constructionState, isReserved } from './sim/schema.ts';
 import {
   G_COMMANDER_HP,
   G_COMMANDER_ID,
@@ -74,14 +74,14 @@ import {
 } from './sim/snapshot.ts';
 import { SCENARIO_NAMES } from './sim/world.ts';
 import { statsReport } from './sim/stats.ts';
-import { TUNE_FIELDS, TUNE_TARGETS, type TuneTarget } from './sim/tuning.ts';
+import { TUNE_FIELDS, TUNE_KINDS, TUNE_TARGETS, TU_HP, tuneIndex, type TuneTarget } from './sim/tuning.ts';
 import { WRECK_COMMANDER } from './sim/sandbox.ts';
 import { heightAt, map1Terrain } from './sim/terrain.ts';
 import { canPlaceOn } from './sim/world.ts';
 import type { Command } from './sim/commands.ts';
 import type { FromWorker, RunnerInfo, ToWorker } from './sim/protocol.ts';
 import { BUILD_REQUIRES, RESEARCH, RESEARCH_INDEX } from './sim/balance.ts';
-import { alienKindIndex, buildingKindIndex, entryIndex as entryIndexOf, researchNodeId, unitKindIndex } from './sim/names.ts';
+import { alienKindIndex, buildingKindIndex, entryIndex as entryIndexOf, researchNodeId, tuneKindIndex } from './sim/names.ts';
 import { EndScreen, ResearchPanel, Ticker, TimeControls, Toasts } from './ui/panels.ts';
 import type { ScenarioName } from './sim/scenarios.ts';
 import { Hud } from './ui/hud.ts';
@@ -328,7 +328,7 @@ function describe(p: Pick) {
   if (p.type === 'building') {
     const r = buildingRow(p.id);
     const c = interp.curr!.buildings.cols;
-    if (r >= 0 && !(c.flags[r]! & (BF_COMPLETE | BF_STARTED))) label += ' (reserved: not started)';
+    if (r >= 0 && isReserved(c.flags[r]!)) label += ' (reserved: not started)';
     else if (r >= 0 && (!(c.flags[r]! & BF_COMPLETE) || c.flags[r]! & BF_UPGRADING)) label += ` (building ${(c.progress[r]! * 100).toFixed(0)}%)`;
     else if (r >= 0 && c.tier[r]! > 1) label += ` tier ${c.tier[r]}`;
   }
@@ -738,7 +738,7 @@ function frame(now: number) {
       parts: g[G_PARTS]!,
       commanderHp: g[G_COMMANDER_HP]!,
       // Sandbox tuning scales the commander's maximum (unit table, commander row, hp field).
-      commanderMax: UNIT_INFO.commander.hp * snap.tuning[snap.tuning.length - UNIT_KINDS.length * TUNE_FIELDS.unit.length + U.commander * TUNE_FIELDS.unit.length]!,
+      commanderMax: UNIT_INFO.commander.hp * snap.tuning.unit[tuneIndex('unit', U.commander, TU_HP)]!,
       aliens: snap.aliens.count,
       kills: g[G_KILLS]!,
       upkeep: g[G_UPKEEP]!,
@@ -856,7 +856,7 @@ function list(type: EntityType) {
       fw: b.cols.fw[r]!,
       fh: b.cols.fh[r]!,
       dir: b.cols.dir[r]!,
-      state: b.cols.flags[r]! & BF_COMPLETE ? 'complete' : b.cols.flags[r]! & BF_STARTED ? 'started' : 'reserved',
+      state: constructionState(b.cols.flags[r]!),
       complete: (b.cols.flags[r]! & BF_COMPLETE) !== 0,
       progress: b.cols.progress[r]!,
       hp: b.cols.hp[r]!,
@@ -898,8 +898,6 @@ const median = (xs: number[]) => {
 };
 
 const allUnitIds = () => Array.from(interp.units.id.subarray(0, interp.units.count));
-const tuneKindIndex = (target: TuneTarget, kind: string | number) =>
-  target === 'building' ? buildingKindIndex(kind) : target === 'alien' ? alienKindIndex(kind) : unitKindIndex(kind);
 const entryIndex = (e: string | number | undefined) => entryIndexOf(terrain.entries, e);
 
 const game = {
@@ -999,13 +997,13 @@ const game = {
     const t = interp.curr?.tuning;
     if (!t) return null;
     const out: Array<{ target: TuneTarget; kind: string; field: string; mult: number }> = [];
-    let i = 0;
     for (const target of TUNE_TARGETS) {
-      const kinds: readonly string[] = target === 'building' ? BUILDING_KINDS : target === 'alien' ? ALIEN_KINDS : UNIT_KINDS;
-      for (const kind of kinds) for (const field of TUNE_FIELDS[target]) {
-        const m = t[i++]!;
-        if (m !== 1) out.push({ target, kind, field, mult: m });
-      }
+      TUNE_KINDS[target].forEach((kind, k) =>
+        TUNE_FIELDS[target].forEach((field, f) => {
+          const m = t[target][tuneIndex(target, k, f)]!;
+          if (m !== 1) out.push({ target, kind, field, mult: m });
+        }),
+      );
     }
     return out;
   },

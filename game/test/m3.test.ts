@@ -13,14 +13,10 @@ import { CALL_EARLY_BONUS_PER_SECOND, RESEARCH, researchBit } from '../src/sim/b
 import { alienKindIndex, buildingKindIndex, researchNodeId } from '../src/sim/names.ts';
 import { map1 } from '../../model/data/map1.ts';
 import type { Command } from '../src/sim/commands.ts';
+import { unitIds } from './fixtures.ts';
 
 const same = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
 const bytesOf = (w: World) => snapshotBytes(encodeSnapshot(w)).slice();
-const unitIds = (w: World, kind?: number) => {
-  const out: number[] = [];
-  for (let s = 0; s < w.units.highWater; s++) if (w.units.alive[s] && (kind === undefined || w.units.cols.kind[s] === kind)) out.push(w.units.id(s));
-  return out;
-};
 
 // ---- waves ----------------------------------------------------------------------------------
 

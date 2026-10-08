@@ -14,7 +14,7 @@
 
 import { BF_ACTIVE, BF_COMPLETE, BF_FIRING, BF_STARVED, T_ALIEN, T_BUILDING, T_NONE, T_UNIT } from './schema.ts';
 import { B, P_ALIEN, P_SHELL, SHIELD, TICK_SECONDS, U, WRECK_DECAY_PER_SECOND, alienInfo, buildingInfo, unitInfo, type Weapon } from './kinds.ts';
-import { TB_DAMAGE, TB_INTERVAL, TB_RANGE } from './tuning.ts';
+import { turretDamage, turretInterval, turretRange } from './tuning.ts';
 import { recordAbsorbed, recordAlienDamage, recordHitOnAlien, recordShot } from './stats.ts';
 import type { World } from './world.ts';
 
@@ -134,7 +134,7 @@ export function acquireTargets(w: World): void {
       continue;
     }
     const [x, z] = centreOf(w, s);
-    const range = wpn.range * w.tuning.b(c.kind[s]!, TB_RANGE);
+    const range = turretRange(w, c.kind[s]!);
     const cur = c.target[s]! - 1;
     if (cur >= 0) {
       const slot = w.aliens.slotForId(cur);
@@ -257,7 +257,7 @@ export function fireTurrets(w: World): void {
     if (!wpn || !(c.flags[s]! & BF_COMPLETE)) continue;
     const t = c.target[s]! === 0 ? -1 : w.aliens.slotForId(c.target[s]! - 1);
     const rate = wpn.energyPerSecond > 0 ? u : 1;
-    const interval = wpn.interval * w.tuning.b(kind, TB_INTERVAL);
+    const interval = turretInterval(w, kind);
     let cd = c.cooldown[s]! - DT * rate;
     if (t < 0) {
       c.cooldown[s] = Math.max(0, cd);
@@ -283,8 +283,7 @@ export function fireTurrets(w: World): void {
         w.partsUsed += wpn.partsPerShot;
       }
       // Tier 2 (researched, then upgraded by engineers) multiplies damage (W12 damageMult).
-      const tierMult = c.tier[s]! > 1 ? (buildingInfo(kind).tiers?.[c.tier[s]! - 2]?.damageMult ?? 1) : 1;
-      const dmg = wpn.damage * tierMult * w.tuning.b(kind, TB_DAMAGE);
+      const dmg = turretDamage(w, kind, c.tier[s]!);
       recordShot(w, T_BUILDING, kind);
       if (wpn.shotSpeed <= 0) damageAlien(w, t, dmg, T_BUILDING, kind);
       else spawnProjectile(w, wpn.shot, x, z, T_ALIEN, w.aliens.id(t), ac.x[t]!, ac.z[t]!, dmg, wpn.shotSpeed, wpn, T_BUILDING, kind, b.id(s));

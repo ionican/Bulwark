@@ -8,12 +8,9 @@ import { A, B, U } from '../src/sim/kinds.ts';
 import { BF_COMPLETE } from '../src/sim/schema.ts';
 import type { World } from '../src/sim/world.ts';
 import { researchBit } from '../src/sim/balance.ts';
+import { unitIds } from './fixtures.ts';
 
-const ids = (w: World, kind?: number) => {
-  const out: number[] = [];
-  for (let s = 0; s < w.units.highWater; s++) if (w.units.alive[s] && (kind === undefined || w.units.cols.kind[s] === kind)) out.push(w.units.id(s));
-  return out;
-};
+const ids = unitIds;
 
 function runUntil(w: World, pred: () => boolean, maxTicks: number): number {
   for (let i = 0; i < maxTicks; i++) {

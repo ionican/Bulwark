@@ -9,14 +9,10 @@ import { describe, expect, it } from 'vitest';
 import { World, buildingPathCost, isReserved } from '../src/sim/world.ts';
 import { A, B, U, alienInfo, buildingInfo } from '../src/sim/kinds.ts';
 import { BF_COMPLETE, BF_STARTED, T_BUILDING } from '../src/sim/schema.ts';
-import { flatTerrain } from '../src/sim/terrain.ts';
+import { flatWorld } from './fixtures.ts';
 
 const W = 30;
-const flat = () => {
-  const w = new World(1, flatTerrain(W, W, { base: { x: 15, z: 2 } }), { waves: false });
-  w.pool.set([1e6, 1e6, 1e6]);
-  return w;
-};
+const flat = () => flatWorld(W, W, { rich: true, terrain: { base: { x: 15, z: 2 } } });
 
 const KINDS = [
   { name: 'wall', kind: B.wall, size: 1 },

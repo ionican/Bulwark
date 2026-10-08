@@ -93,6 +93,12 @@ export const callEarlyBonus = (skippedTicks: number): Cost => [
  * points × footprint tiles; its upgrade tiers are the wall's, with cost and time × footprint tiles.
  */
 export const GATE_COST_MULT = 1.5;
+/** Tier-1 hit points, cost and build-power-seconds of a gate with `tiles` footprint tiles (before tuning). */
+export function gateStats(tiles: number): { hp: number; cost: Cost; time: number } {
+  const wall = map1.buildings.wall;
+  const m = tiles * GATE_COST_MULT;
+  return { hp: wall.hp * tiles, cost: [wall.cost.mass * m, wall.cost.energy * m, wall.cost.rare * m], time: wall.buildTime * m };
+}
 
 // ---- sandbox (W24) -------------------------------------------------------------------------
 /** Sandbox: a dead commander reappears at the base after 10 s (new; Richard's default, PLAN W24). */

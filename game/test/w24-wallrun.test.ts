@@ -11,12 +11,9 @@ import { BF_COMPLETE, BF_STARTED } from '../src/sim/schema.ts';
 import { TILE_ROCK, flatTerrain } from '../src/sim/terrain.ts';
 import { RUN_CAPACITY, planRun, runById, runProgress } from '../src/sim/runs.ts';
 import type { Command } from '../src/sim/commands.ts';
+import { flatWorld } from './fixtures.ts';
 
-const flat = (w = 40, h = 40) => {
-  const world = new World(1, flatTerrain(w, h), { waves: false });
-  world.pool.set([1e6, 1e6, 1e6]);
-  return world;
-};
+const flat = (w = 40, h = 40) => flatWorld(w, h, { rich: true });
 const posOf = (w: World, id: number): [number, number] => {
   const s = w.buildings.slotForId(id);
   return [w.buildings.cols.tx[s]!, w.buildings.cols.ty[s]!];

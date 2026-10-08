@@ -19,8 +19,16 @@ import type { World } from './world.ts';
 
 const DT = TICK_SECONDS;
 const EPS = 1e-9;
-/** A site with less than this fraction of its work left after this tick's share completes now. */
+/**
+ * Completion tolerances. Building progress is stored as f32, whose rounding over a build is about
+ * 1e-6, so a site with less than PROGRESS_SNAP (1e-4) of its work left after this tick's share
+ * finishes now and pays for the rest. Progress then counts as done at 1 − PROGRESS_EPS (the same
+ * test for buildings, research and engineers, which are f64). The two stay separate: checking
+ * completion at 1 − PROGRESS_SNAP could finish a build whose f32 progress rounds up across that
+ * line one tick early.
+ */
 const PROGRESS_SNAP = 1e-4;
+export const PROGRESS_EPS = 1e-9;
 
 export function stepEconomyIncome(w: World): void {
   const b = w.buildings;
@@ -132,7 +140,7 @@ export function stepConstruction(w: World): void {
         c.progress[s] = c.progress[s]! + done;
         const upgrading = (c.flags[s]! & BF_UPGRADING) !== 0;
         if (!upgrading) c.hp[s] = Math.min(c.maxHp[s]!, c.hp[s]! + c.maxHp[s]! * 0.9 * done);
-        if (c.progress[s]! >= 1 - 1e-9) complete(w, s, upgrading);
+        if (c.progress[s]! >= 1 - PROGRESS_EPS) complete(w, s, upgrading);
       },
     });
   }
@@ -163,11 +171,7 @@ export function stepConstruction(w: World): void {
         done: (done, f) => {
           w.researchProgress += done;
           w.researchEff = f;
-          if (w.researchProgress >= 1 - 1e-9) {
-            w.researchDone |= 1 << w.researchCurrent;
-            w.researchCurrent = -1;
-            w.researchProgress = 0;
-          }
+          if (w.researchProgress >= 1 - PROGRESS_EPS) w.completeResearch(w.researchCurrent);
         },
       });
   }

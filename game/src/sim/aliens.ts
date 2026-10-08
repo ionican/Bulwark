@@ -10,8 +10,7 @@
 
 import { AS_ATTACKING, AS_MOVING, T_BUILDING, T_NONE, T_UNIT } from './schema.ts';
 import { A, TICK_SECONDS, U, alienInfo, buildingInfo, isBelt, unitInfo } from './kinds.ts';
-import { TA_DPS, TA_SPEED } from './tuning.ts';
-import { TILE_ROCK } from './terrain.ts';
+import { alienDps, alienSpeed } from './tuning.ts';
 import { alienShot, centreOf, distToBuilding } from './combat.ts';
 import { GOAL_COMMANDER, isReserved, type World } from './world.ts';
 
@@ -22,10 +21,7 @@ function solidAt(w: World, x: number, z: number): boolean {
   const tx = Math.floor(x);
   const tz = Math.floor(z);
   if (tx < 0 || tz < 0 || tx >= w.terrain.w || tz >= w.terrain.h) return true;
-  const cell = tz * w.terrain.w + tx;
-  if (w.terrain.tiles[cell] === TILE_ROCK) return true;
-  const b = w.blockerAt(cell);
-  return b >= 0 && !isBelt(w.buildings.cols.kind[b]!);
+  return !w.alienPassable(tz * w.terrain.w + tx);
 }
 
 /** Moves alien s towards (px, pz) by its speed, never into rock or a solid building. */
@@ -70,7 +66,7 @@ function shoot(w: World, s: number): void {
   const c = w.aliens.cols;
   if (c.cooldown[s]! > 0) return;
   const info = alienInfo(c.kind[s]!);
-  const dps = info.dps * w.tuning.a(c.kind[s]!, TA_DPS);
+  const dps = alienDps(w, c.kind[s]!);
   if (c.tType[s] === T_BUILDING) {
     const b = w.buildings.slotForId(c.tId[s]!);
     const role = buildingInfo(w.buildings.cols.kind[b]!).role;
@@ -94,7 +90,7 @@ export function stepAliens(w: World): void {
     if (!a.alive[s] || c.hp[s]! <= 0) continue;
     const kind = c.kind[s]!;
     const info = alienInfo(kind);
-    const speed = info.speed * w.tuning.a(kind, TA_SPEED);
+    const speed = alienSpeed(w, kind);
     if (c.cooldown[s]! > 0) c.cooldown[s] = c.cooldown[s]! - DT;
 
     // Keep shooting a target that is still in reach.
