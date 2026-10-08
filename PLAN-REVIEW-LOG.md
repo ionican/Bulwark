@@ -113,3 +113,7 @@ No round 2: Richard's standing rule is one plan review plus one post-build revie
 - medium: apply-time refusals are never reported (worker.ts:65).
 - medium: the reservation draw batch caps at 1,024 while three valid max runs make 1,536 (entities.ts:215).
 All four accepted; sent to the author test-first. Run 2 waits for these fixes.
+
+### Adversarial findings fixed (run 1)
+
+Author commits `e8167ad` (regression tests) and `60ebba6` (fixes). Calling session's check: the new `test/w24-review.test.ts` run on `e8167ad` → 9 of 14 fail (all four findings represented); on `60ebba6` frozen Verify green, `npm test` 185/185; balanced plan wins at tick 31,452, commander 6,000 HP (was 31,468: one engineer move at tick 22,208 used to cut 0.17 tiles across a heavy-cannon corner and now stops short — author's trace, not re-derived); browser on :8822: three conflicting spawnAt → 1 applied, 2 refused with the reason delivered, 0 errors. Run 1 closed.
