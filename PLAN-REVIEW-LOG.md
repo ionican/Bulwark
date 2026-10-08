@@ -188,3 +188,7 @@ Accepted 1–13 and 15; the run 2 section is rewritten and split into 2a (ground
 15 → split as above.
 
 No round 2 (Richard's one-plan-review rule, 29 Sep). Run 2a locked.
+
+## Act 3 — Build (run 2a)
+
+`author` subagent (Opus 5.5 · high), 64 min, commits `bca659c`..`25405f2` (103 files, +13,754 / −131). Calling session's out-of-band check, 2026-10-08 ~20:3x: frozen Verify exit 0 — 2a tests 43/43, `npm test` 228/228, build, `look` tsc, fingerprint vs `60ebba6` identical (68 / 14 / 30 hashes), check-render: 0 console errors on map 1, sandbox, stress; 25 of 25 inventory kinds with models and icons, 0 greybox; terrain + scenery 2.71 ms (budget 5), post 2.48 ms (budget 3.5); stress scene paused 140 fps uncapped at the game camera, 115 at full zoom-out. `git diff d0ff07f..HEAD -- game/src/sim model look` empty; no existing test assertion changed. Screenshots viewed by the calling session: models read well close up; weak points — the playable map reads as a flat square board with straight cut edges and blocky flat-topped scenery (far from the reference image); W13 route arrows clutter every view; aliens near-black; repeating dark blotches in the ground texture. Visual sign-off pending Richard.
