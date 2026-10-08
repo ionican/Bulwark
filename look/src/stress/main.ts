@@ -233,7 +233,7 @@ async function main(): Promise<void> {
     kinds: 40,
     strategy: 'B' as Strategy,
     view: 'battle' as View,
-    quality: 'high' as StressQuality,
+    quality: 'medium' as StressQuality,
     perTurret: false,
     paused: false,
     timeScale: 1,
@@ -773,7 +773,7 @@ async function main(): Promise<void> {
   let fpsWindow: number[] = [];
 
   setCount(300);
-  setQuality('high');
+  setQuality('medium'); // default quality is medium (Richard, 2026-10-08)
   setPreset('game', true);
   cam.update(0);
 

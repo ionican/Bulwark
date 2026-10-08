@@ -40,7 +40,7 @@ const look = {
   ready: false,
   errors: [] as string[],
   renderer: '',
-  quality: 'high' as Quality,
+  quality: 'medium' as Quality, // default quality is medium (Richard, 2026-10-08)
   view: 'reference' as 'reference' | 'strategic',
   stats: {} as Record<string, number>,
   timings: {} as Record<string, number>,
@@ -74,7 +74,8 @@ async function main(): Promise<void> {
   look.renderer = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : String(gl.getParameter(gl.RENDERER));
 
   const bank = new TextureBank();
-  bank.anisotropy = Math.min(16, renderer.capabilities.getMaxAnisotropy());
+  bank.quality = 'medium';
+  bank.anisotropy = 4;
   await bank.load((d, n) => (loading.textContent = `Loading textures… ${d}/${n}`));
   look.timings.texturesMs = performance.now() - t0;
 
@@ -93,6 +94,7 @@ async function main(): Promise<void> {
   loading.textContent = 'Building terrain…';
   await new Promise((r) => setTimeout(r, 0));
   const terrain = buildTerrain(bank, 720);
+  (terrain.material.userData.uniforms as { uDetail: { value: number } }).uDetail.value = 0; // medium
   look.timings.terrainMs = terrain.buildMs;
   scene.add(terrain.mesh);
   const water = buildWater();
@@ -138,7 +140,8 @@ async function main(): Promise<void> {
 
   const rig = new CameraRig(canvas, window.innerWidth / window.innerHeight);
   const post = new Post(renderer, scene, rig.camera, canvas.width, canvas.height);
-  post.setQuality('high');
+  post.setQuality('medium');
+  lighting.setShadowSize(2048);
   const hud = new Hud();
   const ray = new Raycaster();
 
