@@ -1,6 +1,11 @@
 // W21 turret rendering stress test (/stress.html): up to 500 W20 gun turrets on W17's map 1
 // terrain, each aiming and firing on its own against 500 alien machines, drawn as instanced
 // batches at four detail levels, with a built-in benchmark. See ../../README.md (W21 section).
+//
+// W22: 40 kinds of turret built from a shared parts kit (src/kit/), mixed evenly over the field,
+// drawn by one of four strategies (A naive per kind, B shared parts, C shared parts + merged
+// distance levels, D BatchedMesh) switchable at runtime; W21's own instanced renderer stays as
+// strategy "W21" for the one-kind case. Kit view (the 40 kinds lined up) and parts view.
 
 import { Frustum, Group, Matrix4, NoToneMapping, SRGBColorSpace, Scene, Sphere, Timer, Vector3, WebGLRenderer } from 'three';
 import { TextureBank } from '../assets/textures.ts';
@@ -27,6 +32,11 @@ import { buildLevels } from './turretLevels.ts';
 import { InstancedTurrets } from './turretInstanced.ts';
 import { barrelPoint } from './turretPose.ts';
 import { BASE, Ground, LANES, MAX_TURRETS, turretSites } from './world.ts';
+import { assignKinds, buildKit, type Kind } from '../kit/kit.ts';
+import { iconAtlas } from '../kit/icons.ts';
+import { KitView, kitGrid } from '../kit/kitView.ts';
+import { Batched, STRATEGIES, STRATEGY_NAMES, createStrategies, type KitRenderer, type StrategyId } from '../kit/strategies.ts';
+import { formatComparison } from './benchmark.ts';
 import './stress.css';
 
 const DEG = Math.PI / 180;
@@ -39,7 +49,18 @@ const BENCH_MOVE = 2.2;
  * `?dpr=2` stands in for the display's device pixel ratio (the quality cap still applies), to load
  * codepanda's GPU with a Retina laptop's pixel count.
  */
-const DPR_FORCED = Number(new URLSearchParams(location.search).get('dpr')) || null;
+const QS = new URLSearchParams(location.search);
+const DPR_FORCED = Number(QS.get('dpr')) || null;
+/** `?nomultidraw=1` hides WEBGL_multi_draw from three.js, to measure BatchedMesh's fallback. */
+const NO_MULTIDRAW = QS.get('nomultidraw') === '1';
+type Strategy = StrategyId | 'W21';
+type View = 'battle' | 'kit' | 'parts';
+export interface BenchOpts {
+  strategy?: Strategy;
+  count?: number;
+  kinds?: number;
+  quality?: StressQuality;
+}
 const pixelRatio = (cap: number) => Math.min(DPR_FORCED ?? (window.devicePixelRatio || 1), cap);
 
 type PresetName = 'close' | 'game' | 'mid' | 'far';
@@ -50,7 +71,12 @@ const stress = {
   renderer: '',
   stats: {} as Record<string, number | string | number[]>,
   results: null as Results | null,
-  runBenchmark: async (): Promise<Results> => {
+  /** Last "Run all strategies" result. */
+  allResults: null as null | { runs: Results[]; text: string },
+  runBenchmark: async (_o?: BenchOpts): Promise<Results> => {
+    throw new Error('not ready');
+  },
+  runAll: async (_o?: BenchOpts): Promise<{ runs: Results[]; text: string }> => {
     throw new Error('not ready');
   },
   api: {} as Record<string, (...a: never[]) => unknown>,
@@ -62,7 +88,13 @@ window.addEventListener('unhandledrejection', (e) => stress.errors.push(String(e
 async function main(): Promise<void> {
   const canvas = document.getElementById('view') as HTMLCanvasElement;
   const loading = document.getElementById('loading')!;
-  const renderer = new WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false, depth: true });
+  let context: WebGL2RenderingContext | undefined;
+  if (NO_MULTIDRAW) {
+    context = canvas.getContext('webgl2', { antialias: false, powerPreference: 'high-performance', stencil: false, depth: true, alpha: false, premultipliedAlpha: true, preserveDrawingBuffer: false })!;
+    const get = context.getExtension.bind(context);
+    (context as unknown as { getExtension: (n: string) => unknown }).getExtension = (n: string) => (n === 'WEBGL_multi_draw' ? null : get(n));
+  }
+  const renderer = new WebGLRenderer({ canvas, context, antialias: false, powerPreference: 'high-performance', stencil: false, depth: true });
   renderer.setPixelRatio(pixelRatio(QUALITY.high.maxDpr));
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   renderer.outputColorSpace = SRGBColorSpace;
@@ -71,6 +103,7 @@ async function main(): Promise<void> {
   const gl = renderer.getContext();
   const dbg = gl.getExtension('WEBGL_debug_renderer_info');
   stress.renderer = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : String(gl.getParameter(gl.RENDERER));
+  const multiDraw = renderer.extensions.has('WEBGL_multi_draw');
 
   const bank = new TextureBank();
   bank.anisotropy = Math.min(16, renderer.capabilities.getMaxAnisotropy());
@@ -117,6 +150,30 @@ async function main(): Promise<void> {
   compareRig.root.visible = false;
   scene.add(compareRig.root);
 
+  // ---- W22 kit: 40 kinds from shared parts, four drawing strategies
+  loading.textContent = 'Building the parts kit…';
+  await new Promise((r) => setTimeout(r, 0));
+  const kit = buildKit(tm, model, simpleRig);
+  // the kit's glow material is a second copy of W21's per-instance glow
+  const atlas = iconAtlas(kit.icons, bank.anisotropy);
+  bank.derived.add(atlas);
+  const strategies = createStrategies(kit, atlas, MAX_TURRETS);
+  (strategies.D as Batched).multiDraw = multiDraw;
+  for (const id of STRATEGIES) {
+    strategies[id].group.name = `turrets-${id}`;
+    strategies[id].group.visible = false;
+    scene.add(strategies[id].group);
+  }
+  const kitView = new KitView(kit, kit.mats);
+  scene.add(kitView.parts);
+  const kindAll = assignKinds(MAX_TURRETS, 40);
+  const kindOne = assignKinds(MAX_TURRETS, 1);
+  let kindOf = kindAll;
+  /** Drawn ground height (the fire control's py is raised to each kind's trunnion). */
+  const drawY = new Float64Array(MAX_TURRETS);
+  const spin = new Float64Array(MAX_TURRETS);
+  const kindSeen = new Uint8Array(kit.kinds.length);
+
   // ---- aliens and effects
   const models = alienModels(mats);
   const sim = new AlienSim(ALIEN_CAP, models, ground);
@@ -152,9 +209,32 @@ async function main(): Promise<void> {
   const cam = new BenchCamera(canvas, window.innerWidth / window.innerHeight);
   cam.controls.maxDistance = 320;
   const post = new StressPost(renderer, scene, cam.camera, canvas.width, canvas.height);
+  // draw calls by pass: the shadow map (WebGLShadowMap.render) and the scene render pass (less the
+  // shadow map it triggers); everything else is post-processing
+  const meter = { scene: 0, shadow: 0 };
+  {
+    const sm = renderer.shadowMap as unknown as { render: (...a: unknown[]) => void };
+    const smRender = sm.render.bind(sm);
+    sm.render = (...a: unknown[]) => {
+      const c0 = renderer.info.render.calls;
+      smRender(...a);
+      meter.shadow += renderer.info.render.calls - c0;
+    };
+    const rp = post.composer.passes[0] as unknown as { render: (...a: unknown[]) => void };
+    const rpRender = rp.render.bind(rp);
+    rp.render = (...a: unknown[]) => {
+      const c0 = renderer.info.render.calls;
+      const s0 = meter.shadow;
+      rpRender(...a);
+      meter.scene += renderer.info.render.calls - c0 - (meter.shadow - s0);
+    };
+  }
 
   const s = {
     count: 300,
+    kinds: 40,
+    strategy: 'B' as Strategy,
+    view: 'battle' as View,
     quality: 'high' as StressQuality,
     perTurret: false,
     paused: false,
@@ -225,7 +305,11 @@ async function main(): Promise<void> {
     for (let i = 0; i < n; i++) {
       const p = sites[i]!;
       const out = Math.atan2(-(p.z - BASE.z), p.x - BASE.x);
-      bankT.init(i, p.x, p.y, p.z, out + (rnd() - 0.5) * 0.8);
+      // the fire control works from W20's trunnion height; lift it to the kind's own
+      const k = kit.kinds[kindOf[i]!]!;
+      drawY[i] = p.y;
+      spin[i] = 0;
+      bankT.init(i, p.x, p.y + k.frame.trunnionY - model.trunnionY, p.z, out + (rnd() - 0.5) * 0.8);
     }
     level.fill(LEVEL_NEW);
     acc.fill(0);
@@ -264,6 +348,30 @@ async function main(): Promise<void> {
     terrain.mesh.castShadow = spec.terrainShadow;
     // low: only full-detail turrets cast shadows
     turrets.levels[1]!.meshes.forEach((m, k) => (m.castShadow = q !== 'low' && levels[1]!.batches[k]!.castShadow));
+    for (const id of STRATEGIES) strategies[id].setMiddleShadows(q !== 'low');
+  };
+
+  /** The renderer in use for kit kinds (the W21 strategy draws through W21's own batches). */
+  const kitR = (): KitRenderer => strategies[s.strategy === 'W21' ? 'A' : s.strategy];
+  const syncGroups = () => {
+    const battle = s.view === 'battle';
+    turretGroup.visible = battle && s.strategy === 'W21' && !s.perTurret;
+    for (const id of STRATEGIES) strategies[id].group.visible = (battle ? s.strategy === id : kitR().id === id) && !s.perTurret && s.view !== 'parts';
+    if (s.perTurret && !battle) for (const id of STRATEGIES) strategies[id].group.visible = false;
+  };
+  const setStrategy = (id: Strategy) => {
+    if (id === 'W21' && s.kinds !== 1) setKinds(1);
+    s.strategy = id;
+    if (id !== 'W21' && s.perTurret) setPerTurret(false);
+    syncGroups();
+  };
+  const setKinds = (k: number) => {
+    s.kinds = k;
+    kindOf = k === 1 ? kindOne : kindAll;
+    if (k !== 1 && s.strategy === 'W21') s.strategy = 'A';
+    if (k !== 1 && s.perTurret) s.perTurret = false;
+    setCount(s.count);
+    syncGroups();
   };
 
   const setPreset = (p: PresetName, instant = false) => {
@@ -272,12 +380,46 @@ async function main(): Promise<void> {
   };
 
   const setPerTurret = (on: boolean) => {
+    // W20's per-object turrets exist for W20's kind only
+    if (on && s.kinds !== 1) setKinds(1);
+    if (on) s.strategy = 'W21';
     s.perTurret = on;
     level.fill(LEVEL_NEW);
     syncRigs();
+    syncGroups();
+  };
+
+  // kit view: the 40 kinds lined up near the base centre
+  const kitSlots = kitGrid(kit.kinds.length, BASE.x, BASE.z).map((k) => ({ ...k, y: ground.height(k.x, k.z) }));
+  kitView.setKindLabels(kitSlots);
+  const kitCam = (): CamView => ({ target: [BASE.x + 1.6, kitSlots[0]!.y + 0.2, BASE.z + 1.2], distance: 31, elevation: 36, azimuth: 0, fov: 34 });
+  const partsCam = (): CamView => ({ target: [BASE.x + 1.6, kitSlots[0]!.y + 0.3, BASE.z + 0.4], distance: 24, elevation: 38, azimuth: 0, fov: 36 });
+  let battleCam: CamView | null = null;
+  const setView = (v: View) => {
+    if (v === s.view) return;
+    if (s.compare) setCompare(false);
+    if (s.view === 'battle') battleCam = cam.now();
+    s.view = v;
+    document.body.classList.toggle('kitview', v !== 'battle');
+    if (v === 'parts') kitView.buildParts(BASE.x, BASE.z, (x, z) => ground.height(x, z));
+    kitView.show(v === 'battle' ? 'off' : v);
+    const battle = v === 'battle';
+    alienDraw.group.visible = battle;
+    for (const m of [fx.smokeMesh, fx.glowMesh, tracers.mesh, casingMesh.mesh]) m.visible = battle;
+    rigGroup.visible = battle && s.perTurret;
+    if (v === 'kit') cam.go(kitCam(), true);
+    else if (v === 'parts') cam.go(partsCam(), true);
+    else if (battleCam) cam.go(battleCam, true);
+    s.preset = 'free';
+    syncGroups();
   };
 
   const setCompare = (on: boolean) => {
+    if (on && s.view !== 'battle') setView('battle');
+    if (on && (s.kinds !== 1 || s.strategy !== 'W21')) {
+      setKinds(1);
+      setStrategy('W21');
+    }
     s.compare = on;
     if (on && s.perTurret) setPerTurret(false);
     document.body.classList.toggle('cmp21', on);
@@ -324,6 +466,28 @@ async function main(): Promise<void> {
       ],
     },
     {
+      title: 'Kinds',
+      controls: [
+        { id: 'k40', label: '40 kinds', state: () => s.kinds === 40, run: () => setKinds(40) },
+        { id: 'k1', label: '1 kind (W20)', state: () => s.kinds === 1, run: () => setKinds(1) },
+      ],
+    },
+    {
+      title: 'Drawing strategy',
+      controls: [
+        ...STRATEGIES.map((id) => ({ id: `s-${id}`, label: STRATEGY_NAMES[id], state: () => s.strategy === id && !s.perTurret, run: () => setStrategy(id) })),
+        { id: 's-W21', label: 'W21 batches (1 kind)', state: () => s.strategy === 'W21' && !s.perTurret, run: () => setStrategy('W21') },
+      ],
+    },
+    {
+      title: 'View',
+      controls: [
+        { id: 'v-battle', label: 'Battle', state: () => s.view === 'battle', run: () => setView('battle') },
+        { id: 'v-kit', label: 'Kit: 40 kinds', key: 'K', state: () => s.view === 'kit', run: () => setView(s.view === 'kit' ? 'battle' : 'kit') },
+        { id: 'v-parts', label: 'Shared parts', key: 'P', state: () => s.view === 'parts', run: () => setView(s.view === 'parts' ? 'battle' : 'parts') },
+      ],
+    },
+    {
       title: 'Quality',
       controls: (['high', 'medium', 'low'] as const).map((q) => ({ id: `q-${q}`, label: q[0]!.toUpperCase() + q.slice(1), state: () => s.quality === q, run: () => setQuality(q) })),
     },
@@ -353,6 +517,7 @@ async function main(): Promise<void> {
       title: 'Benchmark',
       controls: [
         { id: 'bench', label: 'Run benchmark', run: () => void stress.runBenchmark().catch((e) => stress.errors.push(String(e))) },
+        { id: 'benchAll', label: 'Run all strategies', run: () => void stress.runAll().catch((e) => stress.errors.push(String(e))) },
         { id: 'showRes', label: 'Show results', run: () => resultsEl.classList.toggle('show', !!stress.results) },
       ],
     },
@@ -426,6 +591,8 @@ async function main(): Promise<void> {
       m: () => setPreset('mid'),
       f: () => setPreset('far'),
       l: () => (s.bands = !s.bands),
+      k: () => setView(s.view === 'kit' ? 'battle' : 'kit'),
+      p: () => setView(s.view === 'parts' ? 'battle' : 'parts'),
     };
     const f = act[e.key.toLowerCase()];
     if (f) {
@@ -466,26 +633,27 @@ async function main(): Promise<void> {
   const portVs = model.brakePorts.map(() => new Vector3());
   const ejectV = new Vector3();
   const effectsForShot = (i: number, lv: number) => {
+    const kind = kit.kinds[kindOf[i]!]!;
     const x = bankT.px[i]!;
-    const y = bankT.py[i]!;
+    const y = drawY[i]!;
     const z = bankT.pz[i]!;
     const yaw = bankT.yaw[i]!;
     const pitch = bankT.pitch[i]!;
-    const r = bankT.rOff[i]!;
-    const ty = model.trunnionY;
-    barrelPoint(P, 0, x, y, z, yaw, pitch, ty, r, model.muzzle[0], 0, 0);
+    const r = bankT.rOff[i]! * kind.frame.recoilScale;
+    const ty = kind.frame.trunnionY;
+    barrelPoint(P, 0, x, y, z, yaw, pitch, ty, r, kind.muzzle[0], kind.muzzle[1], kind.muzzle[2]);
     muzzleV.set(P[0]!, P[1]!, P[2]!);
     dirV.set(Math.cos(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.sin(yaw) * Math.cos(pitch));
     sideV.set(Math.sin(yaw), 0, Math.cos(yaw));
-    if (lv === 0) {
+    if (lv === 0 && kind.weapon === 'long') {
       model.brakePorts.forEach((px, k) => {
         barrelPoint(P, 0, x, y, z, yaw, pitch, ty, r, px, 0, 0);
         portVs[k]!.set(P[0]!, P[1]!, P[2]!);
       });
       muzzleBlast(fx, muzzleV, dirV, sideV, portVs, rnd);
       lights.flash(muzzleV.x + dirV.x * 0.3, muzzleV.y + dirV.y * 0.3, muzzleV.z + dirV.z * 0.3);
-    } else if (lv === 1) {
-      barrelPoint(P, 0, x, y, z, yaw, pitch, ty, r, model.brakePorts[2]!, 0, 0);
+    } else if (lv <= 1) {
+      barrelPoint(P, 0, x, y, z, yaw, pitch, ty, r, kind.weapon === 'long' ? model.brakePorts[2]! : kind.muzzle[0] - 0.1, kind.muzzle[1], kind.muzzle[2]);
       portVs[0]!.set(P[0]!, P[1]!, P[2]!);
       blastMiddle(fx, muzzleV.x, muzzleV.y, muzzleV.z, dirV, sideV, portVs[0]!);
     } else if (lv === 2) blastSimple(fx, muzzleV.x, muzzleV.y, muzzleV.z, dirV);
@@ -493,7 +661,7 @@ async function main(): Promise<void> {
   const effectsForEject = (i: number) => {
     const yaw = bankT.yaw[i]!;
     const pitch = bankT.pitch[i]!;
-    barrelPoint(P, 0, bankT.px[i]!, bankT.py[i]!, bankT.pz[i]!, yaw, pitch, model.trunnionY, bankT.rOff[i]!, ...model.ejectPort);
+    barrelPoint(P, 0, bankT.px[i]!, drawY[i]!, bankT.pz[i]!, yaw, pitch, model.trunnionY, bankT.rOff[i]!, ...model.ejectPort);
     ejectV.set(P[0]!, P[1]!, P[2]!);
     sideV.set(Math.sin(yaw), 0, Math.cos(yaw));
     dirV.set(Math.cos(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.sin(yaw) * Math.cos(pitch));
@@ -525,9 +693,47 @@ async function main(): Promise<void> {
     renderer: stress.renderer,
     userAgent: navigator.userAgent,
     thresholds: STRESS_THRESHOLDS,
+    strategy: s.perTurret ? 'W20 per-turret meshes' : s.strategy === 'W21' ? 'W21 batches' : STRATEGY_NAMES[s.strategy],
+    kinds: s.kinds,
+    multiDraw,
   });
 
-  stress.runBenchmark = () =>
+  /** Applies benchmark options (strategy, count, kinds, quality); returns once a frame has run. */
+  const applyOpts = async (o: BenchOpts = {}) => {
+    if (o.kinds !== undefined && o.kinds !== s.kinds) setKinds(o.kinds);
+    if (o.count !== undefined && o.count !== s.count) setCount(o.count);
+    if (o.quality !== undefined && o.quality !== s.quality) setQuality(o.quality);
+    if (o.strategy !== undefined) {
+      if (s.perTurret) setPerTurret(false);
+      setStrategy(o.strategy);
+    }
+    if (s.view !== 'battle') setView('battle');
+    ui.refresh();
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  };
+
+  stress.runBenchmark = async (o?: BenchOpts) => {
+    await applyOpts(o);
+    return runOne();
+  };
+
+  stress.runAll = async (o?: BenchOpts) => {
+    await applyOpts(o);
+    const ids: Strategy[] = [...(s.kinds === 1 ? (['W21'] as Strategy[]) : []), ...STRATEGIES];
+    const runs: Results[] = [];
+    for (const id of ids) {
+      await applyOpts({ strategy: id });
+      runs.push(await runOne());
+    }
+    const text = formatComparison(runs);
+    stress.allResults = { runs, text };
+    stress.results = { meta: runs[0]!.meta, rows: runs.flatMap((r) => r.rows), text };
+    pre.textContent = text;
+    resultsEl.classList.add('show');
+    return stress.allResults;
+  };
+
+  const runOne = () =>
     new Promise<Results>((resolve) => {
       if (s.compare) setCompare(false);
       resultsEl.classList.remove('show');
@@ -568,6 +774,10 @@ async function main(): Promise<void> {
       m.count = 1;
       m.visible = true;
     }
+  for (const id of STRATEGIES) {
+    strategies[id].primeForCompile(true);
+    strategies[id].group.visible = true;
+  }
   lighting.update(cam.camera, cam.distance);
   await renderer.compileAsync(scene, cam.camera);
   for (const l of turrets.levels)
@@ -575,6 +785,8 @@ async function main(): Promise<void> {
       m.count = 0;
       m.visible = false;
     }
+  for (const id of STRATEGIES) strategies[id].primeForCompile(false);
+  syncGroups();
 
   const tick = (ts: number) => {
     requestAnimationFrame(tick);
@@ -583,7 +795,8 @@ async function main(): Promise<void> {
     lastTs = ts;
     timer.update();
     const dt = Math.min(0.05, timer.getDelta());
-    const sdt = s.paused ? 0 : dt * s.timeScale;
+    // the battle holds still while the kit or parts are on show
+    const sdt = s.paused || s.view !== 'battle' ? 0 : dt * s.timeScale;
     simT += sdt;
     renderer.info.reset();
     cam.update(dt);
@@ -633,7 +846,8 @@ async function main(): Promise<void> {
         shotsWindow.push(simT);
         if (vis[i]) effectsForShot(i, lv);
       }
-      if (res.eject && vis[i] && lv === 0) effectsForEject(i);
+      // W20's casing ejection belongs to W20's breech
+      if (res.eject && vis[i] && lv === 0 && kindOf[i] === 0) effectsForEject(i);
     }
     shells.update(sdt, sim.view, grid, groundH, onShellHit);
     casings.update(sdt, groundH);
@@ -641,14 +855,27 @@ async function main(): Promise<void> {
     wrecks.update(sdt, (slot) => stopBurning(slot));
     for (let k = burning.length - 1; k >= 0; k--) if (wrecks.age[burning[k]!.slot]! > 9) stopBurning(burning[k]!.slot);
 
-    // drawing
+    // drawing: turret instance data (timed separately from render submission)
     const wppd = (2 * Math.tan((camera.fov * DEG) / 2)) / Math.max(1, canvas.clientHeight);
+    const tUpdate = performance.now();
+    const kr = kitR();
+    const viaW21 = s.strategy === 'W21';
     turrets.begin();
+    kr.begin();
+    kindSeen.fill(0);
+    let kindsVisible = 0;
     if (s.bands) badges.begin();
-    for (let i = 0; i < n; i++) {
+    for (let i = 0; i < n && s.view === 'battle'; i++) {
+      // rotary guns spin fast while firing, idle slowly otherwise
+      spin[i] = (spin[i]! + sdt * (bankT.cooldown[i]! > 0 ? 28 : 3)) % (Math.PI * 2);
       if (!vis[i]) continue;
+      const kind: Kind = kit.kinds[kindOf[i]!]!;
+      if (!kindSeen[kind.index]) {
+        kindSeen[kind.index] = 1;
+        kindsVisible++;
+      }
       const x = bankT.px[i]!;
-      const y = bankT.py[i]!;
+      const y = drawY[i]!;
       const z = bankT.pz[i]!;
       let yaw = bankT.yaw[i]!;
       let pitch = bankT.pitch[i]!;
@@ -666,19 +893,26 @@ async function main(): Promise<void> {
       const glow = 4.5 + 14 * bankT.pulse(i);
       const dist = Math.hypot(x - cp.x, y + 0.4 - cp.y, z - cp.z);
       const iconScale = Math.max(1, 9 * wppd * dist);
-      if (!s.perTurret) turrets.push(lv, frame, x, y, z, yaw, pitch, rec, glow, iconScale);
-      else {
+      if (s.perTurret) {
         const r = rigs[i]!;
         r.root.position.set(x, y, z);
         r.setPose(yaw, pitch, rec);
         if (r.lod !== RIG_LOD[lv]) r.setLod(RIG_LOD[lv]!);
         r.updateIcon(wppd * dist);
         r.root.visible = true;
-      }
-      if (s.bands) badges.push(x, y + 2.3, z, lv);
+      } else if (viaW21) turrets.push(lv, frame, x, y, z, yaw, pitch, rec, glow, iconScale);
+      else kr.push(i, kind, lv, x, y, z, yaw, pitch, rec, spin[i]!, glow, iconScale);
+      if (s.bands) badges.push(x, y + Math.max(2.3, kind.top + 0.9), z, lv);
     }
+    if (s.view === 'kit')
+      for (const [j, k] of kitSlots.entries()) {
+        kr.push(j, kit.kinds[k.kind]!, 0, k.x, k.y, k.z, -40 * DEG, 8 * DEG, 0, 0.3, 4.5, 1);
+        kindsVisible++;
+      }
     if (s.perTurret) for (let i = 0; i < n; i++) if (!vis[i]) rigs[i]!.root.visible = false;
     turrets.commit();
+    kr.commit();
+    const updateMs = performance.now() - tUpdate;
     if (s.compare) {
       compareRig.setPose(cmp.yaw, cmp.pitch, 0);
       compareRig.setLod('full');
@@ -693,7 +927,12 @@ async function main(): Promise<void> {
     fx.update(sdt, camera);
     const q = QUALITY[s.quality];
     lighting.update(camera, Math.max(8, cam.distance), Math.min(camera.far, cam.distance * q.shadowReach + 20));
+    meter.scene = 0;
+    meter.shadow = 0;
+    const tSubmit = performance.now();
     post.render(dt);
+    const submitMs = performance.now() - tSubmit;
+    kitView.update(camera, canvas, s.view === 'battle' ? 'off' : s.view);
 
     // comparison captions
     if (s.compare) {
@@ -716,14 +955,21 @@ async function main(): Promise<void> {
     frames++;
     const info = renderer.info.render;
     const usage = fx.usage;
-    const turretDraws = s.perTurret ? -1 : turrets.drawCalls;
+    const turretDraws = s.perTurret ? -1 : viaW21 ? turrets.drawCalls : kr.drawCalls;
     stress.stats = {
       fps: fpsWindow.length,
       cpuMs: cpuHist.reduce((a, b) => a + b, 0) / cpuHist.length,
       calls: info.calls,
       triangles: info.triangles,
       turretDraws,
-      turretTriangles: s.perTurret ? -1 : turrets.trianglesSubmitted,
+      turretTriangles: s.perTurret ? -1 : viaW21 ? turrets.trianglesSubmitted : -1,
+      strategy: s.perTurret ? 'per-turret' : s.strategy,
+      kinds: s.kinds,
+      kindsVisible,
+      sceneCalls: meter.scene,
+      shadowCalls: meter.shadow,
+      updateMs,
+      submitMs,
       levels: counts,
       culled,
       aliensAlive: sim.alive,
@@ -751,7 +997,7 @@ async function main(): Promise<void> {
           b.samples = [];
         }
       } else {
-        b.samples.push({ interval, cpu: cpuMs, calls: info.calls, triangles: info.triangles, levels: counts, culled, aliensDrawn, aliensAlive: sim.alive, shells: shells.n, particles: usage.smoke + usage.glow, turretDraws: Math.max(0, turretDraws), updates });
+        b.samples.push({ interval, cpu: cpuMs, calls: info.calls, triangles: info.triangles, levels: counts, culled, aliensDrawn, aliensAlive: sim.alive, shells: shells.n, particles: usage.smoke + usage.glow, turretDraws: Math.max(0, turretDraws), updates, sceneCalls: meter.scene, shadowCalls: meter.shadow, updateMs, submitMs, kindsVisible });
         b.t += interval / 1000;
         if (b.t >= BENCH_HOLD) {
           b.rows.push(summarise(b.segs[b.k]!.name, b.samples));
@@ -789,7 +1035,11 @@ async function main(): Promise<void> {
           ['frame CPU', `${(st.cpuMs as number).toFixed(2)} ms`],
           ['draw calls (all passes)', `${info.calls}`],
           ['triangles (all passes)', `${(info.triangles / 1e6).toFixed(2)} M`],
-          ['turret batches drawn', s.perTurret ? 'per-object' : `${turretDraws} · ${((st.turretTriangles as number) / 1e6).toFixed(2)} M tris`],
+          ['strategy · kinds', `${s.perTurret ? 'W20 per-object' : s.strategy === 'W21' ? 'W21 batches' : STRATEGY_NAMES[s.strategy]} · ${s.kinds}`],
+          ['turret batches drawn', s.perTurret ? 'per-object' : `${turretDraws}${viaW21 ? ` · ${((st.turretTriangles as number) / 1e6).toFixed(2)} M tris` : ''}`],
+          ['draw calls scene / shadow', `${meter.scene} / ${meter.shadow}`],
+          ['update / submit ms', `${updateMs.toFixed(2)} / ${submitMs.toFixed(2)}`],
+          ['kinds in view', `${kindsVisible}`],
           ['turrets F / M / S / I', `${counts.join(' / ')} · ${culled} off view`],
           ['fire control', MODE_NAMES.map((m, k) => `${modeCounts[k]} ${m}`).join(' · ')],
           ['updates this frame', `${updates} of ${n}`],
@@ -800,7 +1050,7 @@ async function main(): Promise<void> {
           ['casings / wrecks', `${casings.n} / ${wrecks.count}`],
           ['view', `${renderer.getPixelRatio()} dpr · ${canvas.width}×${canvas.height}`],
         ],
-        `${s.count} turrets · ${s.perTurret ? 'W20 per-object meshes' : 'instanced'} · ${s.quality} · levels ${levels.map((l) => `${l.name} ${l.triangles.toLocaleString('en-GB')}`).join(', ')} triangles<br>${stress.renderer}`,
+        `${s.count} turrets · ${s.kinds} kind${s.kinds > 1 ? 's' : ''} · ${s.quality} · W20 levels ${levels.map((l) => `${l.name} ${l.triangles.toLocaleString('en-GB')}`).join(', ')} triangles<br>${stress.renderer} · WEBGL_multi_draw ${multiDraw ? 'yes' : 'no'}`,
       );
     }
     if (frames === 5) {
@@ -811,6 +1061,16 @@ async function main(): Promise<void> {
 
   stress.api = {
     count: ((n: number) => setCount(n)) as never,
+    kinds: ((k: number) => setKinds(k)) as never,
+    strategy: ((id: Strategy) => setStrategy(id)) as never,
+    view: ((v: View) => setView(v)) as never,
+    multiDraw: (() => multiDraw) as never,
+    kit: (() => ({
+      kinds: kit.kinds.map((k) => ({ name: k.name, base: k.base, ring: k.ring, head: k.head, weapon: k.weapon, triangles: k.triangles, icon: k.icon, trunnionY: k.frame.trunnionY })),
+      parts: kit.parts.map((p) => ({ id: p.id, name: p.name, triangles: p.triangles, materials: [...p.levels[0].keys()], usedBy: p.usedBy.length })),
+      icons: kit.icons,
+      batches: Object.fromEntries(STRATEGIES.map((id) => [id, strategies[id].batches])),
+    })) as never,
     quality: ((q: StressQuality) => setQuality(q)) as never,
     perTurret: ((v: boolean) => setPerTurret(v)) as never,
     preset: ((p: PresetName, instant = false) => setPreset(p, instant)) as never,

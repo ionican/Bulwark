@@ -70,7 +70,7 @@ export function splitByMaterial(g: BufferGeometry, mats: Material | Material[]):
 let unitBolt: BufferGeometry | null = null;
 
 /** The part's own pieces plus its bolts placed into the geometry of the bolt's material. */
-function partWithBolts(p: BuiltPart, mats: TurretMats): Map<string, { geometry: BufferGeometry; material: Material }> {
+export function partWithBolts(p: BuiltPart, mats: TurretMats): Map<string, { geometry: BufferGeometry; material: Material }> {
   const out = splitByMaterial(p.geometry, p.material);
   unitBolt ??= boltGeometry();
   const byKey = new Map<BoltSpec['key'], BufferGeometry[]>();
@@ -95,7 +95,8 @@ export function instancedGlow(): MeshStandardMaterial {
     sh.fragmentShader = sh.fragmentShader
       // the instance colour carries the slit intensity; it must not tint the dark base colour
       .replace('#include <color_fragment>', '')
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n#ifdef USE_INSTANCING_COLOR\ntotalEmissiveRadiance *= vColor.r;\n#endif');
+      // W22: BatchedMesh carries the per-instance colour as USE_BATCHING_COLOR
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n#if defined( USE_INSTANCING_COLOR ) || defined( USE_BATCHING_COLOR )\ntotalEmissiveRadiance *= vColor.r;\n#endif');
   };
   m.customProgramCacheKey = () => 'w21-glow';
   return m;
@@ -127,7 +128,7 @@ function levelFrom(name: string, parts: Array<{ slot: Slot; pieces: Map<string, 
   return { name, batches, triangles, slots };
 }
 
-function tbPieces(b: TB, mats: TurretMats): Map<string, { geometry: BufferGeometry; material: Material }> {
+export function tbPieces(b: TB, mats: TurretMats): Map<string, { geometry: BufferGeometry; material: Material }> {
   const { geometry, material } = b.build(mats);
   return splitByMaterial(geometry, material);
 }
