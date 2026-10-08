@@ -13,8 +13,6 @@ import { createWorld } from '../src/sim/scenarios.ts';
 import type { Order } from '../src/sim/units.ts';
 import { unitIds } from './fixtures.ts';
 
-const ORDER_KIND: Record<Order['t'], number> = { move: Q_MOVE, build: Q_BUILD, run: Q_RUN, produce: Q_PRODUCE, reclaim: Q_RECLAIM };
-
 /** What the snapshot should say about one order, worked out from the world independently. */
 function expected(w: World, unitSlot: number, o: Order) {
   const bc = w.buildings.cols;

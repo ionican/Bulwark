@@ -96,8 +96,8 @@ describe('W25 acceptance 2: no Shift replaces, and orphaned reserved sites go', 
   it('a started site stays, a site another unit also has queued stays, a site only A held goes', () => {
     const w = flat();
     const a = w.spawnUnit(U.engineer, 9.5, 9.5);
-    const b = w.spawnUnit(U.engineer, 40.5, 40.5);
-    apply(w, { t: 'move', ids: [b], x: 44.5, z: 44.5 }); // B is busy first, so T stays reserved
+    const b = w.spawnUnit(U.engineer, 46.5, 46.5);
+    apply(w, { t: 'move', ids: [b], x: 1.5, z: 46.5 }); // B is busy first (45 tiles: 9 s), so T stays reserved
     const S = build(w, [a], B.gun, 10, 10, true); // A stands next to S: it starts at once
     const T = build(w, [a, b], B.gun, 20, 20, true);
     const U_ = build(w, [a], B.gun, 26, 20, true);
@@ -211,7 +211,7 @@ describe('W25 acceptance 3: dequeue and clearQueue', () => {
     const { w, a, Y, Z } = threeQueued();
     apply(w, { t: 'dequeue', id: a, index: 0 });
     expect(buildIds(w, a)).toEqual([Y, Z]);
-    expect(w.paths[slot(w, a)]).toBeNull();
+    expect(w.pathKey[slot(w, a)]).toBe(`b${Y}`); // the path was planned afresh, to Y
   });
 
   it('clearQueue empties the queue under the same rule', () => {
