@@ -4,7 +4,7 @@ Browser base-defence slice. TypeScript + Vite + Three.js 0.186 (WebGL renderer b
 
 ```
 npm install
-npm run dev     # http://127.0.0.1:8813/   (stress scene: /?stress=1, seed: /?seed=7, debug rich start: /?rich=1)
+npm run dev     # http://127.0.0.1:8822/   (sandbox: /?sandbox=1, stress scene: /?stress=1, seed: /?seed=7, debug rich start: /?rich=1)
 npm test        # tsc + vitest, about 2 minutes (includes two headless full-map runs)
 npm run build   # static build in dist/
 ```
@@ -32,7 +32,7 @@ Scale: 1 tile = 2 m; map 1 is 128 × 128 tiles.
 - **Checkpoints**: the full state is stored just before each wave starts. "Rewind to wave start" restores the start of the current wave, or the previous one if the current wave began under 5 s ago; the lose screen offers the same.
 - **Research**: research stations make 1 RP/s each (W12 labRate); a node needs `seconds` RP and drains its cost while it runs, by the construction drain rule. One node at a time; never refunded. Beam turret, heavy cannon and shield generator need their research (W12 `requires`); wall tiers 2/3 and gun, area and heavy tier 2 need research, then engineers upgrade each building (U). Nodes and costs: `src/sim/balance.ts`.
 - **Win/lose**: the commander's death is the only loss; the map is won when all 20 waves have arrived and every alien is destroyed.
-- **Saves**: Export save downloads a `.bulwark` file (full state, `SAVE_VERSION` 1, state format = `SNAPSHOT_VERSION` 3); Import save loads one and refuses any other version with a message. Checkpoints are not included in the file.
+- **Saves**: Export save downloads a `.bulwark` file (full state, `SAVE_VERSION` 2, state format = `SNAPSHOT_VERSION` 4 since W24); Import save loads one and refuses any other version with a message. Checkpoints are not included in the file.
 - **Engineers**: the commander produces them (Produce engineer button; W12 cost 60 mass, 200 energy, 80 BP·s).
 
 ## Balance
@@ -41,11 +41,21 @@ W12 numbers are used unchanged wherever W12 has them. Numbers the game adds, and
 
 | What | W12 | Game | Why |
 |---|---|---|---|
+| Commander build power | 10 BP | 8 BP | Richard's decision (2026-10-08, W24): commander 8, engineer 5. |
 | Rare extractor output | 0.1 per second | 0.25 per second | With 0.1/s the scripted balanced plan collected about 300 rare in 48 minutes: the two north points sit 30 tiles beyond the north line and saboteurs keep killing them, as W12 also saw. Research took all of it, so no beam turret stood before minute 32, and the hunter waves (14, 16, 17, 19, 20) killed the commander every run. |
 
 New numbers (W12 had no equivalent): call-early bonus; research nodes Deep drills, Long-range scanners, Field engineering, Heavy cannon tier 2; belt pieces; engineer carry capacity 20; commander gun range 8 tiles; shield radius 8 tiles; projectile speeds.
 
-Headless check (`test/fullmap.test.ts`, `test/plans.ts`): W12's balanced plan, placed on tiles, wins map 1 (seed 1: 52:42, commander 5,880/6,000 hp; seeds 2 and 3 also win); the same economy with no defences loses at 13:22 (wave 5).
+Headless check (`test/fullmap.test.ts`, `test/plans.ts`): W12's balanced plan, placed on tiles, wins map 1 (W24, commander 8 BP, seed 1: tick 31,468 = 52:26, commander 6,000/6,000 hp; the two core guns moved from minute 3 to minute 2 for W24); the same economy with no defences loses at 13:22 (wave 5). Before W24 (10 BP): 52:42, 5,880 hp.
+
+## W24 run 1: mechanics sandbox (simulation)
+
+- **Construction states**: a site is *reserved* until build power first reaches it (holds its tiles, blocks nobody, no flow cost; aliens can still make it their goal), then *started* (blocks units and aliens, flow cost at its hit points), then *complete*. Units and aliens on its tiles when it starts are moved to the nearest free passable tile that tick. Drawn as a dotted outline, a scaffold frame, a model.
+- **Footprints**: `fw × fh` per building (schema columns) replace the square `size`.
+- **Wall runs** (`runs.ts`): `buildRun` lays a straight run 1–4 deep, up to 128 tiles along; one order per builder; 32-run table; `cancelRun`.
+- **Gates** (`gate.ts`): converted from finished walls with W23's predicate; 3 × depth; corridor in the centre column for units; aliens break through (flow cost hp ÷ depth per tile).
+- **Sandbox** (`/?sandbox=1`, `sandbox.ts`): no waves, no end state (the commander respawns after 10 s), and commands `spawnAt`, `tune`/`tuneReset` (`tuning.ts`), `setUnlimited`, `grantResearch`, `startWave`, `clearAliens`, `clearWrecks`, `resetStats`, `resetSandbox`, refused outside the sandbox. The scenario is stored in the world, saves and snapshots.
+- **Stats** (`stats.ts`): per-kind counters, in every snapshot.
 
 ## Controls
 
@@ -55,3 +65,5 @@ Left click or drag: select. Right click with units selected: reclaim a wreck (en
 ## Debug hook
 
 `window.__game` (read-only): `wave`, `speed`, `paused`, `checkpoints`, `research`, `endState`, `rejected` (commands the worker refused, with reasons), `notices`, `lastSave`, `tick`, `entityCounts`, `lastTickMs`, `medianTickMs` and `maxTickMs` (last 100 ticks), `drawCalls`, `lodLevelCounts` (`full`, `simple`, `icon`, `culled`), `fps`, `frameCpuMs`, `renderer`, `errors`, `selected`, `selectAt(x, y)`, `pool` (mass/energy/rare, income, spend, short), `parts`, `commanderHp`, `alienCounts`, `buildQueue`, `routes`, `stats`, `ghost`, `buildMode`, `outcome`. Test helpers: `cmd.build(kind, tx, ty, {dir, ids, queue})`, `cmd.move(ids, x, z)`, `cmd.reclaim(ids, wreckId)`, `cmd.assist`, `cmd.upgrade`, `cmd.dropTurret`, `cmd.stop`, `cmd.spawn(kind, entry, count)`, `cmd.research(node)`, `cmd.produce()`, `cmd.callWave()` (`ids` null = every commander and engineer; an unknown kind, node or entry name throws), `control.pause/speed/rewind/save/loadLastSave/loadBytes`, `camera.get/set/view`, `list(type)`, `screenOf(type, id)`, `worldToScreen(x, z)`.
+
+W24 adds: `buildRun(from, to, depth, {ids, queue})`, `cancelRun(id)`, `gate(tx, ty, {ids, axis})`, `spawnAt(kind, x, z, count)`, `tune(target, kind, field, mult)`, `tuneReset(target?, kind?)`, `setUnlimited(on)`, `grantResearch(node | 'all')`, `startWave(index)`, `clearAliens()`, `clearWrecks()`, `resetStats()`, `resetSandbox(full?)` — each resolves with `{ ok: true, tick, detail? }` or `{ ok: false, reason }` — and `stats()` (per-kind counters plus the W13 totals, which moved from the old `stats` getter to `counters`), `runs`, `tuning`, `unlimited`, `originRoutes`, `commanderRespawn`, `urlScenario`. `scenario` now reports the running world's scenario (a loaded save brings its own).
