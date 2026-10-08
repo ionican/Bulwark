@@ -26,6 +26,7 @@ import {
 import { B, BUILDING_KINDS, CATEGORY_COUNT, ITEM_PART, SHIELD, U, UNIT_KINDS, ALIEN_KINDS, alienInfo, isBelt, unitInfo } from '../sim/kinds.ts';
 import { BF_COMPLETE, BF_FIRING, BF_UPGRADING, isReserved } from '../sim/schema.ts';
 import { AXIS_Z, gateDepth } from '../sim/gate.ts';
+import { MAX_SPAWN_ORIGINS } from '../sim/sandbox.ts';
 import { CAPACITY } from '../sim/world.ts';
 import { heightAt, type Terrain } from '../sim/terrain.ts';
 import { slotOf } from '../sim/table.ts';
@@ -86,13 +87,20 @@ function writeM(arr: Float32Array, i: number, c: number, s: number, sx: number, 
   arr[o + 15] = 1;
 }
 
-/** A batch of InstancedMeshes filled from zero each frame. */
+/**
+ * A batch of InstancedMeshes filled from zero each frame. Each mesh starts at `capacity` instances
+ * and doubles when full, up to `max` (the most the simulation can produce: its table capacity), so
+ * a normal scene keeps small buffers and a full one is still drawn whole (review 4). `overflowed`
+ * is set only if more than `max` are pushed.
+ */
 class Batch {
   readonly meshes: InstancedMesh[] = [];
   readonly counts: Int32Array;
   overflowed = false;
+  private readonly max: number;
 
-  constructor(scene: Scene, geoms: BufferGeometry[], materials: Material[], capacity: number, order = 0) {
+  constructor(scene: Scene, geoms: BufferGeometry[], materials: Material[], capacity: number, order = 0, max = capacity) {
+    this.max = Math.max(capacity, max);
     this.counts = new Int32Array(geoms.length);
     geoms.forEach((g, i) => {
       const m = new InstancedMesh(g, materials[i] ?? materials[0]!, capacity);
@@ -110,14 +118,35 @@ class Batch {
   }
 
   push(k: number, c: number, s: number, sx: number, sy: number, sz: number, x: number, y: number, z: number) {
-    const m = this.meshes[k]!;
+    let m = this.meshes[k]!;
     const n = this.counts[k]!;
     if (n >= m.instanceMatrix.count) {
-      this.overflowed = true;
-      return;
+      if (!this.grow(k)) {
+        this.overflowed = true;
+        return;
+      }
+      m = this.meshes[k]!;
     }
     writeM(m.instanceMatrix.array as Float32Array, n, c, s, sx, sy, sz, x, y, z);
     this.counts[k] = n + 1;
+  }
+
+  /** Replaces mesh k with one of twice the capacity (at most `max`), keeping what was written. */
+  private grow(k: number): boolean {
+    const old = this.meshes[k]!;
+    const cap = old.instanceMatrix.count;
+    if (cap >= this.max) return false;
+    const m = new InstancedMesh(old.geometry, old.material, Math.min(this.max, cap * 2));
+    m.frustumCulled = false;
+    m.count = 0;
+    m.visible = old.visible;
+    m.renderOrder = old.renderOrder;
+    (m.instanceMatrix.array as Float32Array).set(old.instanceMatrix.array as Float32Array);
+    old.parent?.add(m);
+    old.removeFromParent();
+    old.dispose();
+    this.meshes[k] = m;
+    return true;
   }
 
   commit() {
@@ -136,14 +165,14 @@ class Batch {
 }
 
 /** Kinds × three detail levels: mesh index = kind * LOD_LEVELS + lod. */
-function kindBatch(scene: Scene, geoms: KindGeometry[], capacity: number, model: Material, icon: Material, iconOrder: number): Batch {
+function kindBatch(scene: Scene, geoms: KindGeometry[], capacity: number, max: number, model: Material, icon: Material, iconOrder: number): Batch {
   const list: BufferGeometry[] = [];
   const mats: Material[] = [];
   for (const g of geoms) {
     list.push(g.full, g.simple, g.icon);
     mats.push(model, model, icon);
   }
-  const b = new Batch(scene, list, mats, capacity);
+  const b = new Batch(scene, list, mats, capacity, 0, max);
   b.meshes.forEach((m, i) => {
     if (i % LOD_LEVELS === LOD_ICON) m.renderOrder = iconOrder;
   });
@@ -203,23 +232,26 @@ export class EntityRenderer {
     const model = new MeshLambertMaterial({ vertexColors: true, flatShading: true });
     const icon = new MeshBasicMaterial({ vertexColors: true, depthTest: false, depthWrite: false });
     const flat = new MeshBasicMaterial({ vertexColors: true });
-    this.buildings = kindBatch(scene, buildingGeometries(), 1536, model, icon, 10);
-    this.aliens = kindBatch(scene, alienGeometries(), 2048, model, icon, 11);
-    this.units = kindBatch(scene, unitGeometries(), 64, model, icon, 12);
-    this.wrecks = kindBatch(scene, [wreckGeometry()], 2048, model, icon, 9);
-    this.items = new Batch(scene, itemGeometries(), [model], 1536);
-    this.shots = new Batch(scene, projectileGeometries(), [flat], 2048);
-    this.lines = new Batch(scene, [lineGeometry(0.12, '#cfeeff'), lineGeometry(0.05, '#a8f5df')], [flat], 512);
+    // Starting sizes as before; each grows up to what the simulation's tables allow.
+    const C = CAPACITY;
+    this.buildings = kindBatch(scene, buildingGeometries(), 1536, C.buildings, model, icon, 10);
+    this.aliens = kindBatch(scene, alienGeometries(), 2048, C.aliens, model, icon, 11);
+    this.units = kindBatch(scene, unitGeometries(), 64, C.units, model, icon, 12);
+    this.wrecks = kindBatch(scene, [wreckGeometry()], 2048, C.wrecks, model, icon, 9);
+    this.items = new Batch(scene, itemGeometries(), [model], 1536, 0, C.buildings);
+    this.shots = new Batch(scene, projectileGeometries(), [flat], 2048, 0, C.projectiles);
+    this.lines = new Batch(scene, [lineGeometry(0.12, '#cfeeff'), lineGeometry(0.05, '#a8f5df')], [flat], 512, 0, C.buildings + C.units);
     const dome = new MeshBasicMaterial({ color: '#cfe6ff', transparent: true, opacity: 0.12, depthWrite: false, side: DoubleSide });
-    this.shields = new Batch(scene, [shieldDomeGeometry(), dashedRingGeometry()], [dome, flat], 128);
-    this.frames = new Batch(scene, [constructionFrameGeometry()], [icon], 512, 14);
-    this.reserved = new Batch(scene, [reservedOutlineGeometry()], [icon], 1024, 14);
+    this.shields = new Batch(scene, [shieldDomeGeometry(), dashedRingGeometry()], [dome, flat], 128, 0, C.buildings);
+    this.frames = new Batch(scene, [constructionFrameGeometry()], [icon], 512, 14, C.buildings);
+    this.reserved = new Batch(scene, [reservedOutlineGeometry()], [icon], 1024, 14, C.buildings);
     const back = new MeshBasicMaterial({ color: '#120f0d', depthTest: false, depthWrite: false });
     const fill = new MeshBasicMaterial({ color: '#f4efe6', depthTest: false, depthWrite: false });
-    this.bars = new Batch(scene, [barGeometry(), barGeometry()], [back, fill], 1024, 13);
+    this.bars = new Batch(scene, [barGeometry(), barGeometry()], [back, fill], 1024, 13, C.buildings + C.aliens + C.units);
     this.bars.meshes[1]!.renderOrder = 14;
-    this.routes = new Batch(scene, routeMarkerGeometries(), [icon], 1024, 8);
-    this.markers = new Batch(scene, [selectionMarkerGeometry()], [icon], 2048, 15);
+    // Route markers: at least 3 tiles apart on routes of at most 601 tiles, 4 per entry plus 8 origins.
+    this.routes = new Batch(scene, routeMarkerGeometries(), [icon], 1024, 8, Math.ceil(601 / 3) * (terrain.entries.length * CATEGORY_COUNT + MAX_SPAWN_ORIGINS));
+    this.markers = new Batch(scene, [selectionMarkerGeometry()], [icon], 2048, 15, C.buildings + C.aliens + C.units + C.wrecks);
     if (BUILDING_KINDS.length + ALIEN_KINDS.length + UNIT_KINDS.length === 0) throw new Error('no kinds');
   }
 
@@ -280,7 +312,7 @@ export class EntityRenderer {
     const yc = Math.cos(f.yaw);
     const ys = Math.sin(f.yaw);
     this.counts.full = this.counts.simple = this.counts.icon = this.counts.culled = 0;
-    for (const b of [this.buildings, this.aliens, this.units, this.wrecks, this.items, this.shots, this.lines, this.shields, this.frames, this.reserved, this.bars, this.routes, this.markers]) b.reset();
+    for (const b of this.allBatches()) b.reset();
 
     // Row lookups for this frame.
     this.alienRow.fill(-1);
@@ -309,7 +341,7 @@ export class EntityRenderer {
     this.drawShots(f.projectiles);
     if (f.showRoutes) this.drawRoutes(snap);
     this.drawSelection(f, wppd);
-    for (const b of [this.buildings, this.aliens, this.units, this.wrecks, this.items, this.shots, this.lines, this.shields, this.frames, this.reserved, this.bars, this.routes, this.markers]) b.commit();
+    for (const b of this.allBatches()) b.commit();
     void t;
   }
 
@@ -575,7 +607,16 @@ export class EntityRenderer {
   }
 
   get overflowed(): boolean {
-    return [this.buildings, this.aliens, this.units, this.wrecks, this.items, this.shots, this.lines, this.routes].some((b) => b.overflowed);
+    return this.allBatches().some((b) => b.overflowed);
+  }
+
+  /** Reserved sites drawn last frame (dotted outlines). */
+  get reservedDrawn(): number {
+    return this.reserved.counts[0]!;
+  }
+
+  private allBatches(): Batch[] {
+    return [this.buildings, this.aliens, this.units, this.wrecks, this.items, this.shots, this.lines, this.shields, this.frames, this.reserved, this.bars, this.routes, this.markers];
   }
 }
 

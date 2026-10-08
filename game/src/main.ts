@@ -228,7 +228,7 @@ function command(cmd: Command) {
   send({ type: 'command', cmd });
 }
 
-/** Sends a command and resolves with the worker's acceptance or its refusal reason. */
+/** Sends a command and resolves with its final result: applied at its tick, or refused with the reason. */
 function commandResult(cmd: Command): Promise<CommandResult> {
   const ref = nextRef++;
   return new Promise((resolve) => {
@@ -1173,7 +1173,8 @@ const game = {
     },
   },
   // ---- W24: wall runs, gates and the sandbox commands. Each sends one command and resolves with
-  // { ok: true, tick, detail? } once the worker has queued it, or { ok: false, reason }.
+  // { ok: true, tick, detail? } once it has been applied at its tick, or { ok: false, reason } if it
+  // was refused when sent or at its tick (while paused, it resolves after resuming).
   buildRun: (from: [number, number], to: [number, number], depth = 1, opts: { ids?: number[]; queue?: boolean } = {}) =>
     commandResult({ t: 'buildRun', ids: opts.ids ?? allUnitIds(), from, to, depth, queue: opts.queue ?? false }),
   cancelRun: (run: number) => commandResult({ t: 'cancelRun', run }),

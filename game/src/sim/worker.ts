@@ -7,7 +7,6 @@ import { encodeSnapshot } from './snapshot.ts';
 import { createWorld } from './scenarios.ts';
 import { SimRunner } from './runner.ts';
 import { SaveVersionError, serializeWorld } from './save.ts';
-import { planRun } from './runs.ts';
 import type { FromWorker, ToWorker } from './protocol.ts';
 
 let runner: SimRunner | null = null;
@@ -36,7 +35,12 @@ function sendSnapshot(tickMs: number, ticksRun: number) {
 function loop() {
   if (!runner) return;
   const t0 = performance.now();
-  const ran = runner.advance(t0);
+  const { ran, error } = runner.advanceSafe(t0);
+  if (error) {
+    // A tick failed: say so (console and the page), and keep the clock running.
+    console.error('simulation tick failed', error);
+    post({ type: 'error', message: `Simulation tick ${runner.world.tick} failed: ${error.split('\n')[0]}` });
+  }
   const tickMs = ran > 0 ? (performance.now() - t0) / ran : 0;
   // While paused, keep sending (cheaply, 4 per second) so orders given show up in the HUD.
   if (ran > 0 || runner.paused || runner.world.outcome !== 0) sendSnapshot(tickMs, ran);
@@ -57,20 +61,19 @@ self.onmessage = (ev: MessageEvent<ToWorker>) => {
       const world = createWorld(msg.seed, msg.scenario);
       if (msg.rich) world.pool.set([1e6, 1e6, 1e6]);
       runner = new SimRunner(world, performance.now());
+      runner.onResult = (r) => {
+        if (r.ok) post({ type: 'accepted', ref: r.ref!, tick: r.tick, detail: r.detail });
+        else post({ type: 'rejected', reason: r.reason!, cmd: r.cmd, ref: r.ref });
+      };
       restart();
       break;
     }
     case 'command': {
       if (!runner) return;
-      const problem = runner.submit(msg.cmd);
+      // Refused now: say so now. Otherwise the final result (applied, or refused at its tick)
+      // comes through runner.onResult when the tick runs (review 3).
+      const problem = msg.ref !== undefined ? runner.submitTracked(msg.cmd, msg.ref) : runner.submit(msg.cmd);
       if (problem) post({ type: 'rejected', reason: problem, cmd: msg.cmd, ref: msg.ref });
-      else if (msg.ref !== undefined) {
-        // A wall run reports its plan (tiles to build, tiles skipped) with the acceptance; the
-        // plan is worked out only once validation has passed, on the same state.
-        const plan = msg.cmd.t === 'buildRun' ? (runner.world.validatedResult<ReturnType<typeof planRun>>(msg.cmd) ?? planRun(runner.world, msg.cmd)) : null;
-        const detail = plan && typeof plan !== 'string' ? { tiles: plan.tiles.length, skipped: plan.skipped, axis: plan.axis, start: plan.start } : undefined;
-        post({ type: 'accepted', ref: msg.ref, tick: runner.world.tick, detail });
-      }
       break;
     }
     case 'recycle':

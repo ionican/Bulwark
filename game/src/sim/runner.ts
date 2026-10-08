@@ -9,7 +9,8 @@
 import { World } from './world.ts';
 import { TICK_HZ } from './kinds.ts';
 import { deserializeWorld, serializeWorld } from './save.ts';
-import type { Command } from './commands.ts';
+import type { Command, StampedCommand } from './commands.ts';
+import { planRun } from './runs.ts';
 
 export interface Checkpoint {
   /** Wave number (1-based) that starts on this tick. */
@@ -23,8 +24,26 @@ const BASE_TICK_MS = 1000 / TICK_HZ;
 /** After a stall, run at most this many ticks per advance() (per unit of speed). */
 const MAX_CATCH_UP = 5;
 
+/** The final outcome of a command sent with a `ref`: applied at its tick, or refused with a reason. */
+export interface CommandResult {
+  ref: number | undefined;
+  ok: boolean;
+  tick: number;
+  cmd: Command;
+  reason?: string;
+  /** buildRun: tiles laid and tiles skipped. */
+  detail?: Record<string, unknown>;
+}
+
 export class SimRunner {
-  world: World;
+  private _world!: World;
+  /**
+   * Final results (review 3): every command sent with submitTracked when it is applied or refused
+   * at its tick, every untracked command refused at its tick, and tracked commands lost when the
+   * world is replaced (rewind, load).
+   */
+  onResult: ((r: CommandResult) => void) | null = null;
+  private readonly tracked = new Map<StampedCommand, number>();
   speed = 1;
   paused = false;
   readonly checkpoints: Checkpoint[] = [];
@@ -33,6 +52,49 @@ export class SimRunner {
   constructor(world: World, now: number) {
     this.world = world;
     this.nextTickAt = now + this.tickMs();
+  }
+
+  get world(): World {
+    return this._world;
+  }
+
+  /** Replacing the world drops its queued commands: tracked ones are reported as lost. */
+  set world(w: World) {
+    if (this._world && this.tracked.size) {
+      for (const [s, ref] of this.tracked) this.onResult?.({ ref, ok: false, tick: this._world.tick, cmd: s.cmd, reason: 'the game was rewound or a save was loaded before it ran' });
+      this.tracked.clear();
+    }
+    if (this._world) this._world.commandListener = null;
+    this._world = w;
+    w.commandListener = (s, problem) => this.applied(s, problem);
+  }
+
+  private applied(s: StampedCommand, problem: string | null): void {
+    const ref = this.tracked.get(s);
+    this.tracked.delete(s);
+    if (ref === undefined && !problem) return;
+    const w = this._world;
+    if (problem) {
+      this.onResult?.({ ref, ok: false, tick: w.tick, cmd: s.cmd, reason: problem });
+      return;
+    }
+    let detail: Record<string, unknown> | undefined;
+    if (s.cmd.t === 'buildRun') {
+      const plan = w.validatedResult<ReturnType<typeof planRun>>(s.cmd);
+      if (plan && typeof plan !== 'string') detail = { tiles: plan.tiles.length, skipped: plan.skipped, axis: plan.axis, start: plan.start };
+    }
+    this.onResult?.({ ref, ok: true, tick: w.tick, cmd: s.cmd, detail });
+  }
+
+  /**
+   * Validates and queues a command whose final result is reported through onResult with `ref`.
+   * Returns the reason if it is refused now (then nothing is reported later).
+   */
+  submitTracked(cmd: Command, ref: number): string | null {
+    const r = this._world.submitCommand(cmd);
+    if (typeof r === 'string') return r;
+    this.tracked.set(r, ref);
+    return null;
   }
 
   tickMs(): number {
@@ -78,6 +140,19 @@ export class SimRunner {
     }
     if (now >= this.nextTickAt) this.nextTickAt = now + this.tickMs(); // dropped ticks: resume from now
     return ran;
+  }
+
+  /**
+   * advance(), but an exception in a tick is caught and returned instead of stopping the clock:
+   * the caller reports it, and the next tick is scheduled as usual (review 1).
+   */
+  advanceSafe(now: number): { ran: number; error?: string } {
+    try {
+      return { ran: this.advance(now) };
+    } catch (e) {
+      this.nextTickAt = now + this.tickMs();
+      return { ran: 0, error: e instanceof Error ? `${e.message}${e.stack ? `\n${e.stack}` : ''}` : String(e) };
+    }
   }
 
   /** Milliseconds until the next tick is due. */

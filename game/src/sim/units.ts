@@ -14,6 +14,7 @@ import { B, CARRY_CAPACITY, RECLAIM_RATE, TICK_SECONDS, U, unitInfo } from './ki
 import { centreOf, distToBuilding } from './combat.ts';
 import { unitBuildRate, unitSpeed } from './tuning.ts';
 import { PROGRESS_EPS } from './economy.ts';
+import { clearMove } from './grid.ts';
 import { claimNext, runById } from './runs.ts';
 import type { World } from './world.ts';
 
@@ -67,16 +68,26 @@ function walk(w: World, s: number, key: string, gx: number, gz: number, isGoal: 
   const d = Math.sqrt(dx * dx + dz * dz);
   c.state[s] = US_MOVING;
   if (d <= speed) {
-    c.x[s] = nx;
-    c.z[s] = nz;
-    w.pathPos[s] = w.pathPos[s]! + 1;
+    if (moveTo(w, s, nx, nz)) w.pathPos[s] = w.pathPos[s]! + 1;
   } else {
     c.fx[s] = dx / d;
     c.fz[s] = dz / d;
-    c.x[s] = c.x[s]! + c.fx[s]! * speed;
-    c.z[s] = c.z[s]! + c.fz[s]! * speed;
+    moveTo(w, s, c.x[s]! + c.fx[s]! * speed, c.z[s]! + c.fz[s]! * speed);
   }
   return false;
+}
+
+/**
+ * Moves unit s straight to (x, z) unless that enters or crosses a tile units cannot stand on now
+ * (grid.ts clearMove; review 2): then it stops short, or stays. True if it got all the way.
+ */
+function moveTo(w: World, s: number, x: number, z: number): boolean {
+  const c = w.units.cols;
+  const to = clearMove(c.x[s]!, c.z[s]!, x, z, w.terrain.w, w.terrain.h, (cell) => w.unitPassable(cell));
+  if (!to) return false;
+  c.x[s] = to[0];
+  c.z[s] = to[1];
+  return to[0] === x && to[1] === z;
 }
 
 /** Straight-line step to an exact point (the last part of a move order). */
@@ -86,15 +97,10 @@ function stepTo(w: World, s: number, x: number, z: number): boolean {
   const dx = x - c.x[s]!;
   const dz = z - c.z[s]!;
   const d = Math.sqrt(dx * dx + dz * dz);
-  if (d <= speed) {
-    c.x[s] = x;
-    c.z[s] = z;
-    return true;
-  }
+  if (d <= speed) return moveTo(w, s, x, z);
   c.fx[s] = dx / d;
   c.fz[s] = dz / d;
-  c.x[s] = c.x[s]! + c.fx[s]! * speed;
-  c.z[s] = c.z[s]! + c.fz[s]! * speed;
+  moveTo(w, s, c.x[s]! + c.fx[s]! * speed, c.z[s]! + c.fz[s]! * speed);
   c.state[s] = US_MOVING;
   return false;
 }

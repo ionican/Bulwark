@@ -11,18 +11,12 @@
 import { AS_ATTACKING, AS_MOVING, T_BUILDING, T_NONE, T_UNIT } from './schema.ts';
 import { A, TICK_SECONDS, U, alienInfo, buildingInfo, isBelt, unitInfo } from './kinds.ts';
 import { alienDps, alienSpeed } from './tuning.ts';
+import { clearMove } from './grid.ts';
 import { alienShot, centreOf, distToBuilding } from './combat.ts';
 import { GOAL_COMMANDER, isReserved, type World } from './world.ts';
 
 const DT = TICK_SECONDS;
 const SHOT_INTERVAL = 1;
-
-function solidAt(w: World, x: number, z: number): boolean {
-  const tx = Math.floor(x);
-  const tz = Math.floor(z);
-  if (tx < 0 || tz < 0 || tx >= w.terrain.w || tz >= w.terrain.h) return true;
-  return !w.alienPassable(tz * w.terrain.w + tx);
-}
 
 /** Moves alien s towards (px, pz) by its speed, never into rock or a solid building. */
 function moveTowards(w: World, s: number, px: number, pz: number, speed: number): void {
@@ -38,9 +32,11 @@ function moveTowards(w: World, s: number, px: number, pz: number, speed: number)
   c.fz[s] = fz;
   const nx = c.x[s]! + fx * step;
   const nz = c.z[s]! + fz * step;
-  if (solidAt(w, nx, nz) && !solidAt(w, c.x[s]!, c.z[s]!)) return;
-  c.x[s] = nx;
-  c.z[s] = nz;
+  // Never into, or across, a tile that blocks aliens, whatever the speed (review 2).
+  const to = clearMove(c.x[s]!, c.z[s]!, nx, nz, w.terrain.w, w.terrain.h, (cell) => w.alienPassable(cell));
+  if (!to) return;
+  c.x[s] = to[0];
+  c.z[s] = to[1];
 }
 
 function targetValid(w: World, s: number): boolean {

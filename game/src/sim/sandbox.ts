@@ -36,7 +36,8 @@ export interface SpawnOrigin {
  * the full count cannot be placed (then nothing is spawned).
  */
 export function spawnPlaces(w: World, kind: number, x: number, z: number, count: number): Array<[number, number]> | string {
-  if (w.aliens.count + count > w.aliens.capacity) return `the alien table would overflow (${w.aliens.count} + ${count} > ${w.aliens.capacity})`;
+  const used = w.aliens.count + w.pendingSpawns;
+  if (used + count > w.aliens.capacity) return `the alien table would overflow (${w.aliens.count} aliens + ${w.pendingSpawns} waiting to spawn + ${count} > ${w.aliens.capacity})`;
   const t = w.terrain;
   const x0 = Math.floor(x);
   const z0 = Math.floor(z);

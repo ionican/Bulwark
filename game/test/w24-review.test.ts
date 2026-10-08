@@ -12,7 +12,7 @@ import { A, B, U } from '../src/sim/kinds.ts';
 import { flatTerrain } from '../src/sim/terrain.ts';
 import { serializeWorld } from '../src/sim/save.ts';
 import { decodeSnapshot, encodeSnapshot } from '../src/sim/snapshot.ts';
-import { SimRunner } from '../src/sim/runner.ts';
+import { SimRunner, type CommandResult } from '../src/sim/runner.ts';
 import { setTune, TA_SPEED, TU_SPEED } from '../src/sim/tuning.ts';
 import { EntityRenderer } from '../src/render/entities.ts';
 import { Interpolator } from '../src/render/interp.ts';
@@ -197,7 +197,7 @@ describe('review 2: movement through blocking tiles', () => {
 describe('review 3: the result of each command is reported when it runs', () => {
   it('three spawnAt of 50 at one point before a tick: two applied, the third refused with its reason, delivered', () => {
     const r = new SimRunner(createWorld(1, 'sandbox'), 0);
-    const results: Array<{ ref: number; ok: boolean; reason?: string }> = [];
+    const results: CommandResult[] = [];
     r.onResult = (res) => results.push(res);
     for (let ref = 1; ref <= 3; ref++) expect(r.submitTracked({ t: 'spawnAt', kind: A.breaker, x: 40.5, z: 40.5, count: 50 }, ref)).toBeNull();
     expect(results).toEqual([]); // nothing is final before the tick runs
@@ -213,14 +213,14 @@ describe('review 3: the result of each command is reported when it runs', () => 
 
   it('a refusal at submit is final at once, and commands lost to a load are reported', () => {
     const r = new SimRunner(createWorld(1, 'sandbox'), 0);
-    const results: Array<{ ref: number; ok: boolean; reason?: string }> = [];
+    const results: CommandResult[] = [];
     r.onResult = (res) => results.push(res);
     expect(r.submitTracked({ t: 'spawnAt', kind: A.breaker, x: 40.5, z: 40.5, count: 99 }, 7)).toMatch(/1\.\.50/);
     expect(results).toEqual([]); // the caller reports a submit refusal itself
     expect(r.submitTracked({ t: 'clearAliens' }, 8)).toBeNull();
     r.paused = true;
     r.load(serializeWorld(createWorld(2, 'sandbox')));
-    expect(results).toEqual([{ ref: 8, ok: false, reason: expect.stringMatching(/load/) }]);
+    expect(results.map(({ ref, ok, reason }) => ({ ref, ok, reason }))).toEqual([{ ref: 8, ok: false, reason: expect.stringMatching(/load/) }]);
   });
 });
 
@@ -243,8 +243,7 @@ describe('review 4: the renderer draws every reserved site', () => {
     camera.updateMatrixWorld();
     renderer.update({ camera, viewportHeight: 900, yaw: 0, snapshot: snap, aliens: interp.aliens, units: interp.units, projectiles: interp.projectiles, selection: [], showRoutes: true });
     expect(renderer.counts.culled).toBe(0);
-    // (Before the fix there was no reservedDrawn; the batch's own count shows the 1,024 cap.)
-    expect(renderer.reservedDrawn ?? (renderer as unknown as { reserved: { counts: Int32Array } }).reserved.counts[0]).toBe(1536);
+    expect(renderer.reservedDrawn).toBe(1536);
     expect(renderer.overflowed).toBe(false);
   });
 });

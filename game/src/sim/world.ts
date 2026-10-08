@@ -237,6 +237,8 @@ export class World {
   commanderDeaths = 0;
   /** Not saved: categories whose field was rebuilt since the origin routes were traced (all, at first). */
   readonly originStale = new Uint8Array(CATEGORY_COUNT).fill(1);
+  /** Not saved: told the outcome of each command as it is applied or refused at its tick (runner.ts). */
+  commandListener: ((s: StampedCommand, problem: string | null) => void) | null = null;
   /** Not saved: what validation worked out for the command it last passed (validate.ts). */
   validated: { cmd: Command; result: unknown } | null = null;
   buildingsLost = 0;
@@ -294,10 +296,15 @@ export class World {
    * Use this for anything that comes from a player; enqueue() skips validation (tests, replays).
    */
   submit(cmd: Command, atTick = this.tick): string | null {
+    const r = this.submitCommand(cmd, atTick);
+    return typeof r === 'string' ? r : null;
+  }
+
+  /** submit(), returning the queued command (to follow it to its tick) or the refusal reason. */
+  submitCommand(cmd: Command, atTick = this.tick): StampedCommand | string {
     const problem = validateCommand(this, cmd);
     if (problem) return problem;
-    this.enqueue(cmd, atTick);
-    return null;
+    return this.enqueue(cmd, atTick);
   }
 
   /** True when the next step() starts a wave (the runner takes a checkpoint first). */
@@ -323,6 +330,7 @@ export class World {
         if (this.applyRejected.length > 50) this.applyRejected.shift();
       } else this.apply(s.cmd);
       this.log.push(s);
+      this.commandListener?.(s, problem);
     }
     // Sandbox: the commander comes back at the base 10 s after it fell.
     if (this.commanderRespawnTick >= 0 && this.tick >= this.commanderRespawnTick) {
@@ -549,7 +557,7 @@ export class World {
   resetSandbox(full: boolean): void {
     // The fresh start is made with the kept multipliers already set, so its units are created tuned.
     const fresh = createWorld(this.seed, 'sandbox', full ? { terrain: this.terrain } : { terrain: this.terrain, tuning: this.tuning, unlimited: this.unlimited });
-    const keep = new Set(['tick', 'seq', 'queue', 'log', 'applyRejected', 'terrain', 'seed']);
+    const keep = new Set(['tick', 'seq', 'queue', 'log', 'applyRejected', 'terrain', 'seed', 'commandListener']);
     const self = this as unknown as Record<string, unknown>;
     const src = fresh as unknown as Record<string, unknown>;
     for (const k of Object.keys(src)) if (!keep.has(k)) self[k] = src[k];
@@ -814,6 +822,8 @@ export class World {
   private stepSpawns(): void {
     for (const p of this.pending) {
       if (p.left <= 0 || this.tick < p.nextTick) continue;
+      // A full alien table defers the spawn to a later tick rather than failing (review 1).
+      if (this.aliens.count >= this.aliens.capacity) continue;
       const e = this.terrain.entries[p.entry] ?? this.terrain.entries[0]!;
       const side = this.rng.range(-3, 3);
       // Spread along the edge, perpendicular to the entry direction.

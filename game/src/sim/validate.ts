@@ -136,8 +136,13 @@ function check(w: World, cmd: Command): string | null {
       if (cmd.all === true) return null;
       if (RESEARCH_INDEX[cmd.node as string] === undefined) return `unknown research node ${JSON.stringify(cmd.node)}`;
       return null;
-    case 'startWave':
-      return isInt(cmd.index) && cmd.index >= 0 && cmd.index < map1.waves.length ? null : `wave index must be 0..${map1.waves.length - 1}`;
+    case 'startWave': {
+      if (!isInt(cmd.index) || cmd.index < 0 || cmd.index >= map1.waves.length) return `wave index must be 0..${map1.waves.length - 1}`;
+      const n = map1.waves[cmd.index]!.groups.reduce((sum, g) => sum + g.count, 0);
+      const used = w.aliens.count + w.pendingSpawns;
+      if (used + n > w.aliens.capacity) return `the alien table would overflow (${w.aliens.count} aliens + ${w.pendingSpawns} waiting to spawn + ${n} in wave ${cmd.index} > ${w.aliens.capacity})`;
+      return null;
+    }
     case 'clearAliens':
     case 'clearWrecks':
     case 'resetStats':
