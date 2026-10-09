@@ -14,6 +14,7 @@ import { B, BUILDING_KINDS, buildingFootprint } from '../src/sim/kinds.ts';
 import { World } from '../src/sim/world.ts';
 import { DragPreview } from '../src/render/dragPreview.ts';
 import { Ghost } from '../src/render/ghost.ts';
+import { BLOCKED_COLOUR, inspectPreview } from '../src/render/preview.ts';
 import { KIND_SPOTS } from './w24r2a-fixtures.ts';
 import { drawAt, nextEpoch, renderer, snapAt, terrain } from './w24r2b-fixtures.ts';
 
@@ -131,6 +132,17 @@ describe('W27 criterion 2: the wireframe pulses with real time', () => {
     ghost.update(0.25);
     expect(a).toBeGreaterThan(0);
     expect(wireOpacity(ui)).toBe(a);
+  });
+
+  it('blocked: the wireframe is drawn red, a different colour from the allowed one (shape cues kept)', () => {
+    const ui = new Scene();
+    const ghost = new Ghost(ui, terrain, r);
+    ghost.show(B.gun, 48, 56, 0, true, 0.05, 0, 0);
+    const allowed = inspectPreview(ui)['overlay/preview/wire']!.colour;
+    ghost.show(B.gun, 48, 56, 0, false, 0.05, 0, 0);
+    const blocked = inspectPreview(ui)['overlay/preview/wire']!.colour;
+    expect(blocked).toBe(BLOCKED_COLOUR);
+    expect(blocked).not.toBe(allowed);
   });
 });
 

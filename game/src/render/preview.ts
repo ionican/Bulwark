@@ -3,7 +3,8 @@
 // objects at the same matrices), so its size reads before it is placed. The wireframe's opacity
 // pulses once a second with real time (it is interface, not game state: no game clock, so it
 // pulses while paused). Where placement is blocked the pulse stops and the opacity holds steady,
-// so validity is shown by motion as well as by the outline and mark shapes (ghost.ts).
+// and the wireframe turns red (Richard, 2026-10-09), so validity is shown by motion and colour as
+// well as by the outline and mark shapes (ghost.ts); the colour is additional, never the only cue.
 
 import { DynamicDrawUsage, Group, InstancedMesh, MeshBasicMaterial, type BufferGeometry, type Object3D } from 'three';
 
@@ -11,6 +12,10 @@ import { DynamicDrawUsage, Group, InstancedMesh, MeshBasicMaterial, type BufferG
 export const PULSE_PERIOD = 1;
 /** Opacity while placement is blocked (no pulse). */
 export const BLOCKED_OPACITY = 0.3;
+
+/** Wireframe colour where placement is allowed, and where it is blocked. */
+export const ALLOWED_COLOUR = 0xbff4ff;
+export const BLOCKED_COLOUR = 0xff3b30;
 
 /** Wireframe opacity at `time` seconds of real time: 0.2 … 0.8, period PULSE_PERIOD. */
 export function pulseOpacity(time: number): number {
@@ -32,7 +37,7 @@ export class WireframePool {
     parent: Object3D,
     private readonly name: string,
   ) {
-    this.material = new MeshBasicMaterial({ color: 0xbff4ff, wireframe: true, transparent: true, opacity: pulseOpacity(0), depthWrite: false, toneMapped: false, fog: false });
+    this.material = new MeshBasicMaterial({ color: ALLOWED_COLOUR, wireframe: true, transparent: true, opacity: pulseOpacity(0), depthWrite: false, toneMapped: false, fog: false });
     this.group.name = name;
     parent.add(this.group);
   }
@@ -82,6 +87,11 @@ export class WireframePool {
     this.material.opacity = v;
   }
 
+  /** Blocked placement draws the wireframe red; allowed, the usual pale blue. */
+  set blocked(v: boolean) {
+    this.material.color.setHex(v ? BLOCKED_COLOUR : ALLOWED_COLOUR);
+  }
+
   private make(geometry: BufferGeometry, cap: number): InstancedMesh {
     const m = new InstancedMesh(geometry, this.material, cap);
     m.name = this.name;
@@ -100,14 +110,14 @@ export class WireframePool {
 /**
  * The wireframe previews as drawn (scripts read them back from the scene graph): per mesh name
  * (`overlay/preview/wire`, `overlay/drag/wire`), the visible instances, the distinct geometries,
- * the opacity, and the ground centre (x, z) of the instances' positions.
+ * the opacity, the colour (hex), and the ground centre (x, z) of the instances' positions.
  */
-export function inspectPreview(root: Object3D): Record<string, { instances: number; geometries: number; opacity: number; centre: [number, number] }> {
-  const out: Record<string, { instances: number; geometries: number; opacity: number; centre: [number, number] }> = {};
+export function inspectPreview(root: Object3D): Record<string, { instances: number; geometries: number; opacity: number; colour: number; centre: [number, number] }> {
+  const out: Record<string, { instances: number; geometries: number; opacity: number; colour: number; centre: [number, number] }> = {};
   const geos = new Map<string, Set<string>>();
   root.traverseVisible((o) => {
     if (!(o instanceof InstancedMesh) || o.count <= 0 || (o.name !== 'overlay/preview/wire' && o.name !== 'overlay/drag/wire')) return;
-    const e = (out[o.name] ??= { instances: 0, geometries: 0, opacity: (o.material as MeshBasicMaterial).opacity, centre: [0, 0] });
+    const e = (out[o.name] ??= { instances: 0, geometries: 0, opacity: (o.material as MeshBasicMaterial).opacity, colour: (o.material as MeshBasicMaterial).color.getHex(), centre: [0, 0] });
     const a = o.instanceMatrix.array as Float32Array;
     for (let i = 0; i < o.count; i++) {
       e.centre[0] += a[i * 16 + 12]!;

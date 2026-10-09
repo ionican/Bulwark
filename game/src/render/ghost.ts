@@ -3,7 +3,8 @@
 //
 // W27 (models view): the building is drawn as a wireframe of the full-detail model the renderer
 // draws for it placed there (models.ts previewBuilding), pulsing once a second with real time
-// (preview.ts); where placement is blocked the pulse stops. The wireframe is captured again only
+// (preview.ts); where placement is blocked the pulse stops and the wireframe turns red (in addition
+// to the dashed outline and cross, never instead of them). The wireframe is captured again only
 // when the kind, tile or direction changes. Greybox view (no model renderer): the simple model,
 // see-through, as before.
 
@@ -113,6 +114,7 @@ export class Ghost {
   update(time: number): void {
     if (!this.wire || !this.state) return;
     this.wire.opacity = this.state.ok ? pulseOpacity(time) : BLOCKED_OPACITY;
+    this.wire.blocked = !this.state.ok;
   }
 
   hide(): void {
