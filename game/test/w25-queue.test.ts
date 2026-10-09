@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_ORDERS, World } from '../src/sim/world.ts';
 import { B, U } from '../src/sim/kinds.ts';
-import { BF_COMPLETE, BF_STARTED, Q_BUILD, isReserved } from '../src/sim/schema.ts';
+import { BF_COMPLETE, BF_STARTED, isReserved } from '../src/sim/schema.ts';
 import { SimRunner, type CommandResult } from '../src/sim/runner.ts';
 import { runById } from '../src/sim/runs.ts';
 import type { Command } from '../src/sim/commands.ts';
@@ -19,6 +19,8 @@ const flat = () => flatWorld(48, 48, { rich: true });
 const slot = (w: World, id: number) => w.units.slotForId(id);
 const ordersOf = (w: World, id: number): Order[] => w.orders[slot(w, id)] ?? [];
 const exists = (w: World, site: number) => w.buildings.slotForId(site) >= 0;
+/** W25c: the id of order `index` in unit `id`'s queue (dequeue names it). */
+const oidAt = (w: World, id: number, index: number) => ordersOf(w, id)[index]!.oid;
 const flagsOf = (w: World, site: number) => w.buildings.cols.flags[w.buildings.slotForId(site)]!;
 /** Building ids of a unit's build orders, in queue order. */
 const buildIds = (w: World, id: number) => ordersOf(w, id).map((o) => (o.t === 'build' ? o.id : o.t === 'run' ? -o.run : NaN));
@@ -86,7 +88,7 @@ describe('W25 acceptance 2: no Shift replaces, and orphaned reserved sites go', 
     for (const s of [X, Y, Z]) expect(isReserved(flagsOf(w, s))).toBe(true);
     const before = w.buildings.count;
     apply(w, { t: 'move', ids: [a], x: 30.5, z: 30.5 });
-    expect(ordersOf(w, a)).toEqual([{ t: 'move', x: 30.5, z: 30.5 }]);
+    expect(ordersOf(w, a)).toEqual([{ t: 'move', x: 30.5, z: 30.5, oid: expect.any(Number) }]);
     for (const s of [X, Y, Z]) expect(exists(w, s), `site ${s} removed`).toBe(false);
     expect(w.buildings.count).toBe(before - 3);
     expect(w.occupancy[6 * w.terrain.w + 6]).toBe(0); // the tiles are free again
@@ -179,7 +181,7 @@ describe('W25 acceptance 3: dequeue and clearQueue', () => {
 
   it('removing Y from A leaves X then Z, and Y’s orphaned site is removed', () => {
     const { w, a, X, Y, Z } = threeQueued();
-    apply(w, { t: 'dequeue', id: a, index: 1 });
+    apply(w, { t: 'dequeue', id: a, order: oidAt(w, a, 1) });
     expect(buildIds(w, a)).toEqual([X, Z]);
     expect(exists(w, Y)).toBe(false);
     expect(exists(w, X) && exists(w, Z)).toBe(true);
@@ -190,26 +192,27 @@ describe('W25 acceptance 3: dequeue and clearQueue', () => {
     const b = w.spawnUnit(U.engineer, 44.5, 44.5);
     apply(w, { t: 'move', ids: [b], x: 46.5, z: 46.5 });
     apply(w, { t: 'assist', ids: [b], target: Y, queue: true });
-    apply(w, { t: 'dequeue', id: a, index: 1 });
+    apply(w, { t: 'dequeue', id: a, order: oidAt(w, a, 1) });
     expect(exists(w, Y)).toBe(true);
   });
 
-  it('dequeue names the item: when the queue moved on before the command ran, the same item is removed', () => {
+  it('dequeue names the order (W25c: by its id): when the queue moved on before the command ran, the same order is removed', () => {
     const { w, a, X, Y, Z } = threeQueued();
-    // The render thread saw [X, Y, Z] and asks for Y at index 1; X is gone before the tick runs.
-    expect(w.submit({ t: 'dequeue', id: a, index: 1, expect: { kind: Q_BUILD, target: Y } })).toBeNull();
+    // The render thread saw [X, Y, Z] and asks for Y (then at index 1); X is gone before the tick runs.
+    const y = oidAt(w, a, 1);
+    expect(w.submit({ t: 'dequeue', id: a, order: y })).toBeNull();
     w.orders[slot(w, a)]!.shift();
     w.removeBuilding(w.buildings.slotForId(X));
     w.step();
     expect(buildIds(w, a)).toEqual([Z]);
     expect(exists(w, Y)).toBe(false);
-    // Asking for an item that is no longer queued is refused.
-    expect(w.submit({ t: 'dequeue', id: a, index: 0, expect: { kind: Q_BUILD, target: Y } })).toMatch(/no longer|not in/);
+    // Asking for an order that is no longer queued is refused.
+    expect(w.submit({ t: 'dequeue', id: a, order: y })).toMatch(/no longer|not in/);
   });
 
   it('removing the current order (index 0) moves the unit on to the next', () => {
     const { w, a, Y, Z } = threeQueued();
-    apply(w, { t: 'dequeue', id: a, index: 0 });
+    apply(w, { t: 'dequeue', id: a, order: oidAt(w, a, 0) });
     expect(buildIds(w, a)).toEqual([Y, Z]);
     expect(w.pathKey[slot(w, a)]).toBe(`b${Y}`); // the path was planned afresh, to Y
   });
@@ -227,12 +230,12 @@ describe('W25 acceptance 3: dequeue and clearQueue', () => {
     expect(exists(w, Z)).toBe(false);
   });
 
-  it('an invalid index or id is refused with a reason', () => {
+  it('an invalid order id or unit id is refused with a reason', () => {
     const { w, a } = threeQueued();
-    expect(w.submit({ t: 'dequeue', id: a, index: 3 })).toMatch(/index/);
-    expect(w.submit({ t: 'dequeue', id: a, index: -1 })).toMatch(/index/);
-    expect(w.submit({ t: 'dequeue', id: a, index: 0.5 })).toMatch(/index/);
-    expect(w.submit({ t: 'dequeue', id: 999_999, index: 0 })).toMatch(/unit/);
+    expect(w.submit({ t: 'dequeue', id: a, order: 999 })).toMatch(/no order 999/);
+    expect(w.submit({ t: 'dequeue', id: a, order: -1 })).toMatch(/order id/);
+    expect(w.submit({ t: 'dequeue', id: a, order: 0.5 })).toMatch(/order id/);
+    expect(w.submit({ t: 'dequeue', id: 999_999, order: oidAt(w, a, 0) })).toMatch(/unit/);
     expect(w.submit({ t: 'clearQueue', ids: [a, 999_999] })).toMatch(/unit/);
     expect(w.submit({ t: 'clearQueue', ids: [] })).toMatch(/ids/);
     expect(w.submit({ t: 'clearQueue', ids: 'x' as unknown as number[] })).toMatch(/ids/);
@@ -243,14 +246,15 @@ describe('W25 acceptance 3: dequeue and clearQueue', () => {
     const runner = new SimRunner(w, 0);
     const results: CommandResult[] = [];
     runner.onResult = (r) => results.push(r);
-    expect(runner.submitTracked({ t: 'dequeue', id: a, index: 2 }, 1)).toBeNull();
-    expect(runner.submitTracked({ t: 'dequeue', id: a, index: 2 }, 2)).toBeNull();
+    const z = oidAt(w, a, 2);
+    expect(runner.submitTracked({ t: 'dequeue', id: a, order: z }, 1)).toBeNull();
+    expect(runner.submitTracked({ t: 'dequeue', id: a, order: z }, 2)).toBeNull();
     runner.stepOnce();
     expect(results.map((r) => [r.ref, r.ok])).toEqual([
       [1, true],
       [2, false],
     ]);
-    expect(results[1]!.reason).toMatch(/index/);
+    expect(results[1]!.reason).toMatch(/completed or removed/);
   });
 });
 

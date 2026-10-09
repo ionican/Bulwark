@@ -15,7 +15,8 @@
 // W25b (Richard, 9 Oct: "stop should clear them"): `stop` clears by the same rule. A unit's death
 // and an unreachable site are unchanged from W24: their sites stay.
 //
-// Also here: the queue as the snapshot carries it (order kind, target, run id, position).
+// Also here: the queue as the snapshot carries it (order kind, target, run id, position, order id),
+// and `dequeue`'s lookup by order id (W25c).
 
 import { B } from './kinds.ts';
 import { BF_COMPLETE, Q_BUILD, Q_MOVE, Q_PRODUCE, Q_RECLAIM, Q_RUN, isReserved } from './schema.ts';
@@ -39,24 +40,14 @@ export function orderKind(o: Order): number {
 }
 
 /**
- * The id that names an order's item for `dequeue`'s `expect`: the building (build, assist, upgrade,
- * gate) or wreck id, the run id for a wall run, -1 for move and produce.
+ * Index in unit slot `slot`'s queue of the order with id `oid` (W25c), or -1 when the unit does not
+ * hold it (completed, removed, or never given to this unit). Order ids are unique within a world, so
+ * a dequeue sent from an older snapshot removes the order it named or nothing: two moves, or two
+ * produce orders, can no longer stand in for each other (the review's finding 3).
  */
-export function orderItem(o: Order): number {
-  return o.t === 'build' || o.t === 'reclaim' ? o.id : o.t === 'run' ? o.run : -1;
-}
-
-/**
- * Index in unit slot `slot`'s queue that a dequeue removes, or -1. Without `expect`, `index` itself
- * when it is in range. With `expect`, `index` if the order there is that item, otherwise the first
- * order that is (the queue moved on between the snapshot and the command's tick).
- */
-export function dequeueIndex(w: World, slot: number, index: number, expect?: { kind: number; target: number }): number {
+export function dequeueIndex(w: World, slot: number, oid: number): number {
   const orders = w.orders[slot] ?? [];
-  if (!expect) return index >= 0 && index < orders.length ? index : -1;
-  const is = (o: Order | undefined) => o !== undefined && orderKind(o) === expect.kind && orderItem(o) === expect.target;
-  if (is(orders[index])) return index;
-  return orders.findIndex(is);
+  return orders.findIndex((o) => o.oid === oid);
 }
 
 /** Removes building `id` if it is a reserved site (never a gate site; see the header). */

@@ -724,12 +724,9 @@ const bar = new BuildBar(
 // ---- W25: order queues of the selected units ---------------------------------------------------
 
 const queuePanel = new QueuePanel({
-  remove: (unit, index, expect) => void commandResult({ t: 'dequeue', id: unit, index, expect }),
+  remove: (unit, oid) => void commandResult({ t: 'dequeue', id: unit, order: oid }),
   clear: (unit) => void commandResult({ t: 'clearQueue', ids: [unit] }),
 });
-
-/** The id `dequeue`'s `expect` names an item by (commands.ts): the run id for a run, else the target. */
-const queueItemId = (it: QueueItem) => (it.kind === Q_RUN ? it.run : it.target);
 
 /** One queue item in words. */
 function queueItemText(s: Snapshot, it: QueueItem): string {
@@ -765,7 +762,7 @@ function selectedQueues(): QueuePanelUnit[] {
       id: p.id,
       name: `${UNIT_INFO[UNIT_KINDS[p.kind]!].label} ${nth + 1}`,
       lineStyle: DASH_NAMES[nth % DASH_NAMES.length]!,
-      items: queueOf(s, row).map((it) => ({ text: queueItemText(s, it), kind: it.kind, item: queueItemId(it) })),
+      items: queueOf(s, row).map((it) => ({ text: queueItemText(s, it), oid: it.oid })),
     });
   }
   return out;
@@ -1436,14 +1433,14 @@ const game = {
   worldToScreen,
   list,
   // ---- W25: build queue
-  /** Every unit's queue from the snapshot: kind name, target id, run id, position. */
+  /** Every unit's queue from the snapshot: kind name, target id, run id, position, order id. */
   get queues() {
     const s = interp.curr;
     if (!s) return [];
     const names = ['move', 'build', 'run', 'produce', 'reclaim'];
     return Array.from({ length: s.units.count }, (_, row) => ({
       id: s.units.id[row]!,
-      orders: queueOf(s, row).map((it) => ({ kind: names[it.kind] ?? String(it.kind), target: it.target, run: it.run, x: it.x, z: it.z, text: queueItemText(s, it) })),
+      orders: queueOf(s, row).map((it) => ({ kind: names[it.kind] ?? String(it.kind), target: it.target, run: it.run, x: it.x, z: it.z, oid: it.oid, text: queueItemText(s, it) })),
     }));
   },
   /**
@@ -1490,8 +1487,8 @@ const game = {
   get shiftPlaced() {
     return shiftPlaced;
   },
-  /** Removes item `index` of unit `id`'s queue (resolves with the final result, as the W24 helpers). */
-  dequeue: (id: number, index: number, expect?: { kind: number; target: number }) => commandResult({ t: 'dequeue', id, index, expect }),
+  /** Removes order `order` (its id, as `queues` lists it) from unit `id`'s queue (resolves with the final result). */
+  dequeue: (id: number, order: number) => commandResult({ t: 'dequeue', id, order }),
   clearQueue: (ids: number[]) => commandResult({ t: 'clearQueue', ids }),
 };
 

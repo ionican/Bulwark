@@ -22,9 +22,8 @@ const css = `
 export interface QueuePanelItem {
   /** What the item is, e.g. "Build Gun turret (reserved)". */
   text: string;
-  /** Identity for the remove control (the snapshot's kind and the item id; see commands.ts dequeue). */
-  kind: number;
-  item: number;
+  /** The order's id (W25c): the remove control's dequeue names it (commands.ts dequeue). */
+  oid: number;
 }
 
 export interface QueuePanelUnit {
@@ -37,7 +36,7 @@ export interface QueuePanelUnit {
 }
 
 export interface QueuePanelHandlers {
-  remove(unit: number, index: number, expect: { kind: number; target: number }): void;
+  remove(unit: number, oid: number): void;
   clear(unit: number): void;
 }
 
@@ -60,10 +59,7 @@ export class QueuePanel {
       if (!b) return;
       const unit = Number(b.dataset.unit);
       if (b.classList.contains('clear')) this.handlers.clear(unit);
-      else if (b.classList.contains('rm')) {
-        const index = Number(b.dataset.index);
-        this.handlers.remove(unit, index, { kind: Number(b.dataset.kind), target: Number(b.dataset.item) });
-      }
+      else if (b.classList.contains('rm')) this.handlers.remove(unit, Number(b.dataset.oid));
     });
   }
 
@@ -77,7 +73,7 @@ export class QueuePanel {
       this.el.textContent = '';
       return;
     }
-    const structure = JSON.stringify(units.map((u) => [u.id, u.name, u.lineStyle, u.items.map((i) => [i.kind, i.item])]));
+    const structure = JSON.stringify(units.map((u) => [u.id, u.name, u.lineStyle, u.items.map((i) => i.oid)]));
     if (structure !== this.structure) {
       this.structure = structure;
       this.rebuild();
@@ -117,8 +113,7 @@ export class QueuePanel {
         t.textContent = item.text;
         const rm = this.button('rm', '×', `Remove item ${index + 1} (${item.text}) from ${u.name}'s queue`, u.id);
         rm.dataset.index = String(index);
-        rm.dataset.kind = String(item.kind);
-        rm.dataset.item = String(item.item);
+        rm.dataset.oid = String(item.oid);
         li.append(n, t, rm);
         list.appendChild(li);
       });

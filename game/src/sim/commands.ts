@@ -45,13 +45,13 @@ export type Command =
   | { t: 'gate'; ids: number[]; tx: number; ty: number; axis?: 'x' | 'z'; queue?: boolean }
   // ---- W25: build queue ----
   /**
-   * Remove one order from unit `id`'s queue (0 = the current order). `expect` names the item as the
-   * snapshot showed it (schema.ts Q_* kind and target: building, wreck or run id, -1 for a move or
-   * produce order): if the queue moved on before the command's tick, the first order matching it
-   * is removed instead, and it is refused if none matches. A reserved site no unit holds any more
-   * is removed (world.ts dropOrphans).
+   * Remove order `order` (its id: units.ts Order.oid, the snapshot's queue `oid`) from unit `id`'s
+   * queue, wherever it is in the queue by the command's tick. W25c: refused with a reason when the
+   * unit no longer holds it (completed or removed), so a stale request never removes another order
+   * (it used to name a kind and target, which every move, and every produce order, shared). A
+   * reserved site no unit holds any more is removed (world.ts dropOrphans).
    */
-  | { t: 'dequeue'; id: number; index: number; expect?: { kind: number; target: number } }
+  | { t: 'dequeue'; id: number; order: number }
   /** Empty the queues of `ids`, under the same rule. */
   | { t: 'clearQueue'; ids: number[] }
   // Sandbox only (sandbox.ts): refused with a reason in any other scenario.

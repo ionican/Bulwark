@@ -114,12 +114,10 @@ function check(w: World, cmd: Command): string | null {
       if (!isInt(cmd.id)) return 'dequeue needs a unit id';
       const s = w.units.slotForId(cmd.id);
       if (s < 0) return `unit ${cmd.id} does not exist`;
-      if (!isInt(cmd.index) || cmd.index < 0) return `dequeue index must be an integer 0 or more (got ${JSON.stringify(cmd.index)})`;
-      const e = cmd.expect;
-      if (e !== undefined && (!e || typeof e !== 'object' || !isInt(e.kind) || !isInt(e.target))) return 'dequeue expect needs an integer kind and target';
-      const n = w.orders[s]?.length ?? 0;
-      if (dequeueIndex(w, s, cmd.index, e) >= 0) return null;
-      return e ? `that order is no longer in unit ${cmd.id}'s queue` : `index ${cmd.index} is out of range: unit ${cmd.id} has ${n} order${n === 1 ? '' : 's'} queued`;
+      if (!isInt(cmd.order) || cmd.order < 1) return `dequeue needs an order id, an integer 1 or more (got ${JSON.stringify(cmd.order)})`;
+      if (dequeueIndex(w, s, cmd.order) >= 0) return null;
+      // Ids come from one counter (world.ts nextOrderId): below it, the order existed once.
+      return cmd.order < w.nextOrderId ? `order ${cmd.order} is no longer in unit ${cmd.id}'s queue (completed or removed)` : `no order ${cmd.order}`;
     }
     case 'clearQueue': {
       if (!idList(cmd.ids) || !cmd.ids.length) return 'clearQueue needs unit ids';

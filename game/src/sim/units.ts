@@ -20,7 +20,8 @@ import type { World } from './world.ts';
 
 const DT = TICK_SECONDS;
 
-export type Order =
+/** An order as a command makes it, before the world gives it its id (world.ts giveOrder). */
+export type OrderSpec =
   | { t: 'move'; x: number; z: number }
   | { t: 'build'; id: number }
   /** Work through wall run `run` (runs.ts); `site` is the tile currently claimed (-1 = none). */
@@ -29,6 +30,12 @@ export type Order =
   | { t: 'produce'; progress: number }
   /** phase 0 collecting, 1 delivering; (x, z) where the last wreck was. */
   | { t: 'reclaim'; id: number; phase: number; x: number; z: number };
+
+/**
+ * A queued order. `oid` (W25c) is its id: given once from the world's counter (world.ts
+ * nextOrderId) when the order is queued, never changed and never reused; `dequeue` names it.
+ */
+export type Order = OrderSpec & { oid: number };
 
 const RECLAIM_REACH = 1.5;
 const UNLOAD_REACH = 1.5;

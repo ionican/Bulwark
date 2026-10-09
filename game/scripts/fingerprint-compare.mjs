@@ -8,9 +8,11 @@
 // Strict (the default): every snapshot and save hash must be identical.
 // --strip-queue (W25): both runs hash snapshots with the W25 queue section removed and saves with
 // the state-format word set back to 4 (fingerprint.test.ts FP_STRIP_QUEUE), so a tree that only
-// added the queue section compares identical with one from before it. Saves are compared only when
-// both trees write the same SAVE_VERSION; if the save format itself changed, the save entries are
-// listed and left out of the verdict.
+// added the queue section compares identical with one from before it. W25c: the strip also removes
+// the order ids (snapshot version 6's queue section; save version 3's `oid` per order and
+// `nextOrderId`), normalising every save to version 2, state format 4, so saves are compared too.
+// A label of the old form `save-v<N>:` from another fingerprint script is still compared only when
+// both sides wrote the same version.
 //
 // The baseline's game/ and model/ are exported with `git archive` into a temporary directory that
 // uses this tree's node_modules, and both runs use this tree's copy of the fingerprint script, so

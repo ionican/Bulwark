@@ -65,7 +65,7 @@ function scripted(): World {
     at(2, () => w.enqueue({ t: 'reclaim', ids: [engs[3]!], wreck, queue: true })),
     at(2, () => w.enqueue({ t: 'produce', id: cmdr })),
     at(3, () => w.enqueue({ t: 'produce', id: cmdr })),
-    at(40, () => w.enqueue({ t: 'dequeue', id: engs[0]!, index: 1 })),
+    at(40, () => w.enqueue({ t: 'dequeue', id: engs[0]!, order: w.orders[w.units.slotForId(engs[0]!)]![1]!.oid })),
     at(60, () => w.enqueue({ t: 'build', ids: [engs[4]!], kind: B.depot, tx: 66, ty: 66, queue: true })),
   ];
   for (let t = 0; t < 120; t++) {
@@ -76,8 +76,8 @@ function scripted(): World {
 }
 
 describe('W25 acceptance 5: the queue in the snapshot', () => {
-  it('the snapshot version is bumped for the queue section', () => {
-    expect(SNAPSHOT_VERSION).toBe(5);
+  it('the snapshot version is bumped for the queue section (W25c: 6, order ids)', () => {
+    expect(SNAPSHOT_VERSION).toBe(6);
   });
 
   it('each unit’s queue in the snapshot matches the world’s orders after a scripted sequence', () => {
@@ -92,7 +92,7 @@ describe('W25 acceptance 5: the queue in the snapshot', () => {
       const got = queueOf(snap, row);
       expect(got.length, `unit ${id}`).toBe(want.length);
       got.forEach((g, i) => {
-        expect([g.kind, g.target, g.run], `unit ${id} order ${i}`).toEqual([want[i]!.kind, want[i]!.target, want[i]!.run]);
+        expect([g.kind, g.target, g.run, g.oid], `unit ${id} order ${i}`).toEqual([want[i]!.kind, want[i]!.target, want[i]!.run, w.orders[s]![i]!.oid]);
         expect(g.x).toBeCloseTo(want[i]!.x, 4);
         expect(g.z).toBeCloseTo(want[i]!.z, 4);
         kinds.add(g.kind);
@@ -115,7 +115,7 @@ describe('W25 acceptance 5: the queue in the snapshot', () => {
     for (let row = 0; row < snap.units.count; row++) expect(queueOf(snap, row)).toEqual(queueOf(decodeSnapshot(encodeSnapshot(restored)), row));
     // Both worlds go on identically, queues included (a dequeue on the restored one too).
     const eng = unitIds(w, U.engineer)[1]!;
-    for (const x of [w, restored]) x.enqueue({ t: 'dequeue', id: eng, index: 0 });
+    for (const x of [w, restored]) x.enqueue({ t: 'dequeue', id: eng, order: x.orders[x.units.slotForId(eng)]![0]!.oid });
     for (let t = 0; t < 200; t++) {
       w.step();
       restored.step();

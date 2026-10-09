@@ -8,6 +8,11 @@
 // put back to 4, so a tree with the queue section compares equal to one without when nothing else
 // changed. Save hashes are labelled with their SAVE_VERSION. Self-contained on purpose: the compare
 // script runs this file against a baseline tree whose sources have none of this.
+// W25c: snapshot version 6 adds order ids to the queue section and its length (G_QUEUE_BYTES), which
+// the strip uses; save version 3 adds each order's `oid` and the world's `nextOrderId`. Stripped,
+// a save is normalised the same way on both trees: its JSON parsed, every order's `oid` and the
+// `nextOrderId` scalar deleted, re-serialised, and the header words set to save version 2, state
+// format 4. Nothing else in the save is touched, so equal hashes mean equal state apart from the ids.
 import { it } from 'vitest';
 import { createWorld } from '../src/sim/scenarios.ts';
 import { A, B, U } from '../src/sim/kinds.ts';
@@ -28,28 +33,50 @@ const H_N_UNITS = 9;
 const H_BYTES = 10;
 const GLOBALS_AT = 16 * 4;
 const G_QUEUE_ORDERS = 44;
+const G_QUEUE_BYTES = 45; // version 6 (W25c)
 /** A version ≥ 5 snapshot as version 4 would have written it: the trailing queue section removed. */
 function stripQueue(bytes: Uint8Array): Uint8Array {
   const h = new Uint32Array(bytes.buffer, bytes.byteOffset, 16);
   if (h[H_VERSION]! < 5) return bytes;
-  const orders = new Float64Array(bytes.buffer, bytes.byteOffset + GLOBALS_AT, 48)[G_QUEUE_ORDERS]!;
-  const len = h[H_BYTES]! - (h[H_N_UNITS]! * 4 + orders * 20); // a count per unit, 5 × 4 bytes per order
+  const g = new Float64Array(bytes.buffer, bytes.byteOffset + GLOBALS_AT, 48);
+  // version 5: a count per unit and 5 × 4 bytes per order; version 6 records the section's length
+  const section = h[H_VERSION]! >= 6 ? g[G_QUEUE_BYTES]! : h[H_N_UNITS]! * 4 + g[G_QUEUE_ORDERS]! * 20;
+  const len = h[H_BYTES]! - section;
   const out = bytes.slice(0, len);
   const oh = new Uint32Array(out.buffer, 0, 16);
   oh[H_VERSION] = 4;
   oh[H_BYTES] = len;
-  new Float64Array(out.buffer, GLOBALS_AT, 48)[G_QUEUE_ORDERS] = 0;
+  const og = new Float64Array(out.buffer, GLOBALS_AT, 48);
+  og[G_QUEUE_ORDERS] = 0;
+  og[G_QUEUE_BYTES] = 0;
+  return out;
+}
+/** Save bytes with the W25c order ids removed and the header set to version 2, state format 4 (header note). */
+function normaliseSave(b: Uint8Array): Uint8Array {
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const jsonLen = dv.getUint32(12, true);
+  const state = JSON.parse(new TextDecoder().decode(b.subarray(16, 16 + jsonLen)));
+  delete state.scalars.nextOrderId;
+  for (const q of state.orders as Array<Array<Record<string, unknown>> | null>) for (const o of q ?? []) delete o.oid;
+  const json = new TextEncoder().encode(JSON.stringify(state));
+  const blobs = b.subarray(16 + ((jsonLen + 7) & ~7));
+  const head = 16 + ((json.length + 7) & ~7);
+  const out = new Uint8Array(head + blobs.length);
+  const ov = new DataView(out.buffer);
+  ov.setUint32(0, dv.getUint32(0, true), true);
+  ov.setUint32(4, 2, true);
+  ov.setUint32(8, 4, true);
+  ov.setUint32(12, json.length, true);
+  out.set(json, 16);
+  out.set(blobs, head);
   return out;
 }
 const snapOut = (w: World) => (STRIP ? stripQueue(snapshotBytes(encodeSnapshot(w))) : snapshotBytes(encodeSnapshot(w)));
 const snapHash = (w: World) => fnv(snapOut(w));
-/** Save bytes; stripped: the state-format word (bytes 8–11) back to 4. */
+/** Save bytes; stripped: normalised (order ids out, header version 2, state format 4), so both trees' saves compare. */
 function saveEntry(w: World): string {
   const b = serializeWorld(w);
-  if (!STRIP) return `save:${fnv(b)}`;
-  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
-  if (dv.getUint32(8, true) >= 5) dv.setUint32(8, 4, true);
-  return `save-v${dv.getUint32(4, true)}:${fnv(b)}`;
+  return STRIP ? `save-norm:${fnv(normaliseSave(b))}` : `save:${fnv(b)}`;
 }
 const ids = (w: World, kind?: number) => {
   const o: number[] = [];

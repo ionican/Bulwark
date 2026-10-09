@@ -57,7 +57,7 @@ import { stepEconomyIncome, stepUpkeep, stepConstruction } from './economy.ts';
 import { stepConveyors } from './conveyor.ts';
 import { acquireTargets, fireTurrets, stepProjectiles, stepShieldsAndTimers, AlienGrid } from './combat.ts';
 import { stepAliens } from './aliens.ts';
-import { stepUnits, type Order } from './units.ts';
+import { stepUnits, type Order, type OrderSpec } from './units.ts';
 import { dequeueIndex, dropOrphans } from './queue.ts';
 import { validateCommand, upgradeProblem } from './validate.ts';
 import { COMMANDER_WRECK_SALVAGE, RESEARCH, RESEARCH_INDEX, SANDBOX_RESPAWN_TICKS, callEarlyBonus, EXTRACTOR_BOOST, FIELD_ENG_TURRET_COOLDOWN } from './balance.ts';
@@ -230,6 +230,11 @@ export class World {
   /** Wall run table (runs.ts): RUN_CAPACITY slots, null = free. */
   runs: Array<WallRun | null> = new Array<WallRun | null>(RUN_CAPACITY).fill(null);
   nextRunId = 1;
+  /**
+   * W25c: the id the next queued order gets (units.ts Order.oid). Saved; kept across a sandbox
+   * reset, so an id is never reused within a game.
+   */
+  nextOrderId = 1;
   /** Up to 8 recent sandbox spawn points, and the predicted route from each. */
   spawnOrigins: SpawnOrigin[] = [];
   originRoutes: Array<{ origin: number; category: number; cells: number[] }> = [];
@@ -391,7 +396,7 @@ export class World {
   }
 
   /** Gives every live unit in `ids` (that `accept` takes) its own copy of an order. */
-  private orderAll(ids: number[], make: () => Order, queue: boolean | undefined, accept?: (slot: number) => boolean): void {
+  private orderAll(ids: number[], make: () => OrderSpec, queue: boolean | undefined, accept?: (slot: number) => boolean): void {
     for (const id of ids) {
       const slot = this.units.slotForId(id);
       if (slot >= 0 && (!accept || accept(slot))) this.giveOrder(slot, make(), queue ?? false);
@@ -514,7 +519,7 @@ export class World {
         break;
       case 'dequeue': {
         const slot = this.units.slotForId(cmd.id);
-        const i = dequeueIndex(this, slot, cmd.index, cmd.expect);
+        const i = dequeueIndex(this, slot, cmd.order);
         if (i < 0) break; // validation refuses this; kept for enqueue() without validation
         this.dropped.push(...this.orders[slot]!.splice(i, 1));
         if (i === 0) this.paths[slot] = null; // the current order went: plan afresh for the next
@@ -594,7 +599,7 @@ export class World {
   resetSandbox(full: boolean): void {
     // The fresh start is made with the kept multipliers already set, so its units are created tuned.
     const fresh = createWorld(this.seed, 'sandbox', full ? { terrain: this.terrain } : { terrain: this.terrain, tuning: this.tuning, unlimited: this.unlimited });
-    const keep = new Set(['tick', 'seq', 'queue', 'log', 'applyRejected', 'terrain', 'seed', 'commandListener']);
+    const keep = new Set(['tick', 'seq', 'queue', 'log', 'applyRejected', 'terrain', 'seed', 'commandListener', 'nextOrderId']);
     const self = this as unknown as Record<string, unknown>;
     const src = fresh as unknown as Record<string, unknown>;
     for (const k of Object.keys(src)) if (!keep.has(k)) self[k] = src[k];
@@ -605,16 +610,22 @@ export class World {
     return this.validated && this.validated.cmd === cmd ? (this.validated.result as T) : undefined;
   }
 
-  /** Appends an order (`queue`) or replaces the unit's queue with it; replaced orders go to `dropped`. */
-  giveOrder(slot: number, order: Order, queue: boolean): void {
+  /**
+   * Appends an order (`queue`) or replaces the unit's queue with it; replaced orders go to `dropped`.
+   * The order gets its id here (W25c), as its last field, only when it is queued.
+   */
+  giveOrder(slot: number, spec: OrderSpec, queue: boolean): void {
     if (!this.orders[slot]) this.orders[slot] = [];
     if (!queue) {
       this.dropped.push(...this.orders[slot]!);
       this.orders[slot] = [];
       this.paths[slot] = null;
     }
-    if (this.orders[slot]!.length < MAX_ORDERS) this.orders[slot]!.push(order);
-    else this.applyRejected.push({ tick: this.tick, reason: `unit ${this.units.id(slot)}: order queue full (${MAX_ORDERS})` });
+    if (this.orders[slot]!.length < MAX_ORDERS) {
+      const order = spec as Order;
+      order.oid = this.nextOrderId++;
+      this.orders[slot]!.push(order);
+    } else this.applyRejected.push({ tick: this.tick, reason: `unit ${this.units.id(slot)}: order queue full (${MAX_ORDERS})` });
   }
 
   clampX(x: number) {

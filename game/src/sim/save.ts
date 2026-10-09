@@ -16,6 +16,10 @@
 // W25 left the save format alone: the order queues were already saved in full (JSON `orders`),
 // and the only change, snapshot version 5, adds a snapshot section that is derived from them. So a
 // version 2 save of state format 4 (W24) still loads; new saves record state format 5.
+// Version 3 (W25c): every queued order carries its id (`oid`, units.ts Order) and the scalars the
+// world's counter (`nextOrderId`); new saves record state format 6. A version 2 save (state format
+// 4 or 5) still loads: its orders get ids 1, 2, 3… in unit-slot and queue order, and the counter
+// continues after the last.
 
 import { World, type PendingGroup, type Route, type ScenarioName } from './world.ts';
 import type { WallRun } from './runs.ts';
@@ -27,10 +31,13 @@ import type { StampedCommand } from './commands.ts';
 import type { Order } from './units.ts';
 
 export const SAVE_MAGIC = 0x534b5742; // "BWKS"
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 
-/** State formats (SNAPSHOT_VERSION) whose version 2 saves load: W24's 4 and W25's 5 (header note). */
-const READABLE_STATE_FORMATS: readonly number[] = [4, SNAPSHOT_VERSION];
+/** Save versions this build reads, and the state formats (SNAPSHOT_VERSION) each was written with (header note). */
+const READABLE: ReadonlyMap<number, readonly number[]> = new Map([
+  [2, [4, 5]],
+  [SAVE_VERSION, [SNAPSHOT_VERSION]],
+]);
 
 export class SaveVersionError extends Error {}
 
@@ -162,6 +169,7 @@ export function serializeWorld(w: World): Uint8Array {
       scenario: w.scenario,
       unlimited: w.unlimited,
       nextRunId: w.nextRunId,
+      nextOrderId: w.nextOrderId,
       commanderRespawnTick: w.commanderRespawnTick,
       commanderDeaths: w.commanderDeaths,
     },
@@ -202,9 +210,9 @@ export function deserializeWorld(input: Uint8Array | ArrayBuffer): World {
   if (dv.getUint32(0, true) !== SAVE_MAGIC) throw new SaveVersionError('This file is not a Bulwark save.');
   const version = dv.getUint32(4, true);
   const snapVersion = dv.getUint32(8, true);
-  if (version !== SAVE_VERSION || !READABLE_STATE_FORMATS.includes(snapVersion))
+  if (!READABLE.get(version)?.includes(snapVersion))
     throw new SaveVersionError(
-      `This save is version ${version} (state format ${snapVersion}); this build reads version ${SAVE_VERSION} (state format ${READABLE_STATE_FORMATS.join(' or ')}) only.`,
+      `This save is version ${version} (state format ${snapVersion}); this build reads version ${SAVE_VERSION} (state format ${SNAPSHOT_VERSION}) and version 2 (state format 4 or 5) only.`,
     );
   const jsonLen = dv.getUint32(12, true);
   const state = JSON.parse(new TextDecoder().decode(bytes.subarray(16, 16 + jsonLen)), reviver);
@@ -262,6 +270,12 @@ export function deserializeWorld(input: Uint8Array | ArrayBuffer): World {
   w.researchQueue = state.researchQueue;
   w.orders.length = 0;
   w.orders.push(...(state.orders as Order[][]));
+  if (version < 3) {
+    // Version 2 orders have no ids: number them in slot and queue order (header note).
+    let next = 1;
+    for (const q of w.orders) for (const o of q ?? []) o.oid = next++;
+    w.nextOrderId = next;
+  }
   w.paths.length = 0;
   w.paths.push(...(state.paths as Array<number[] | null>));
   w.pathPos.length = 0;
