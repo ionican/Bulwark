@@ -146,3 +146,40 @@ describe('W25b: waiting made visible', () => {
     expect(one.split('\n')[0]).toMatch(/▲SHORT · 1 site waiting$/);
   });
 });
+
+describe('W25b: the marker follows the shortage tick by tick', () => {
+  it('a site starved of mass shows the marker in the first snapshot after the shortage, and loses it in the first snapshot after supply resumes', () => {
+    const w = flatWorld(30, 30); // no commander: no income, so the pool alone decides
+    w.pool.set([40, 1e6, 0]);
+    const e = w.spawnUnit(U.engineer, 10.5, 12.5);
+    w.enqueue({ t: 'build', ids: [e], kind: B.wall, tx: 10, ty: 10 });
+    const scene = new Scene();
+    const o = new WaitOverlay(scene, w.terrain);
+    const draw = () => {
+      const snap = snapshotOf(w);
+      o.update({ camera: camera({ x: 15, z: 15, distance: 30, yaw: 0 }), viewportHeight: 900, snapshot: snap, units: mobile(snap.units) });
+      return inspectWaiting(scene);
+    };
+    // full supply while the 40 mass lasts: no marker on any snapshot
+    let t = 0;
+    while (!(w.shortMask & 1) && t++ < 400) {
+      expect(draw().sites, `tick ${w.tick}: no marker while supplied`).toEqual([]);
+      w.step();
+    }
+    expect(w.shortMask & 1, 'mass ran short').toBe(1);
+    // the first snapshot taken after the short tick carries the marker and the builder label
+    const short = draw();
+    expect(short.sites.map((s) => s.text)).toEqual(['waiting for mass']);
+    expect(short.builders.map((b) => [b.unit, b.text])).toEqual([[e, 'waiting for mass']]);
+    // starved for a while: still marked on every snapshot
+    for (let i = 0; i < 20; i++) {
+      w.step();
+      expect(draw().sites.length, `tick ${w.tick}: marked while starved`).toBe(1);
+    }
+    // income resumes (a delivery or bonus into the pool): one tick later the marker is gone
+    w.pool[0] = w.pool[0]! + 1000;
+    w.step();
+    expect(w.shortMask & 1).toBe(0);
+    expect(draw()).toEqual({ sites: [], builders: [] });
+  });
+});
