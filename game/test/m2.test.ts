@@ -415,5 +415,5 @@ describe('determinism with every system active', () => {
     const c = run(78);
     // Compare past the header and globals (the seed itself sits in the header).
     expect(same(a.bytes.subarray(64 + 256), c.bytes.subarray(64 + 256))).toBe(false);
-  });
+  }, 30_000); // 3000 ticks twice: ~3 s alone, past the 5 s default when the full suite runs in parallel on a loaded machine
 });
