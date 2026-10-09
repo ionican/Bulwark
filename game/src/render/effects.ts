@@ -200,6 +200,19 @@ export class Effects {
     this.wppd = wppd;
     this.t = t;
     this.dt = dt;
+    // flashes and particles age first, before this frame's spawns, so every new one is drawn at
+    // least once however long the frame's step (W24 review: at 10x a 0.1 s step outlived a flash)
+    for (let i = this.fN - 1; i >= 0; i--) {
+      this.fAge[i]! += dt;
+      if (this.fAge[i]! < FLASH_LIFE) continue;
+      const j = --this.fN;
+      if (i === j) continue;
+      this.fPos.copyWithin(i * 3, j * 3, j * 3 + 3);
+      this.fDir.copyWithin(i * 3, j * 3, j * 3 + 3);
+      this.fAge[i] = this.fAge[j]!;
+      this.fBig[i] = this.fBig[j]!;
+    }
+    this.particles.advance(dt);
     for (const b of this.beamSets) b.begin();
     for (const p of this.pools) p.begin();
     this.beamN.fill(0);
@@ -377,19 +390,8 @@ export class Effects {
     }
   }
 
-  /** Ends the frame: flashes age and are drawn, particles step by the effect clock, pools committed. */
+  /** Ends the frame: flashes drawn (growing with age), emitters spawn, particles and pools uploaded. */
   commit(): void {
-    // flashes: age by the effect clock, drop expired ones (swap-remove), draw the rest growing
-    for (let i = this.fN - 1; i >= 0; i--) {
-      this.fAge[i]! += this.dt;
-      if (this.fAge[i]! < FLASH_LIFE) continue;
-      const j = --this.fN;
-      if (i === j) continue;
-      this.fPos.copyWithin(i * 3, j * 3, j * 3 + 3);
-      this.fDir.copyWithin(i * 3, j * 3, j * 3 + 3);
-      this.fAge[i] = this.fAge[j]!;
-      this.fBig[i] = this.fBig[j]!;
-    }
     for (let i = 0; i < this.fN; i++) {
       const k = this.flashes.take();
       if (k < 0) break;
@@ -402,7 +404,8 @@ export class Effects {
     }
     for (const b of this.beamSets) b.commit();
     for (const p of this.pools) p.commit();
-    if (this.cam) this.particles.update(this.dt, this.cam);
+    this.particles.emit(this.dt);
+    if (this.cam) this.particles.draw(this.cam);
   }
 
   /**

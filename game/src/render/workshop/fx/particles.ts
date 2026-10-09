@@ -430,6 +430,30 @@ export class Particles {
   }
 
   update(dt: number, camera: Camera): void {
+    this.emit(dt);
+    this.advance(dt);
+    this.draw(camera);
+  }
+
+  /**
+   * Adapted (W24 review, 2026-10-09): ages, moves and expires the live particles by `dt`, without
+   * spawning or uploading. render/effects.ts calls it at the start of a frame, before the frame's
+   * spawns, and `emit` + `draw` at its end, so a particle is drawn at least once even when one
+   * frame's step is longer than its life (a 0.06 s muzzle flash at 10x game speed).
+   */
+  advance(dt: number): void {
+    this.step(this.smoke, dt);
+    this.step(this.glow, dt);
+  }
+
+  /** Uploads the live particles (sorted for the camera). */
+  draw(camera: Camera): void {
+    this.upload(this.smoke, this.smokeMesh, camera, true);
+    this.upload(this.glow, this.glowMesh, camera, false);
+  }
+
+  /** The emitters spawn their particles for `dt`. */
+  emit(dt: number): void {
     const r = this.rnd;
     for (const e of this.emitters) {
       if (e.follow) {
@@ -454,10 +478,6 @@ export class Particles {
         }
       }
     }
-    this.step(this.smoke, dt);
-    this.step(this.glow, dt);
-    this.upload(this.smoke, this.smokeMesh, camera, true);
-    this.upload(this.glow, this.glowMesh, camera, false);
   }
 
   private step(p: Pool, dt: number): void {
