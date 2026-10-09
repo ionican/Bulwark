@@ -249,7 +249,7 @@ Best-effort flashes (finding 1): one snapshot can cover several ticks at speed a
 
 ```bash
 cd ~/Projects/worktrees/bulwark-w24/game && npm ci --no-audit --no-fund >/dev/null && \
-npx vitest run test/w24r2b-*.test.ts && npm test && npm run build && \
+npx vitest run test/w24r2b-*.test.ts test/w26-*.test.ts && npm test && npm run build && \
 (cd ../look && npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit) && \
 node scripts/fingerprint-compare.mjs 60ebba6 --strip-queue && \
 node scripts/check-render.mjs --no-build && node scripts/check-queue.mjs --no-build
@@ -262,6 +262,21 @@ Fails on the current tree: no `test/w24r2b-*` files exist (vitest exits non-zero
 - Flashes are at most one per snapshot per turret; shots themselves are never dropped.
 - Effects pause with the game; icons never animate.
 - The gate is 55 fps average and 45 1%-low at the game camera with ~150 aliens; 40 at full zoom-out.
+
+### W26 — idle units column (Richard, 2026-10-09: "commanders and engineers without a task should appear on the right hand side of the UI (same as SupCom)"); built in the same author run as 2b
+
+- **Idle** = a commander or engineer with `state == US_IDLE` and 0 queued orders (snapshot queue section, per-unit order count). `US_WAITING` (waiting for resources), moving, building and reclaiming are not idle. Render-side only; no simulation or snapshot change.
+- **Column** on the right edge, below the debug spawn panel: one button per unit type that has idle units, commander first, then engineers. Each button shows the type's W23 icon (the strategic-zoom shape) and the idle count; a type with none is hidden. Shape and number carry the meaning, never colour alone.
+- **Click** selects the next idle unit of that type (cycling in id order across repeated clicks) and centres the camera on it without changing zoom or elevation. **Shift + click** selects every idle unit of that type. Clicks on the column never reach the map (no selection or build placement underneath).
+- Updates from each snapshot; a unit becoming busy leaves the column on the next snapshot.
+
+#### W26 acceptance criteria
+
+1. Unit test over snapshot fixtures: idle set = exactly the US_IDLE units with 0 orders; a US_WAITING unit, a unit with 1 queued order, a moving and a building unit are excluded; aliens and buildings never appear.
+2. Browser check (added to `check-queue.mjs`, real mouse through agent-browser): in the sandbox with the commander and two engineers idle, the column shows commander × 1 and engineer × 2; a click selects one engineer and the camera target moves to it; a second click selects the other; Shift + click selects both; give one engineer a build order and the count drops to 1 on the next snapshot; a click on the column changes no map state.
+3. Screenshot `Resources/Bulwark Art Reference/w26-idle-column.png`.
+
+The run 2b Verify covers W26: its vitest pattern becomes `test/w24r2b-*.test.ts test/w26-*.test.ts`, and `check-queue.mjs` carries criterion 2.
 
 ### Run 2 decisions made here (Richard can overturn)
 
