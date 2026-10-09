@@ -58,6 +58,7 @@ import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { homedir, loadavg } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ART_REF, screenshot } from './shots.mjs';
 
 const GAME = fileURLToPath(new URL('..', import.meta.url));
 const PORT = 8823;
@@ -66,6 +67,8 @@ const SESSION = 'w24-2b';
 const args = process.argv.slice(2);
 const shotsDir = args.includes('--shots') ? args[args.indexOf('--shots') + 1] : null;
 const BUDGET = { terrainMs: 5, postMs: 3.5 };
+/** The inspection report's key for drawn model meshes with no entity group (src/render/inspect.ts UNGROUPED). */
+const UNGROUPED = 'ungrouped';
 const INVENTORY = [
   'massExtractor', 'generator', 'rareExtractor', 'lab', 'depot', 'shredder', 'smelter', 'assembler', 'wall', 'gun', 'area', 'beam',
   'heavy', 'shield', 'tempTurret', 'belt', 'splitter', 'merger', 'gate', 'commander', 'engineer', 'rusher', 'hunter', 'breaker', 'saboteur',
@@ -153,12 +156,21 @@ const GAME_CAMERA = { x: 64, z: 62, distance: 50, yaw: 0, pitch: pitchFor(50) };
 const camera = (rig) => js(`(__game.camera.set(${JSON.stringify({ pitch: pitchFor(rig.distance), ...rig })}), true)`);
 const rigNow = () => JSON.stringify(js('__game.camera.get()'));
 /** Real mouse input through agent-browser (CDP): press, move in steps, release. */
-async function mouseDrag(x0, y0, x1, y1, button = 'left', steps = 8) {
+/** A real-mouse drag from (x0, y0) to (x1, y1) in `steps` moves; `release` false leaves the button down (mid-drag). */
+async function mouseDrag(x0, y0, x1, y1, button = 'left', steps = 8, release = true) {
   ab('mouse', 'move', String(Math.round(x0)), String(Math.round(y0)));
   ab('mouse', 'down', button);
   for (let k = 1; k <= steps; k++) ab('mouse', 'move', String(Math.round(x0 + ((x1 - x0) * k) / steps)), String(Math.round(y0 + ((y1 - y0) * k) / steps)));
+  if (!release) return frames(10);
   ab('mouse', 'up', button);
   await frames(60);
+}
+/** A real-mouse left click at (x, y). */
+async function click(x, y) {
+  ab('mouse', 'move', String(Math.round(x)), String(Math.round(y)));
+  ab('mouse', 'down', 'left');
+  ab('mouse', 'up', 'left');
+  await frames(10);
 }
 const key = (k, code) => js(`(window.dispatchEvent(new KeyboardEvent('keydown', { key: '${k}', code: '${code}' })), window.dispatchEvent(new KeyboardEvent('keyup', { key: '${k}', code: '${code}' })), true)`);
 /** Shift + left-drag as pointer events with shiftKey (agent-browser's mouse carries no modifiers). */
@@ -175,7 +187,7 @@ function shiftDrag(x0, y0, x1, y1) {
 const frames = (n) => js(`new Promise((res) => { let k = 0; const f = () => (++k >= ${n} ? res(true) : requestAnimationFrame(f)); requestAnimationFrame(f); })`);
 
 function inspect(label, kinds, want) {
-  const rep = js('__game.inspect()');
+  const rep = js('__game.inspectNextFrame()');
   const missing = [];
   for (const k of kinds) {
     const e = rep[k];
@@ -187,6 +199,7 @@ function inspect(label, kinds, want) {
     if (!n) missing.push(`${k} (${e.entities} entities, 0 ${want})`);
   }
   const grey = Object.entries(rep).filter(([, e]) => e.greybox > 0).map(([k, e]) => `${k} ${e.greybox}`);
+  if (rep[UNGROUPED]) fail(`${label}: drawn meshes with no entity group: ${rep[UNGROUPED].meshes.join(', ')}`);
   if (missing.length) fail(`${label}: no ${want} for ${missing.join(', ')}`);
   if (grey.length) fail(`${label}: greybox instances on ${grey.join(', ')}`);
   if (js('__game.overflowed')) fail(`${label}: a batch overflowed`);
@@ -194,13 +207,9 @@ function inspect(label, kinds, want) {
   return rep;
 }
 
-async function shot(name) {
-  if (!shotsDir) return;
-  js(`(document.querySelectorAll('body > :not(canvas)').forEach((e) => (e.dataset.shotHidden = e.style.visibility, e.style.visibility = 'hidden')), true)`);
-  await frames(6);
-  ab('screenshot', join(shotsDir, `w24-2a2-${name}.png`));
-  js(`(document.querySelectorAll('[data-shot-hidden]').forEach((e) => { e.style.visibility = e.dataset.shotHidden; delete e.dataset.shotHidden; }), true)`);
-  note(`screenshot w24-2a2-${name}.png`);
+/** Run 2a's screenshots: written only with --shots. */
+async function shot2a(name) {
+  if (shotsDir) await shot(`w24-2a2-${name}`, shotsDir, 6);
 }
 
 /** The sandbox fixture: every kind, through the game's commands. */
@@ -248,7 +257,6 @@ async function sandboxFixture() {
 
 // ---- W24 run 2b ------------------------------------------------------------------------------
 
-const ART_REF = join(homedir(), 'Library', 'Mobile Documents', 'iCloud~md~obsidian', 'Documents', "Rick's World", 'Resources', 'Bulwark Art Reference');
 /** The 2b and W27 screenshots are written on every run: to --shots, else the vault's art reference folder. */
 const shots2b = shotsDir ?? ART_REF;
 const SHOTS_2B = ['w24-2b-engineers-beaming', 'w24-2b-turret-recoil-flash', 'w24-2b-shots-in-flight', 'w24-2b-gate-open', 'w24-2b-strategic-zoom', 'w27-wireframe-preview', 'w27-wall-drag-preview'];
@@ -262,13 +270,9 @@ const ALIENS = ['rusher', 'hunter', 'breaker', 'saboteur'];
 const load1 = () => loadavg()[0];
 const started = Date.now();
 
-async function shot2b(name) {
-  mkdirSync(shots2b, { recursive: true });
-  js(`(document.querySelectorAll('body > :not(canvas)').forEach((e) => (e.dataset.shotHidden = e.style.visibility, e.style.visibility = 'hidden')), true)`);
-  await frames(3);
-  const path = join(shots2b, `${name}.png`);
-  ab('screenshot', path);
-  js(`(document.querySelectorAll('[data-shot-hidden]').forEach((e) => { e.style.visibility = e.dataset.shotHidden; delete e.dataset.shotHidden; }), true)`);
+/** A screenshot of the canvas alone (the page's UI hidden) to `dir`/`name`.png. */
+async function shot(name, dir = shots2b, settle = 3) {
+  const path = await screenshot({ ab, js, frames }, join(dir, `${name}.png`), { hideUi: true, settle });
   note(`screenshot ${path}`);
 }
 
@@ -302,7 +306,8 @@ async function catchFrame(what, cond, seconds, start = '') {
 
 /**
  * The benchmark scene, from a fresh sandbox, through the game's own commands (free spending, 1×):
- * walls round x 44–92, z 36–66 with a gate in the south and the west wall; 16 turrets placed and 4
+ * walls round x 44–92, z 36–66 with a gate in the south (x 73–75, centre column 74, clear of the commander's spawn)
+ * and the west wall; 16 turrets placed and 4
  * temporary turrets dropped by engineers; both extractors (the rare one outside the north wall,
  * given 10 × hit points); every W17 kind; 10 engineers produced (12 in all) and the commander.
  * Aliens 10 × hit points, 0.1 × damage, so at least 150 stay alive attacking the north side.
@@ -334,7 +339,9 @@ const FIXTURE_JS = `(async () => {
   ];
   (await Promise.all(spots.map(([k, x, z, d]) => g.place(k, x, z, d ?? 0)))).forEach((r, i) => ok(r, 'place ' + spots[i]));
   const engs = () => g.list('unit').filter((u) => u.kindName === 'engineer').map((u) => u.id);
-  ok(await g.gate(66, 66, { axis: 'x', ids: engs() }), 'south gate');
+  // the south gate at x 73–75 (centre column 74, the corridor), clear of the commander's spawn (64.5, 64.5): a player unit within 2
+  // tiles holds a gate's doors open
+  ok(await g.gate(74, 66, { axis: 'x', ids: engs() }), 'south gate');
   ok(await g.gate(44, 52, { axis: 'z', ids: engs(), queue: true }), 'west gate');
   return log;
 })()`;
@@ -356,10 +363,7 @@ const ROLES_JS = `(async () => {
   const droppers = engs.slice(1, 5);
   const builders = engs.slice(5);
   [[48.5, 47.5], [57.5, 47.5], [77.5, 47.5], [85.5, 47.5]].forEach(([x, z], i) => g.cmd.move([droppers[i]], x, z));
-  g.cmd.move([shuttle], 66.5, 58.5);
-  // the commander starts beside the south gate, which holds its doors open: move it 10 tiles in
-  const cmdr = g.list('unit').find((u) => u.kindName === 'commander');
-  if (cmdr) g.cmd.move([cmdr.id], 60.5, 54.5);
+  g.cmd.move([shuttle], 74.5, 58.5);
   ok(await g.buildRun([40, 38], [40, 54], 2, { ids: builders }), 'builders run');
   for (const [k, x] of [['rusher', 50.5], ['hunter', 60.5], ['breaker', 70.5], ['saboteur', 80.5]]) g.spawnAt(k, x, 30.5, 40);
   await new Promise((r) => setTimeout(r, 6000));
@@ -373,9 +377,9 @@ const ROLES_JS = `(async () => {
 /**
  * The measurement, in the page: requestAnimationFrame timestamps for `seconds`; every second the
  * sustain step (aliens back to 160, a new wall run if the runs are done, the shuttle turned round
- * every 7 s between z 58.5 and 74.5 (each end 7 tiles from the gate), the commander moved away from
- * the gate if it has respawned there, a temporary turret re-dropped when one has expired) and a sample of __game.activity
- * (deltas) and __game.inspect (entities drawn per kind: covered of entities).
+ * every 7 s through the south gate between z 58.5 and 74.5, each end 7 tiles from it, a temporary
+ * turret re-dropped when one has expired) and a sample of __game.activity (deltas) and
+ * __game.inspectNextFrame (entities drawn per kind: covered of entities).
  */
 const MEASURE_JS = (seconds) => `(async () => {
   const g = __game;
@@ -398,10 +402,7 @@ const MEASURE_JS = (seconds) => `(async () => {
       const spec = [[[36, 38], [36, 54]], [[34, 40], [34, 54]], [[46, 30], [60, 30]]][runAt++ % 3];
       g.buildRun(spec[0], spec[1], 2, { ids: [...B.builders, ...B.droppers] });
     }
-    if (s === 1 || s % 7 === 0) g.cmd.move([B.shuttle], 66.5, leg++ % 2 ? 58.5 : 74.5);
-    // the commander (re)spawns beside the south gate and would hold its doors open
-    const cmdr = g.list('unit').find((u) => u.kindName === 'commander');
-    if (cmdr && Math.abs(cmdr.x - 66.5) < 4 && Math.abs(cmdr.z - 66.5) < 4) g.cmd.move([cmdr.id], 60.5, 54.5);
+    if (s === 1 || s % 7 === 0) g.cmd.move([B.shuttle], 74.5, leg++ % 2 ? 58.5 : 74.5);
     const temps = g.list('building').filter((b) => b.kindName === 'tempTurret').length;
     if (temps < 4) {
       const id = [...B.builders, ...B.droppers].find((e) => !(performance.now() - (B.dropped[e] ?? -1e9) < 76000));
@@ -412,10 +413,9 @@ const MEASURE_JS = (seconds) => `(async () => {
     const d = {};
     for (const k of ['beaming', 'firing', 'shots', 'attacking', 'doorOpening', 'doorClosing']) d[k] = a[k] - prev[k];
     prev = a;
-    // inspect against the snapshot the scene was drawn from (a frame with no snapshot since)
-    for (let k = 0; k < 10 && !g.drawnCurrent; k++) await new Promise((r) => requestAnimationFrame(r));
-    const rep = g.inspect();
-    R.samples.push({ s, d, cov: Object.fromEntries(Object.entries(rep).map(([k, e]) => [k, [e.covered, e.entities]])), alive });
+    // inspected inside the next frame, against the entities that frame was drawn from
+    const { ${UNGROUPED}: ungrouped, ...rep } = await g.inspectNextFrame();
+    R.samples.push({ s, d, cov: Object.fromEntries(Object.entries(rep).map(([k, e]) => [k, [e.covered, e.entities]])), alive, ungrouped: ungrouped?.meshes ?? [] });
   }
   on = false;
   R.drawCalls = g.drawCalls;
@@ -469,6 +469,7 @@ async function measurePose(label, rig, zoomOut) {
       if (kinds.length) miss.push(`not drawn: ${kinds.join(', ')}`);
       if (miss.length) problems.push(`second ${x.s}: workload not visible (${miss.join('; ')})`);
     }
+    if (x.ungrouped.length) problems.push(`second ${x.s}: drawn meshes with no entity group: ${x.ungrouped.join(', ')}`);
     if (x.alive < 150) problems.push(`second ${x.s}: ${x.alive} aliens alive (< 150)`);
     const idle = ['beaming', 'firing', 'attacking', 'shots'].filter((k) => !(x.d[k] > 0));
     if (idle.length) problems.push(`second ${x.s}: scene not active (no visible ${idle.join(', ')})`);
@@ -495,8 +496,9 @@ async function gatedPose(label, rig, zoomOut) {
     note(`ok   benchmark ${label}: passes`);
     return;
   }
-  if (Math.max(a.loadStart, a.loadEnd) > GATE.load) {
-    note(`benchmark ${label} failed at load average ${Math.max(a.loadStart, a.loadEnd).toFixed(2)} (> ${GATE.load}): ${a.problems.slice(0, 6).join(' | ')}; waiting for load < ${GATE.load} (up to 5 min) to measure once more`);
+  const loadA = Math.max(a.loadStart, a.loadEnd);
+  if (loadA > GATE.load) {
+    note(`benchmark ${label} failed at load average ${loadA.toFixed(2)} (> ${GATE.load}): ${a.problems.slice(0, 6).join(' | ')}; waiting for load < ${GATE.load} (up to 5 min) to measure once more`);
     const t0 = Date.now();
     while (load1() >= GATE.load && Date.now() - t0 < 300_000) await sleep(10_000);
     note(`load average now ${load1().toFixed(2)} after ${((Date.now() - t0) / 1000).toFixed(0)} s`);
@@ -508,7 +510,7 @@ async function gatedPose(label, rig, zoomOut) {
     fail(`benchmark ${label}: ${b.problems.slice(0, 8).join(' | ')} (first measurement: ${a.problems.slice(0, 3).join(' | ')})`);
     return;
   }
-  fail(`benchmark ${label} at load average ${Math.max(a.loadStart, a.loadEnd).toFixed(2)}: ${a.problems.slice(0, 8).join(' | ')}`);
+  fail(`benchmark ${label} at load average ${loadA.toFixed(2)}: ${a.problems.slice(0, 8).join(' | ')}`);
 }
 
 /** A cold launch of the stress scene in a fresh browser (the session closed first), warm-up on or off. */
@@ -537,10 +539,11 @@ async function run2b() {
   if (off.ran) fail('warm-up: ran with ?warmup=0');
   if (!(on.longestFrameMs < off.longestFrameMs)) fail(`warm-up: longest frame ${on.longestFrameMs.toFixed(1)} ms with it, not lower than ${off.longestFrameMs.toFixed(1)} ms without`);
   else note(`ok   warm-up: longest frame ${on.longestFrameMs.toFixed(1)} ms with it < ${off.longestFrameMs.toFixed(1)} ms without`);
-  if (Math.max(on.loadStart, on.loadEnd) < GATE.load) {
+  const loadOn = Math.max(on.loadStart, on.loadEnd);
+  if (loadOn < GATE.load) {
     if (on.longestFrameMs >= GATE.longestWarmMs) fail(`warm-up: longest frame ${on.longestFrameMs.toFixed(1)} ms ≥ ${GATE.longestWarmMs} ms at load average below ${GATE.load}`);
     else note(`ok   warm-up: longest frame ${on.longestFrameMs.toFixed(1)} ms < ${GATE.longestWarmMs} ms (load average below ${GATE.load})`);
-  } else note(`warm-up: the 250 ms bound is not judged at load average ${Math.max(on.loadStart, on.loadEnd).toFixed(2)} (≥ ${GATE.load})`);
+  } else note(`warm-up: the 250 ms bound is not judged at load average ${loadOn.toFixed(2)} (≥ ${GATE.load})`);
   errorsNow('warm-up launches');
 
   // ---- the combined performance gate, each pose from a fresh fixture
@@ -552,24 +555,24 @@ async function run2b() {
   const close = (x, z, distance, yaw, pitchDeg) => camera({ x, z, distance, yaw, pitch: (pitchDeg * Math.PI) / 180 });
   close(41.5, 49, 16, 0.5, 42);
   await catchFrame('engineers beaming', '__game.activity.now.beaming', 20);
-  await shot2b('w24-2b-engineers-beaming');
+  await shot('w24-2b-engineers-beaming');
   close(60, 40.5, 9, 0.9, 32);
   await catchFrame('a muzzle flash', '__game.activity.now.flash', 30);
-  await shot2b('w24-2b-turret-recoil-flash');
+  await shot('w24-2b-turret-recoil-flash');
   close(64, 35, 22, 0, 48);
   await catchFrame('shots in flight', '__game.activity.now.shots', 20);
-  await shot2b('w24-2b-shots-in-flight');
-  close(66.5, 66.5, 11, 0.4, 40);
+  await shot('w24-2b-shots-in-flight');
+  close(74.5, 66.5, 11, 0.4, 40);
   await catchFrame(
     'the engineer in the open gate',
-    `(() => { const u = __game.list('unit').find((u) => u.id === window.__bench.shuttle); return u && Math.abs(u.x - 66.5) < 0.8 && u.z > 66.1 && u.z < 66.9; })()`,
+    `(() => { const u = __game.list('unit').find((u) => u.id === window.__bench.shuttle); return u && Math.abs(u.x - 74.5) < 0.8 && u.z > 66.1 && u.z < 66.9; })()`,
     30,
-    `__game.cmd.move([window.__bench.shuttle], 66.5, __game.list('unit').find((u) => u.id === window.__bench.shuttle).z < 66.5 ? 71.5 : 61.5)`,
+    `__game.cmd.move([window.__bench.shuttle], 74.5, __game.list('unit').find((u) => u.id === window.__bench.shuttle).z < 66.5 ? 71.5 : 61.5)`,
   );
-  await shot2b('w24-2b-gate-open');
+  await shot('w24-2b-gate-open');
   camera({ ...BENCH_ZOOM, pitch: (84 * Math.PI) / 180 });
   await frames(10);
-  await shot2b('w24-2b-strategic-zoom');
+  await shot('w24-2b-strategic-zoom');
   errorsNow('2b screenshots');
 
   // ---- W27: the wireframe placement preview, real mouse
@@ -585,10 +588,7 @@ async function run2b() {
     camera({ x: u.x, z: u.z, distance: 22, yaw: 0, pitch: (55 * Math.PI) / 180 });
     await frames(10);
     const p = js(`__game.screenOf('unit', ${cpos.id})`);
-    ab('mouse', 'move', String(Math.round(p.x)), String(Math.round(p.y)));
-    ab('mouse', 'down', 'left');
-    ab('mouse', 'up', 'left');
-    await frames(10);
+    await click(p.x, p.y);
     picked = js('__game.selected').some((s) => s.id === cpos.id);
   }
   if (!picked) fail(`W27: could not select the commander by clicking it (${JSON.stringify(cpos)}, selected ${JSON.stringify(js('__game.selected'))})`);
@@ -612,7 +612,7 @@ async function run2b() {
   const op2 = js(`__game.inspectPreview()['overlay/preview/wire']?.opacity`);
   if (!(Math.max(Math.abs(op1 - op0), Math.abs(op2 - op1)) > 0.05)) fail(`W27: the wireframe does not pulse (opacity ${op0}, ${op1}, ${op2})`);
   else note(`ok   W27: the wireframe pulses (opacity ${op0.toFixed(2)} → ${op1.toFixed(2)} → ${op2.toFixed(2)} over 0.75 s)`);
-  await shot2b('w27-wireframe-preview');
+  await shot('w27-wireframe-preview');
   key('Escape', 'Escape');
   // the drag row in the middle of the screen (z 61.5 lies under the build bar from the last pose)
   camera({ x: 53, z: 58, distance: 22, yaw: 0, pitch: (55 * Math.PI) / 180 });
@@ -621,15 +621,12 @@ async function run2b() {
   await frames(5);
   const a = js('__game.worldToScreen(48.5, 61.5)');
   const b = js('__game.worldToScreen(57.5, 61.5)');
-  ab('mouse', 'move', String(Math.round(a.x)), String(Math.round(a.y)));
-  ab('mouse', 'down', 'left');
-  for (let k = 1; k <= 8; k++) ab('mouse', 'move', String(Math.round(a.x + ((b.x - a.x) * k) / 8)), String(Math.round(a.y + ((b.y - a.y) * k) / 8)));
-  await frames(10);
+  await mouseDrag(a.x, a.y, b.x, b.y, 'left', 8, false);
   const drag = js('__game.dragPreview');
   const dw = js('__game.inspectPreview()')['overlay/drag/wire'];
   if (!drag || !dw || dw.instances < drag.build.length) fail(`W27: mid-drag wall wireframes: plan ${JSON.stringify(drag?.build?.length)} tiles, wires ${JSON.stringify(dw)}`);
   else note(`ok   W27: mid wall drag: ${drag.build.length} tiles planned, ${dw.instances} wall wireframe instances (${dw.geometries} wall pieces)`);
-  await shot2b('w27-wall-drag-preview');
+  await shot('w27-wall-drag-preview');
   key('Escape', 'Escape');
   ab('mouse', 'up', 'left');
   await frames(5);
@@ -642,6 +639,175 @@ async function run2b() {
   });
   if (missing.length) fail(`screenshots missing or not written by this run: ${missing.join(', ')}`);
   else note(`ok   ${SHOTS_2B.length} run 2b and W27 screenshots written to ${shots2b}`);
+}
+
+/** W24 run 2a: map 1, the sandbox inventory, input, the stress scene and the walking benchmark. */
+async function run2a() {
+  // ---- map 1
+  await load('/');
+  if (js('__game.renderMode') !== 'models') fail('map 1: not the model view');
+  note(`map 1: renderer ${js('__game.renderer')}; viewport ${JSON.stringify(js('__game.viewport'))}; quality ${js('__game.quality')}`);
+  const placed = js(`(async () => { const out = []; for (const [k, x, y] of [['gun', 48, 56], ['wall', 52, 58], ['wall', 53, 58], ['generator', 40, 44], ['massExtractor', 54, 50]]) out.push(await __game.place(k, x, y)); return out.filter((r) => !r.ok).map((r) => r.reason); })()`);
+  if (placed.length) fail(`map 1 place refused: ${placed.join('; ')}`);
+  camera({ x: 56, z: 56, distance: 40, yaw: 0 });
+  await frames(10);
+  inspect('map 1, close', ['commander', 'engineer', 'gun', 'wall', 'generator', 'massExtractor'], 'models');
+  camera({ x: 64, z: 64, distance: 200, yaw: 0 });
+  await frames(10);
+  inspect('map 1, full zoom-out', ['commander', 'engineer', 'gun', 'wall', 'generator', 'massExtractor'], 'icons');
+  // ---- input: the workshop camera's feel, with the game's clicks, box and build drags
+  camera({ x: 64, z: 62, distance: 30, yaw: 0, pitch: (60 * Math.PI) / 180 });
+  await frames(10);
+  const units = js(`__game.list('unit').map((u) => ({ id: u.id, kindName: u.kindName, ...__game.screenOf('unit', u.id) }))`);
+  const eng = units.filter((u) => u.kindName === 'engineer');
+  let before = rigNow();
+  ab('mouse', 'move', String(Math.round(eng[0].x + 2)), String(Math.round(eng[0].y)));
+  ab('mouse', 'down', 'left');
+  ab('mouse', 'move', String(Math.round(eng[0].x + 4)), String(Math.round(eng[0].y + 1)));
+  ab('mouse', 'up', 'left');
+  await frames(30);
+  const sel = js('__game.selected');
+  if (!(sel.length === 1 && sel[0].id === eng[0].id && rigNow() === before)) fail(`input: a 3-px click on engineer ${eng[0].id} selected ${JSON.stringify(sel)} and the camera ${rigNow() === before ? 'stayed' : 'moved'}`);
+  else note('input: a click (under 5 px) on an engineer selects it; the camera does not move');
+  const xs = units.map((u) => u.x);
+  const ys = units.map((u) => u.y);
+  shiftDrag(Math.min(...xs) - 30, Math.min(...ys) - 40, Math.max(...xs) + 30, Math.max(...ys) + 30);
+  await frames(30);
+  const boxed = js('__game.selected').length;
+  if (boxed !== units.length || rigNow() !== before) fail(`input: Shift + left-drag selected ${boxed} of ${units.length} units; camera ${rigNow() === before ? 'stayed' : 'moved'}`);
+  else note(`input: Shift + left-drag box-selects all ${boxed} units; the camera does not move`);
+  // the wall tool's key (agent-browser's `press` also toggled the pause button here, so a key event)
+  key('1', 'Digit1');
+  await frames(5);
+  const runs0 = js('__game.runs.length');
+  const a = js('__game.worldToScreen(57.5, 64.5)');
+  const b = js('__game.worldToScreen(66.5, 64.5)');
+  await mouseDrag(a.x, a.y, b.x, b.y);
+  await until('the wall run', `__game.runs.length > ${runs0}`, 10).catch(() => null);
+  const runs1 = js('__game.runs');
+  if (runs1.length !== runs0 + 1 || rigNow() !== before) fail(`input: build-mode left-drag: runs ${runs0} → ${runs1.length}; camera ${rigNow() === before ? 'stayed' : 'moved'}`);
+  else note(`input: in build mode a left-drag queues a wall run (${runs1[runs1.length - 1].tiles} tiles) and does not orbit`);
+  key('Escape', 'Escape');
+  await mouseDrag(720, 450, 820, 400);
+  const after = js('__game.camera.get()');
+  const b0 = JSON.parse(before);
+  if (Math.abs(after.yaw - b0.yaw) < 0.05 || Math.abs(after.pitch - b0.pitch) < 0.02) fail(`input: a plain left-drag did not orbit (${before} → ${JSON.stringify(after)})`);
+  else note(`input: a plain left-drag orbits (yaw ${b0.yaw.toFixed(2)} → ${after.yaw.toFixed(2)}, tilt ${((b0.pitch * 180) / Math.PI).toFixed(0)}° → ${((after.pitch * 180) / Math.PI).toFixed(0)}°)`);
+  before = rigNow();
+  await mouseDrag(720, 450, 620, 520, 'right');
+  if (rigNow() === before) fail('input: a right-drag did not pan');
+  else note('input: a right-drag pans');
+  errorsNow('map 1');
+
+  // ---- sandbox
+  await load('/?sandbox=1');
+  if (js('__game.renderMode') !== 'models') fail('sandbox: not the model view');
+  await sandboxFixture();
+  // a view per region; every kind must have models in one of them
+  const seen = new Set();
+  const greyIn = [];
+  for (const rig of [
+    { x: 62, z: 44, distance: 40, yaw: 0 },
+    { x: 62, z: 58, distance: 40, yaw: 0 },
+    { x: 72, z: 68, distance: 30, yaw: 0 },
+    { x: 64, z: 34, distance: 40, yaw: 0 },
+    { x: 75, z: 31, distance: 30, yaw: 0 },
+  ]) {
+    camera(rig);
+    await frames(8);
+    const rep = js('__game.inspectNextFrame()');
+    if (rep[UNGROUPED]) fail(`sandbox, close views: drawn meshes with no entity group: ${rep[UNGROUPED].meshes.join(', ')}`);
+    for (const [k, e] of Object.entries(rep)) {
+      if (e.models > 0) seen.add(k);
+      if (e.greybox > 0) greyIn.push(k);
+    }
+  }
+  const lacking = INVENTORY.filter((k) => !seen.has(k));
+  if (lacking.length) fail(`sandbox, close views: no model instances for ${lacking.join(', ')}`);
+  else note(`sandbox, close views: all ${INVENTORY.length} kinds of the inventory have model instances`);
+  if (greyIn.length) fail(`sandbox, close views: greybox on ${[...new Set(greyIn)].join(', ')}`);
+  camera({ x: 64, z: 64, distance: 200, yaw: 0 });
+  await frames(10);
+  inspect('sandbox, full zoom-out', INVENTORY, 'icons');
+  note(`sandbox: wall topology rebuilds ${js('__game.wallRebuilds')}; LOD ${JSON.stringify(js('__game.lodLevelCounts'))}`);
+
+  if (shotsDir) {
+    // resume (commands apply at a tick)
+    js(`(__game.paused && __game.control.pause(), true)`);
+    await until('running', `__game.paused === false`, 10);
+    // fresh aliens of every kind close together for their close-up, then hold everything still
+    js(`(async () => { for (const [k, x] of [['rusher', 58.5], ['hunter', 62.5], ['breaker', 66.5], ['saboteur', 70.5]]) await __game.spawnAt(k, x, 36.5, 1); __game.control.pause(); return true; })()`);
+    await until('paused', `__game.paused === true`, 10);
+    camera(GAME_CAMERA);
+    await shot2a('game-camera');
+    camera({ ...GAME_CAMERA, pitch: (20 * Math.PI) / 180 });
+    await shot2a('game-camera-tilted-low');
+    camera({ x: 112, z: 18, distance: 75, yaw: -0.8, pitch: (32 * Math.PI) / 180 });
+    await shot2a('map-edge');
+    camera({ x: 64.5, z: 37.5, distance: 12, yaw: 0.2, pitch: (40 * Math.PI) / 180 });
+    await shot2a('aliens-close');
+    camera({ x: 64, z: 64, distance: 200, yaw: 0, pitch: (84 * Math.PI) / 180 });
+    await shot2a('strategic-zoom');
+  }
+  errorsNow('sandbox');
+
+  // ---- budgets at the game camera (sandbox fixture, medium, 1440 × 900)
+  // the budget is a rendering cost: measured on a still frame (simulation paused), three times,
+  // each figure the median of the three runs (each run itself interleaved medians, cost.ts)
+  js(`(__game.paused || __game.control.pause(), true)`);
+  await until('paused', `__game.paused === true`, 10);
+  camera(GAME_CAMERA);
+  await frames(10);
+  const runs = [0, 1, 2].map(() => js('__game.renderCost(15)'));
+  const med = (f) => runs.map(f).sort((x, y) => x - y)[1];
+  const cost = {
+    buffer: runs[0].buffer,
+    terrainMs: med((c) => c.terrainMs),
+    terrainIsolatedMs: med((c) => c.terrainIsolatedMs),
+    postMs: med((c) => c.postMs),
+    fullMs: med((c) => c.fullMs),
+    passMs: Object.fromEntries(Object.keys(runs[0].passMs).map((k) => [k, med((c) => c.passMs[k])])),
+  };
+  note(`budget runs (terrain, post): ${runs.map((c) => `${c.terrainMs.toFixed(2)} / ${c.postMs.toFixed(2)} ms`).join('; ')}`);
+  const flag = (v, b) => `${v.toFixed(2)} ms (budget ${b} ms${v > b ? ': OVER' : ''})`;
+  note(`budget, game camera, ${js('__game.quality')}, buffer ${cost.buffer.join(' × ')}: terrain + scenery ${flag(cost.terrainMs, BUDGET.terrainMs)} [ground alone, no post: ${cost.terrainIsolatedMs.toFixed(2)} ms]; post ${flag(cost.postMs, BUDGET.postMs)} [by pass: ${Object.entries(cost.passMs).map(([k, v]) => `${k} ${v.toFixed(2)} ms`).join(', ')}]; full frame ${cost.fullMs.toFixed(2)} ms`);
+
+  // ---- static benchmark: the stress scene, paused
+  await load('/?stress=1');
+  js(`(__game.paused || __game.control.pause(), true)`);
+  await until('stress paused', `__game.paused === true`, 10);
+  for (const [label, rig] of [
+    ['game camera', GAME_CAMERA],
+    ['full zoom-out', { x: 64, z: 64, distance: 200, yaw: 0 }],
+  ]) {
+    camera(rig);
+    await sleep(3000);
+    const fps = js('__game.fps');
+    const c = js('__game.renderCost(15)');
+    note(`benchmark (stress scene, ${js('JSON.stringify(__game.entityCounts)')}, paused), ${label}: ${fps} fps (display-capped); ${c.fullMs.toFixed(2)} ms per frame forced-complete (${(1000 / c.fullMs).toFixed(0)} fps uncapped equivalent); draw calls ${js('__game.drawCalls')}; LOD ${JSON.stringify(js('__game.lodLevelCounts'))}`);
+  }
+  errorsNow('stress scene');
+
+  // ---- walking benchmark (reported, not gated): 40 engineers and 300 aliens walking, game camera
+  await load('/?sandbox=1');
+  js(`(async () => { const g = __game; await g.setUnlimited(true); await g.tune('unit', 'commander', 'buildRate', 10); for (let i = 0; i < 40; i++) g.cmd.produce(); return true; })()`);
+  await until('40 engineers', `__game.list('unit').filter((u) => u.kindName === 'engineer').length >= 40`, 180);
+  const walk = js(`(async () => {
+    const g = __game;
+    const ids = g.list('unit').filter((u) => u.kindName === 'engineer').map((u) => u.id);
+    ids.forEach((id, i) => g.cmd.move([id], 50 + (i % 8) * 4, 48 + Math.floor(i / 8) * 4));
+    for (const [k, x] of [['rusher', 40], ['hunter', 50], ['breaker', 60], ['saboteur', 70], ['rusher', 80], ['hunter', 90]]) await g.spawnAt(k, x, 30.5, 50);
+    g.camera.set(${JSON.stringify(GAME_CAMERA)});
+    await new Promise((r) => setTimeout(r, 2500));
+    const upd = [];
+    for (let i = 0; i < 60; i++) { await new Promise((r) => requestAnimationFrame(r)); upd.push(g.timing.updateMs); }
+    upd.sort((a, b) => a - b);
+    const walking = g.list('unit').filter((u) => u.state === 1).length;
+    return { aliens: g.entityCounts.aliens, engineers: ids.length, walkingUnits: walking, updateMs: upd[30], frameCpuMs: g.frameCpuMs, fps: g.fps, drawCalls: g.drawCalls };
+  })()`);
+  const wc = js('__game.renderCost(15)');
+  note(`walking benchmark (sandbox, ${walk.engineers} engineers (${walk.walkingUnits} walking at the sample) and ${walk.aliens} aliens, game camera, medium): scene update ${walk.updateMs.toFixed(2)} ms CPU per frame (median, rigs and gait included); frame CPU ${walk.frameCpuMs.toFixed(2)} ms; ${walk.fps} fps (display-capped); ${wc.fullMs.toFixed(2)} ms per frame forced-complete; terrain + scenery ${wc.terrainMs.toFixed(2)} ms; post ${wc.postMs.toFixed(2)} ms; draw calls ${walk.drawCalls}`);
+  errorsNow('walking benchmark');
 }
 
 async function main() {
@@ -667,181 +833,11 @@ async function main() {
       await sleep(250);
     }
     note(`preview: ${ORIGIN} (this tree's build)`);
-    if (args.includes('--only-2b')) {
-      // development: the run 2b and W27 checks alone
-      await run2b();
-      throw null;
-    }
-
-    // ---- map 1
-    await load('/');
-    if (js('__game.renderMode') !== 'models') fail('map 1: not the model view');
-    note(`map 1: renderer ${js('__game.renderer')}; viewport ${JSON.stringify(js('__game.viewport'))}; quality ${js('__game.quality')}`);
-    const placed = js(`(async () => { const out = []; for (const [k, x, y] of [['gun', 48, 56], ['wall', 52, 58], ['wall', 53, 58], ['generator', 40, 44], ['massExtractor', 54, 50]]) out.push(await __game.place(k, x, y)); return out.filter((r) => !r.ok).map((r) => r.reason); })()`);
-    if (placed.length) fail(`map 1 place refused: ${placed.join('; ')}`);
-    camera({ x: 56, z: 56, distance: 40, yaw: 0 });
-    await frames(10);
-    inspect('map 1, close', ['commander', 'engineer', 'gun', 'wall', 'generator', 'massExtractor'], 'models');
-    camera({ x: 64, z: 64, distance: 200, yaw: 0 });
-    await frames(10);
-    inspect('map 1, full zoom-out', ['commander', 'engineer', 'gun', 'wall', 'generator', 'massExtractor'], 'icons');
-    // ---- input: the workshop camera's feel, with the game's clicks, box and build drags
-    camera({ x: 64, z: 62, distance: 30, yaw: 0, pitch: (60 * Math.PI) / 180 });
-    await frames(10);
-    const units = js(`__game.list('unit').map((u) => ({ id: u.id, kindName: u.kindName, ...__game.screenOf('unit', u.id) }))`);
-    const eng = units.filter((u) => u.kindName === 'engineer');
-    let before = rigNow();
-    ab('mouse', 'move', String(Math.round(eng[0].x + 2)), String(Math.round(eng[0].y)));
-    ab('mouse', 'down', 'left');
-    ab('mouse', 'move', String(Math.round(eng[0].x + 4)), String(Math.round(eng[0].y + 1)));
-    ab('mouse', 'up', 'left');
-    await frames(30);
-    const sel = js('__game.selected');
-    if (!(sel.length === 1 && sel[0].id === eng[0].id && rigNow() === before)) fail(`input: a 3-px click on engineer ${eng[0].id} selected ${JSON.stringify(sel)} and the camera ${rigNow() === before ? 'stayed' : 'moved'}`);
-    else note('input: a click (under 5 px) on an engineer selects it; the camera does not move');
-    const xs = units.map((u) => u.x);
-    const ys = units.map((u) => u.y);
-    shiftDrag(Math.min(...xs) - 30, Math.min(...ys) - 40, Math.max(...xs) + 30, Math.max(...ys) + 30);
-    await frames(30);
-    const boxed = js('__game.selected').length;
-    if (boxed !== units.length || rigNow() !== before) fail(`input: Shift + left-drag selected ${boxed} of ${units.length} units; camera ${rigNow() === before ? 'stayed' : 'moved'}`);
-    else note(`input: Shift + left-drag box-selects all ${boxed} units; the camera does not move`);
-    // the wall tool's key (agent-browser's `press` also toggled the pause button here, so a key event)
-    key('1', 'Digit1');
-    await frames(5);
-    const runs0 = js('__game.runs.length');
-    const a = js('__game.worldToScreen(57.5, 64.5)');
-    const b = js('__game.worldToScreen(66.5, 64.5)');
-    await mouseDrag(a.x, a.y, b.x, b.y);
-    await until('the wall run', `__game.runs.length > ${runs0}`, 10).catch(() => null);
-    const runs1 = js('__game.runs');
-    if (runs1.length !== runs0 + 1 || rigNow() !== before) fail(`input: build-mode left-drag: runs ${runs0} → ${runs1.length}; camera ${rigNow() === before ? 'stayed' : 'moved'}`);
-    else note(`input: in build mode a left-drag queues a wall run (${runs1[runs1.length - 1].tiles} tiles) and does not orbit`);
-    key('Escape', 'Escape');
-    await mouseDrag(720, 450, 820, 400);
-    const after = js('__game.camera.get()');
-    const b0 = JSON.parse(before);
-    if (Math.abs(after.yaw - b0.yaw) < 0.05 || Math.abs(after.pitch - b0.pitch) < 0.02) fail(`input: a plain left-drag did not orbit (${before} → ${JSON.stringify(after)})`);
-    else note(`input: a plain left-drag orbits (yaw ${b0.yaw.toFixed(2)} → ${after.yaw.toFixed(2)}, tilt ${((b0.pitch * 180) / Math.PI).toFixed(0)}° → ${((after.pitch * 180) / Math.PI).toFixed(0)}°)`);
-    before = rigNow();
-    await mouseDrag(720, 450, 620, 520, 'right');
-    if (rigNow() === before) fail('input: a right-drag did not pan');
-    else note('input: a right-drag pans');
-    errorsNow('map 1');
-
-    // ---- sandbox
-    await load('/?sandbox=1');
-    if (js('__game.renderMode') !== 'models') fail('sandbox: not the model view');
-    await sandboxFixture();
-    // a view per region; every kind must have models in one of them
-    const seen = new Set();
-    const greyIn = [];
-    for (const rig of [
-      { x: 62, z: 44, distance: 40, yaw: 0 },
-      { x: 62, z: 58, distance: 40, yaw: 0 },
-      { x: 72, z: 68, distance: 30, yaw: 0 },
-      { x: 64, z: 34, distance: 40, yaw: 0 },
-      { x: 75, z: 31, distance: 30, yaw: 0 },
-    ]) {
-      camera(rig);
-      await frames(8);
-      const rep = js('__game.inspect()');
-      for (const [k, e] of Object.entries(rep)) {
-        if (e.models > 0) seen.add(k);
-        if (e.greybox > 0) greyIn.push(k);
-      }
-    }
-    const lacking = INVENTORY.filter((k) => !seen.has(k));
-    if (lacking.length) fail(`sandbox, close views: no model instances for ${lacking.join(', ')}`);
-    else note(`sandbox, close views: all ${INVENTORY.length} kinds of the inventory have model instances`);
-    if (greyIn.length) fail(`sandbox, close views: greybox on ${[...new Set(greyIn)].join(', ')}`);
-    camera({ x: 64, z: 64, distance: 200, yaw: 0 });
-    await frames(10);
-    inspect('sandbox, full zoom-out', INVENTORY, 'icons');
-    note(`sandbox: wall topology rebuilds ${js('__game.wallRebuilds')}; LOD ${JSON.stringify(js('__game.lodLevelCounts'))}`);
-
-    if (shotsDir) {
-      // resume (commands apply at a tick)
-      js(`(__game.paused && __game.control.pause(), true)`);
-      await until('running', `__game.paused === false`, 10);
-      // fresh aliens of every kind close together for their close-up, then hold everything still
-      js(`(async () => { for (const [k, x] of [['rusher', 58.5], ['hunter', 62.5], ['breaker', 66.5], ['saboteur', 70.5]]) await __game.spawnAt(k, x, 36.5, 1); __game.control.pause(); return true; })()`);
-      await until('paused', `__game.paused === true`, 10);
-      camera(GAME_CAMERA);
-      await shot('game-camera');
-      camera({ ...GAME_CAMERA, pitch: (20 * Math.PI) / 180 });
-      await shot('game-camera-tilted-low');
-      camera({ x: 112, z: 18, distance: 75, yaw: -0.8, pitch: (32 * Math.PI) / 180 });
-      await shot('map-edge');
-      camera({ x: 64.5, z: 37.5, distance: 12, yaw: 0.2, pitch: (40 * Math.PI) / 180 });
-      await shot('aliens-close');
-      camera({ x: 64, z: 64, distance: 200, yaw: 0, pitch: (84 * Math.PI) / 180 });
-      await shot('strategic-zoom');
-    }
-    errorsNow('sandbox');
-
-    // ---- budgets at the game camera (sandbox fixture, medium, 1440 × 900)
-    // the budget is a rendering cost: measured on a still frame (simulation paused), three times,
-    // each figure the median of the three runs (each run itself interleaved medians, cost.ts)
-    js(`(__game.paused || __game.control.pause(), true)`);
-    await until('paused', `__game.paused === true`, 10);
-    camera(GAME_CAMERA);
-    await frames(10);
-    const runs = [0, 1, 2].map(() => js('__game.renderCost(15)'));
-    const med = (f) => runs.map(f).sort((x, y) => x - y)[1];
-    const cost = {
-      buffer: runs[0].buffer,
-      terrainMs: med((c) => c.terrainMs),
-      terrainIsolatedMs: med((c) => c.terrainIsolatedMs),
-      postMs: med((c) => c.postMs),
-      fullMs: med((c) => c.fullMs),
-      passMs: Object.fromEntries(Object.keys(runs[0].passMs).map((k) => [k, med((c) => c.passMs[k])])),
-    };
-    note(`budget runs (terrain, post): ${runs.map((c) => `${c.terrainMs.toFixed(2)} / ${c.postMs.toFixed(2)} ms`).join('; ')}`);
-    const flag = (v, b) => `${v.toFixed(2)} ms (budget ${b} ms${v > b ? ': OVER' : ''})`;
-    note(`budget, game camera, ${js('__game.quality')}, buffer ${cost.buffer.join(' × ')}: terrain + scenery ${flag(cost.terrainMs, BUDGET.terrainMs)} [ground alone, no post: ${cost.terrainIsolatedMs.toFixed(2)} ms]; post ${flag(cost.postMs, BUDGET.postMs)} [by pass: ${Object.entries(cost.passMs).map(([k, v]) => `${k} ${v.toFixed(2)} ms`).join(', ')}]; full frame ${cost.fullMs.toFixed(2)} ms`);
-
-    // ---- static benchmark: the stress scene, paused
-    await load('/?stress=1');
-    js(`(__game.paused || __game.control.pause(), true)`);
-    await until('stress paused', `__game.paused === true`, 10);
-    for (const [label, rig] of [
-      ['game camera', GAME_CAMERA],
-      ['full zoom-out', { x: 64, z: 64, distance: 200, yaw: 0 }],
-    ]) {
-      camera(rig);
-      await sleep(3000);
-      const fps = js('__game.fps');
-      const c = js('__game.renderCost(15)');
-      note(`benchmark (stress scene, ${js('JSON.stringify(__game.entityCounts)')}, paused), ${label}: ${fps} fps (display-capped); ${c.fullMs.toFixed(2)} ms per frame forced-complete (${(1000 / c.fullMs).toFixed(0)} fps uncapped equivalent); draw calls ${js('__game.drawCalls')}; LOD ${JSON.stringify(js('__game.lodLevelCounts'))}`);
-    }
-    errorsNow('stress scene');
-
-    // ---- walking benchmark (reported, not gated): 40 engineers and 300 aliens walking, game camera
-    await load('/?sandbox=1');
-    js(`(async () => { const g = __game; await g.setUnlimited(true); await g.tune('unit', 'commander', 'buildRate', 10); for (let i = 0; i < 40; i++) g.cmd.produce(); return true; })()`);
-    await until('40 engineers', `__game.list('unit').filter((u) => u.kindName === 'engineer').length >= 40`, 180);
-    const walk = js(`(async () => {
-      const g = __game;
-      const ids = g.list('unit').filter((u) => u.kindName === 'engineer').map((u) => u.id);
-      ids.forEach((id, i) => g.cmd.move([id], 50 + (i % 8) * 4, 48 + Math.floor(i / 8) * 4));
-      for (const [k, x] of [['rusher', 40], ['hunter', 50], ['breaker', 60], ['saboteur', 70], ['rusher', 80], ['hunter', 90]]) await g.spawnAt(k, x, 30.5, 50);
-      g.camera.set(${JSON.stringify(GAME_CAMERA)});
-      await new Promise((r) => setTimeout(r, 2500));
-      const upd = [];
-      for (let i = 0; i < 60; i++) { await new Promise((r) => requestAnimationFrame(r)); upd.push(g.timing.updateMs); }
-      upd.sort((a, b) => a - b);
-      const walking = g.list('unit').filter((u) => u.state === 1).length;
-      return { aliens: g.entityCounts.aliens, engineers: ids.length, walkingUnits: walking, updateMs: upd[30], frameCpuMs: g.frameCpuMs, fps: g.fps, drawCalls: g.drawCalls };
-    })()`);
-    const wc = js('__game.renderCost(15)');
-    note(`walking benchmark (sandbox, ${walk.engineers} engineers (${walk.walkingUnits} walking at the sample) and ${walk.aliens} aliens, game camera, medium): scene update ${walk.updateMs.toFixed(2)} ms CPU per frame (median, rigs and gait included); frame CPU ${walk.frameCpuMs.toFixed(2)} ms; ${walk.fps} fps (display-capped); ${wc.fullMs.toFixed(2)} ms per frame forced-complete; terrain + scenery ${wc.terrainMs.toFixed(2)} ms; post ${wc.postMs.toFixed(2)} ms; draw calls ${walk.drawCalls}`);
-    errorsNow('walking benchmark');
-
-    // ---- W24 run 2b and W27
+    // --only-2b (development): the run 2b and W27 checks alone
+    if (!args.includes('--only-2b')) await run2a();
     await run2b();
   } catch (e) {
-    if (e !== null) fail(String(e?.message ?? e));
+    fail(String(e?.message ?? e));
   } finally {
     try {
       spawnSync(AB, ['--session', SESSION, 'close'], { timeout: 30_000 });

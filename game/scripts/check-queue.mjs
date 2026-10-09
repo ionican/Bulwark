@@ -52,6 +52,7 @@ import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ART_REF, screenshot } from './shots.mjs';
 
 const GAME = fileURLToPath(new URL('..', import.meta.url));
 const PORT = 8824;
@@ -62,7 +63,7 @@ const shotsDir = arg('--shots');
 const ORIGIN = arg('--origin') ?? `http://127.0.0.1:${PORT}`;
 const serve = !arg('--origin');
 /** W26's screenshot is written on every run: to --shots, else the vault's art reference folder. */
-const w26Shots = shotsDir ?? join(homedir(), 'Library', 'Mobile Documents', 'iCloud~md~obsidian', 'Documents', "Rick's World", 'Resources', 'Bulwark Art Reference');
+const w26Shots = shotsDir ?? ART_REF;
 
 const failures = [];
 const fail = (msg) => {
@@ -184,9 +185,7 @@ function errorsNow(label) {
 
 async function shot(name) {
   if (!shotsDir) return null;
-  await frames(6);
-  const path = join(shotsDir, `w25-queue-${name}.png`);
-  ab('screenshot', path);
+  const path = await screenshot({ ab, js, frames }, join(shotsDir, `w25-queue-${name}.png`), { settle: 6 });
   note(`screenshot ${path}`);
   return path;
 }
@@ -550,13 +549,11 @@ async function runW26() {
   press('Escape');
   await frames(3);
   // the screenshot (the column on screen, the game running)
-  mkdirSync(w26Shots, { recursive: true });
-  const shotPath = join(w26Shots, 'w26-idle-column.png');
-  ab('screenshot', shotPath);
+  const shotPath = await screenshot({ ab, js, frames }, join(w26Shots, 'w26-idle-column.png'), { settle: 1 });
   note(`screenshot ${shotPath}`);
   // one engineer gets an order: the count drops on the next snapshot
   const busy = idle.engineer[0];
-  const order = js(`(async () => { const r = await __game.buildRun([60, 70], [63, 70], 1, { ids: [${busy}] }); return r; })()`);
+  const order = js(`__game.buildRun([60, 70], [63, 70], 1, { ids: [${busy}] })`);
   await until('the engineer count to drop', `__game.idleColumn.find((b) => b.type === 'engineer')?.count === 1`, 10).catch(() => null);
   const col2 = js('__game.idleColumn');
   check(
