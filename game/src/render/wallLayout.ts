@@ -49,6 +49,20 @@ export interface GatePiece {
   m: Float32Array;
 }
 
+/** A gate's W23 frame: centre and rotation, from which its door leaves are placed (W24 run 2b). */
+export interface GateFrame {
+  cx: number;
+  y: number;
+  cz: number;
+  rot: number;
+}
+
+/** The four door leaves of a gate opened by `open` (0 shut … 1 open, W23 leafOffsets): 16 floats each into `out`. */
+export function leafMatrices(f: GateFrame, open: number, out: Float32Array): Float32Array {
+  leafOffsets(open).forEach((off, k) => wallMatrix(_c, f.cx, f.y, f.cz, f.rot, off).toArray(out, k * 16));
+  return out;
+}
+
 const _a = new Matrix4();
 const _b = new Matrix4();
 const _c = new Matrix4();
@@ -67,6 +81,8 @@ export class WallLayout {
   readonly count: Uint16Array;
   /** Gate pieces (doors closed) by the gate's anchor tile index. */
   readonly gates = new Map<number, GatePiece[]>();
+  /** Gate frames by the gate's anchor tile index (the leaves move: run 2b draws them from this). */
+  readonly gateFrames = new Map<number, GateFrame>();
   /** Base height of every tile (the highest grid corner: a 1 × 1 footprint's top). */
   readonly base: Float32Array;
 
@@ -128,6 +144,7 @@ export class WallLayout {
     const g = this.grid;
     g.clear();
     this.gates.clear();
+    this.gateFrames.clear();
     let gateId = 0;
     for (let i = 0; i < this.key.length; i++) {
       const c = this.key[i]!;
@@ -157,6 +174,7 @@ export class WallLayout {
         const pieces: GatePiece[] = gi.parts.map((pc) => ({ part: pc.part, m: new Float32Array(_c.copy(_a).multiply(wallMatrix(_b, pc.off[0], pc.off[1], pc.off[2], pc.rot, [0, 0, 0])).elements) }));
         for (const off of leafOffsets(0)) pieces.push({ part: 'gate/leaf', m: new Float32Array(wallMatrix(_c, cx, y, cz, gi.rot, off).elements) });
         this.gates.set(i, pieces);
+        this.gateFrames.set(i, { cx, y, cz, rot: gi.rot });
       }
     }
     const list = wallInstances(g);

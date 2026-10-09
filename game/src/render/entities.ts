@@ -10,7 +10,8 @@
 // W24 run 2a (Richard): alien routes are not drawn (the simulation still computes them).
 // W24 run 2a: this is W13's greybox renderer. With `models: false` (the default view; models.ts
 // draws every building, unit, alien and wreck) it draws only the overlays: belt items, health bars,
-// beams and work lines, shields, shots and selection markers. With `models: true`
+// shields and selection markers (W24 run 2b: beams, work lines and shots are drawn by effects.ts in
+// that view, so they are drawn here only in the greybox view). With `models: true`
 // (`?greybox=1`) it draws everything, as in W13. Heights come from the drawn ground (ground.ts).
 // Its model batches are named `greybox/…`, so a scene inspection can tell them apart.
 
@@ -35,6 +36,7 @@ import { groundHeight as heightAt } from './ground.ts';
 import { GATE_AXIS_Z as AXIS_Z, gateDepthOf as gateDepth } from './wallLayout.ts';
 import { slotOf } from '../sim/table.ts';
 import type { Snapshot } from '../sim/snapshot.ts';
+import type { EffectTime } from './anim.ts';
 import {
   alienGeometries,
   barGeometry,
@@ -204,6 +206,9 @@ export interface FrameInput {
   selection: readonly Pick[];
   /** Seconds since the last frame, 0 while paused (models.ts walking). */
   dt?: number;
+  /** W24 run 2b: the effect clock (anim.ts EffectClock) and the worker's world epoch (resets). */
+  time?: EffectTime;
+  world?: number;
 }
 
 export class EntityRenderer {
@@ -347,9 +352,9 @@ export class EntityRenderer {
       ys,
       snap.units.cols.hp,
     );
-    this.drawWorkLines(f);
+    if (this.models) this.drawWorkLines(f);
     this.drawWrecks(snap, yc, ys);
-    this.drawShots(f.projectiles);
+    if (this.models) this.drawShots(f.projectiles);
     this.drawSelection(f, wppd);
     for (const b of this.allBatches()) b.commit();
     void t;
@@ -419,7 +424,7 @@ export class EntityRenderer {
         if (c.hp[r]! < c.maxHp[r]! - 0.5 && complete && !belt) this.bar(x, y + 2.4, z, c.hp[r]! / c.maxHp[r]!, size * 0.9, yc, ys);
       }
       // Beam turret firing: a beam to its target.
-      if (kind === B.beam && flags & BF_FIRING && c.target[r]! > 0) {
+      if (this.models && kind === B.beam && flags & BF_FIRING && c.target[r]! > 0) {
         const ar = this.alienRow[slotOf(c.target[r]! - 1)]!;
         if (ar >= 0 && f.aliens.id[ar] === c.target[r]! - 1) {
           const ax = f.aliens.x[ar]!;

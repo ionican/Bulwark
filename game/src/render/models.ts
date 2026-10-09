@@ -24,10 +24,20 @@
 // level 3 is the strategic icon (icons.ts), one per kind, told apart by shape.
 // Capacities: every batch grows up to a maximum derived from the simulation's table capacities
 // passed in by the caller; `overflowed` reports an instance dropped past it.
+//
+// W24 run 2b: animation and effects. anim.ts decides what moves and when (its header has the input
+// matrix); this module poses the models by it — door leaves at their opening, turrets by yaw,
+// pitch and recoil through the kit's pivots, extractors and the generator running, machines'
+// moving parts, the engineers' build pose and carry pod — and hands beams, flashes, shots and smoke
+// to effects.ts. Effect state advances for every building each frame before culling. W17 models
+// with a moving part (generator vane, shredder rollers, assembler arm) are baked as the static
+// model plus one model per moving part, keyed `<model>/<part>`. The lab dish and shield ring stay
+// static. W27: `previewBuilding` sends one building's draw to a capture instead of the batches,
+// so the placement preview is the same geometry at the same matrices.
 
 import { BoxGeometry, Frustum, Group, InstancedBufferAttribute, InstancedMesh, Matrix4, MeshStandardMaterial, Quaternion, Sphere, Vector3, DynamicDrawUsage, type BufferGeometry, type Material, type PerspectiveCamera, type Texture } from 'three';
-import { B, U, isBelt } from '../sim/kinds.ts';
-import { BF_COMPLETE, isReserved } from '../sim/schema.ts';
+import { B, U, buildingFootprint, isBelt } from '../sim/kinds.ts';
+import { BF_COMPLETE, BF_FIRING, BF_STARTED, T_ALIEN, T_BUILDING, T_UNIT, isReserved } from '../sim/schema.ts';
 import { slotOf } from '../sim/table.ts';
 import type { Terrain } from '../sim/terrain.ts';
 import type { Snapshot } from '../sim/snapshot.ts';
@@ -37,7 +47,10 @@ import { ICON, IconBatches, type IconName, type TurretIconSpecs } from './icons.
 import type { MobileView } from './interp.ts';
 import type { RenderMaterials } from './materials.ts';
 import { W17Batches, bakeModel, type BakedModel } from './w17Batches.ts';
-import { WallLayout, type BuildingRows } from './wallLayout.ts';
+import { WallLayout, leafMatrices, type BuildingRows } from './wallLayout.ts';
+import { ALIEN_AIM_HEIGHT, Animator, REST_YAW, beamOf, carryLoad, flatPitch, gateWanted, isMachine, isTurret, recoils, runsWhenComplete, type EffectTime } from './anim.ts';
+import { Effects } from './effects.ts';
+import { barrelPoint } from './workshop/stress/turretPose.ts';
 import { ALIEN_PHASE_PER_TILE, Tracks, motionAt } from './walk.ts';
 import { worldPerPixel } from './cameraRig.ts';
 import type { TurretMats } from './workshop/bench/surface.ts';
@@ -57,7 +70,7 @@ import { THRESHOLDS, type AssetKind } from './workshop/w23/lod.ts';
 import { BUILT } from './workshop/w23/mats.ts';
 import { PartSet, type PartDef } from './workshop/w23/parts.ts';
 import { CMD_PARTS, CMD_SEGS, CommanderRig, commanderBuilders } from './workshop/w23/rig/commander.ts';
-import { EngineerRig, VARIANTS, engineerBuilders, engineerSimple, segmentParts } from './workshop/w23/rig/engineer.ts';
+import { EngineerRig, SEG, VARIANTS, engineerBuilders, engineerSimple, segmentParts } from './workshop/w23/rig/engineer.ts';
 import { wallBuilders } from './workshop/w23/walls/geometry.ts';
 import { PYLON_H, TIERS } from './workshop/w23/walls/layout.ts';
 
@@ -132,6 +145,49 @@ export interface ModelCapacity {
   aliens: number;
   units: number;
   wrecks: number;
+  /** Projectile table capacity (run 2b effect pools); the buildings' if absent. */
+  projectiles?: number;
+}
+
+/** W17 models with a moving part drawn separately (part name → its batch, run 2b). */
+const MOVING_PARTS: Record<string, readonly string[]> = { generator: ['vane'], shredder: ['rollA', 'rollB'], assembler: ['arm'] };
+/** Carry pod scale at no load and at a full load. */
+const POD_MIN = 1.2;
+const POD_MAX = 2.5;
+
+/** Where one building's draw goes: the frame's batches, or a capture (W27 previews). */
+export interface BuildingSink {
+  part(part: PartDef, level: number, m: Matrix4 | Float32Array, o: number, glow: number, damage: number, cut: number): void;
+  model(index: number, m: ArrayLike<number>, o: number, damage: number, cut: number): void;
+  plinth(x: number, y: number, z: number, sx: number, sy: number, sz: number): void;
+}
+
+/** One captured instance of a preview: a geometry the batches draw, and its world matrix. */
+export interface Captured {
+  geometry: BufferGeometry;
+  matrix: Float32Array;
+}
+
+/** This frame's pose of the building being drawn (anim.ts state, read by drawBuilding). */
+interface BuildingPose {
+  door: number;
+  yaw: number;
+  pitch: number;
+  recoil: number;
+  run: number;
+  working: boolean;
+  flash: boolean;
+  beam: boolean;
+  /** Muzzle and barrel direction; the beam turret's target aim point. */
+  mx: number;
+  my: number;
+  mz: number;
+  dx: number;
+  dy: number;
+  dz: number;
+  ax: number;
+  ay: number;
+  az: number;
 }
 
 export interface ModelFrame {
@@ -144,6 +200,10 @@ export interface ModelFrame {
   units: MobileView;
   /** Seconds since the last frame, 0 while paused (walking: rigs ease and feet settle by it). */
   dt?: number;
+  /** Run 2b: projectile rows (interpolated), the effect clock and the worker's world epoch. */
+  projectiles?: MobileView;
+  time?: EffectTime;
+  world?: number;
 }
 
 export interface ModelCounts {
@@ -313,8 +373,32 @@ export class ModelRenderer {
   readonly counts: ModelCounts = { full: 0, middle: 0, simple: 0, icon: 0, culled: 0 };
 
   private readonly lv: { b: Uint8Array; bId: Uint32Array; a: Uint8Array; aId: Uint32Array; u: Uint8Array; uId: Uint32Array; w: Uint8Array; wId: Uint32Array; d: Uint8Array };
-  private readonly turretYaw: Float32Array;
-  private readonly turretYawId: Uint32Array;
+  /** Run 2b: effect state per building slot (anim.ts) and the effects drawn from it (effects.ts). */
+  readonly anim: Animator;
+  readonly effects: Effects;
+  private readonly bp: BuildingPose = { door: 0, yaw: REST_YAW, pitch: 0, recoil: 0, run: 0, working: false, flash: false, beam: false, mx: 0, my: 0, mz: 0, dx: 1, dy: 0, dz: 0, ax: 0, ay: 0, az: 0 };
+  /** Snapshot row by slot this frame (−1: none), and each building's top. */
+  private readonly bRow: Int32Array;
+  private readonly wRow: Int32Array;
+  private readonly uRow: Int32Array;
+  private readonly pRow: Int32Array;
+  private readonly bTop: Float32Array;
+  /** Each turret's muzzle this frame, by slot, and the id it was written for (shots leave from it). */
+  private readonly muzzle: Float32Array;
+  private readonly muzzleId: Uint32Array;
+  private readonly mz = new Float64Array(3);
+  private readonly leaves = new Float32Array(64);
+  private readonly chimneys: Array<[number, number, number]> = [
+    [0, 0, 0],
+    [0, 0, 0],
+  ];
+  private readonly movingParts = new Map<string, Array<{ batch: number; pivot: Matrix4; motion: Motion; rate: number }>>();
+  private readonly frameSink: BuildingSink;
+  private readonly beamAt = { reclaim: false, x: 0, y: 0, z: 0 };
+  private readonly ends: [number, number, number, number, number, number] = [0, 0, 0, 0, 0, 0];
+  private snap: Snapshot | null = null;
+  private aliensView: MobileView | null = null;
+  private previewWalls: WallLayout | null = null;
   private readonly rigs: Array<EngineerRig | CommanderRig | null>;
   private readonly rigId: Uint32Array;
   private readonly alienRow: Int32Array;
@@ -382,7 +466,19 @@ export class ModelRenderer {
       this.modelIndex.set(key, this.models.length);
       this.models.push(bakeModel(def, scale));
     };
-    for (const name of new Set(W17_BUILDING_MODEL.values())) addModel(name, BUILDING_MAKERS[name as keyof typeof BUILDING_MAKERS](w));
+    for (const name of new Set(W17_BUILDING_MODEL.values())) {
+      const def = BUILDING_MAKERS[name as keyof typeof BUILDING_MAKERS](w);
+      const moving = MOVING_PARTS[name] ?? [];
+      addModel(name, { ...def, parts: def.parts.filter((pd) => !moving.includes(pd.name)) });
+      const list: Array<{ batch: number; pivot: Matrix4; motion: Motion; rate: number }> = [];
+      for (const pd of def.parts) {
+        if (!moving.includes(pd.name)) continue;
+        const key = `${name}/${pd.name}`;
+        addModel(key, { name: key, parts: [{ ...pd, pivot: new Matrix4() }], radius: def.radius, height: def.height });
+        list.push({ batch: this.modelIndex.get(key)!, pivot: pd.pivot.clone(), motion: pd.motion, rate: pd.motion.kind === 'spin' ? Math.abs(pd.motion.speed) : 1 });
+      }
+      if (list.length) this.movingParts.set(name, list);
+    }
     addModel('splitterMarker', beltMarker(w, 'splitter'));
     addModel('mergerMarker', beltMarker(w, 'merger'));
     // aliens: one batch per distinct part geometry (W21: a rusher's four legs share one), each part
@@ -425,8 +521,24 @@ export class ModelRenderer {
     this.walls = new WallLayout(terrain);
     const L = (n: number) => new Uint8Array(n).fill(LEVEL_NEW);
     this.lv = { b: L(C.buildings), bId: new Uint32Array(C.buildings), a: L(C.aliens), aId: new Uint32Array(C.aliens), u: L(C.units), uId: new Uint32Array(C.units), w: L(C.wrecks), wId: new Uint32Array(C.wrecks), d: L(deposits) };
-    this.turretYaw = new Float32Array(C.buildings).fill(Math.PI / 2);
-    this.turretYawId = new Uint32Array(C.buildings).fill(0xffffffff);
+    this.anim = new Animator(C.buildings);
+    this.effects = new Effects({ buildings: C.buildings, units: C.units, projectiles: C.projectiles ?? C.buildings });
+    this.group.add(this.effects.group);
+    this.bRow = new Int32Array(C.buildings);
+    this.wRow = new Int32Array(C.wrecks);
+    this.uRow = new Int32Array(C.units);
+    this.pRow = new Int32Array(C.projectiles ?? C.buildings);
+    this.bTop = new Float32Array(C.buildings);
+    this.muzzle = new Float32Array(C.buildings * 3);
+    this.muzzleId = new Uint32Array(C.buildings).fill(0xffffffff);
+    this.frameSink = {
+      part: (p, lv, m, o, glow, damage, cut) => this.batches.push(p, lv, m, o, glow, damage, cut),
+      model: (i, m, o, damage, cut) => this.w17.push(i, m, o, 1, damage, cut),
+      plinth: (x, y, z, sx, sy, sz) => {
+        const k = this.plinths.push(x, y, z, sx, sy, sz);
+        if (k >= 0) (this.plinths.mesh.instanceColor!.array as Float32Array).set([1, 0, BUILT], k * 3);
+      },
+    };
     this.rigs = new Array(C.units).fill(null);
     this.rigId = new Uint32Array(C.units).fill(0xffffffff);
     this.alienRow = new Int32Array(C.aliens);
@@ -443,7 +555,7 @@ export class ModelRenderer {
   }
 
   get overflowed(): boolean {
-    return this.batches.overflowed || this.w17.overflowed || this.icons.overflowed || this.plinths.overflowed || this.outlines.overflowed;
+    return this.batches.overflowed || this.w17.overflowed || this.icons.overflowed || this.plinths.overflowed || this.outlines.overflowed || this.effects.overflowed;
   }
 
   /** Part definition of a W22 kit part (for tests). */
@@ -457,6 +569,46 @@ export class ModelRenderer {
     this.sphere.radius = r;
     return this.frustum.intersectsSphere(this.sphere);
   }
+
+  private readonly visibleAt = (x: number, y: number, z: number, r: number): boolean => this.visible(x, y, z, r);
+
+  /** Muzzle of a projectile's shooter (effects.ts shots): a turret's muzzle, the commander's gun, an alien's body. */
+  private readonly shotOrigin = (id: number, out: Float32Array, o: number): boolean => {
+    const snap = this.snap;
+    if (!snap) return false;
+    const P = snap.projectiles;
+    const s = slotOf(id);
+    const pr = s < this.pRow.length ? this.pRow[s]! : -1;
+    if (pr < 0 || P.id[pr] !== id) return false;
+    const type = P.cols.srcType[pr]!;
+    const src = P.cols.srcId[pr]!;
+    const ss = slotOf(src);
+    if (type === T_BUILDING) {
+      if (ss >= this.muzzleId.length || this.muzzleId[ss] !== src) return false;
+      out[o] = this.muzzle[ss * 3]!;
+      out[o + 1] = this.muzzle[ss * 3 + 1]!;
+      out[o + 2] = this.muzzle[ss * 3 + 2]!;
+      return true;
+    }
+    if (type === T_UNIT) {
+      const rig = this.rigOf(src);
+      if (!(rig instanceof CommanderRig)) return false;
+      out[o] = rig.muzzle.x;
+      out[o + 1] = rig.muzzle.y;
+      out[o + 2] = rig.muzzle.z;
+      return true;
+    }
+    if (type === T_ALIEN) {
+      const v = this.aliensView;
+      const ar = ss < this.alienRow.length ? this.alienRow[ss]! : -1;
+      if (!v || ar < 0 || v.id[ar] !== src) return false;
+      out[o] = v.x[ar]!;
+      out[o + 2] = v.z[ar]!;
+      out[o + 1] = this.ground(v.x[ar]!, v.z[ar]!) + (ALIEN_AIM_HEIGHT[v.kind[ar]!] ?? 1);
+      return true;
+    }
+    return false;
+  };
 
   private dist(x: number, y: number, z: number): number {
     return Math.hypot(x - this.camPos.x, y - this.camPos.y, z - this.camPos.z);
@@ -500,18 +652,37 @@ export class ModelRenderer {
     this.plinths.count = 0;
     this.outlines.count = 0;
     const snap = f.snapshot;
+    this.snap = snap;
+    this.aliensView = f.aliens;
     this.alienRow.fill(-1);
     for (let r = 0; r < f.aliens.count; r++) this.alienRow[slotOf(f.aliens.id[r]!)] = r;
+    const rows = (out: Int32Array, sec: { count: number; id: Uint32Array }) => {
+      out.fill(-1);
+      for (let r = 0; r < sec.count; r++) {
+        const s = slotOf(sec.id[r]!);
+        if (s < out.length) out[s] = r;
+      }
+    };
+    rows(this.bRow, snap.buildings);
+    rows(this.wRow, snap.wrecks);
+    rows(this.uRow, snap.units);
+    rows(this.pRow, snap.projectiles);
     this.walls.update(rowsOf(snap));
     this.frameNo++;
     this.unitTracks.tick(snap.tick);
     this.alienTracks.tick(snap.tick);
     const dt = f.dt ?? 0;
+    // the effect clock (anim.ts): a reset drops every effect state and clears the effects
+    const time = f.time ?? { t: 0, dt };
+    const reset = this.anim.begin(snap.tick, f.world ?? 0, time);
+    this.effects.begin(this.camPos, cam, this.wppd, this.anim.t, this.anim.dt, reset);
     this.drawBuildings(f);
     this.drawDeposits();
-    this.drawUnits(f.units, dt);
+    this.drawUnits(f.units, dt, snap);
     this.drawAliens(f.aliens, dt);
     this.drawWrecks(snap);
+    if (f.projectiles) this.effects.shots(f.projectiles, this.ground, this.shotOrigin, this.visibleAt);
+    this.effects.commit();
     this.batches.commit();
     this.w17.commit();
     this.icons.commit();
@@ -524,6 +695,7 @@ export class ModelRenderer {
     const col = snap.buildings.cols;
     const t = this.terrain;
     const W = t.w;
+    const P = this.bp;
     this.extractorAt.clear();
     for (let r = 0; r < snap.buildings.count; r++) {
       const id = snap.buildings.id[r]!;
@@ -538,11 +710,19 @@ export class ModelRenderer {
       const { top, bottom } = footprintRange(t, tx, ty, fw, fh);
       const cx = tx + fw / 2;
       const cz = ty + fh / 2;
-      if (!this.visible(cx, top + 1, cz, Math.max(fw, fh) * 0.75 + 1.5)) {
+      const slot = slotOf(id);
+      this.bTop[slot] = top;
+      // effect state advances for every building, on screen or not (anim.ts)
+      this.animateBuilding(f, r, slot, id, kind, flags, tx, ty, fw, fh, cx, top, cz);
+      const seen = this.visible(cx, top + 1, cz, Math.max(fw, fh) * 0.75 + 1.5);
+      if (P.beam) {
+        // the beam turret's beam: every frame while it fires at a present target
+        this.effects.turretBeam(P.mx, P.my, P.mz, P.ax, P.ay, P.az, (id % 61) / 61, seen);
+      }
+      if (!seen) {
         this.counts.culled++;
         continue;
       }
-      const slot = slotOf(id);
       const d = this.dist(cx, top, cz);
       const th = kind === B.wall ? THRESHOLDS.wall : kind === B.gate ? THRESHOLDS.gate : W17_BUILDING_MODEL.has(kind) ? W17_THRESHOLDS : THRESHOLDS.turret;
       const lv = this.level(this.lv.b, this.lv.bId, slot, id, d, th);
@@ -553,44 +733,173 @@ export class ModelRenderer {
         continue;
       }
       const complete = (flags & BF_COMPLETE) !== 0;
-      const progress = col.progress[r]!;
       const frac = col.maxHp[r]! > 0 ? col.hp[r]! / col.maxHp[r]! : 1;
       const damage = complete ? (frac > 2 / 3 ? 0 : frac > 1 / 3 ? 1 : 2) : 0;
       if (lv === ICON_LEVEL) {
         this.buildingIcon(kind, r, snap, cx, top, cz, fw, fh);
         continue;
       }
-      if (top - bottom > 0.01) {
-        const k = this.plinths.push(cx, top + 0.02, cz, fw, top - bottom + 0.1, fh);
-        if (k >= 0) (this.plinths.mesh.instanceColor!.array as Float32Array).set([1, 0, BUILT], k * 3);
+      if (P.flash) this.effects.flash(P.mx, P.my, P.mz, P.dx, P.dy, P.dz, kind === B.heavy, lv <= 1, true);
+      if (kind === B.smelter && P.working) {
+        const k = this.chimneys;
+        k[0]![0] = k[1]![0] = cx - 0.35;
+        k[0]![1] = k[1]![1] = top + 2.4;
+        k[0]![2] = cz - 0.35;
+        k[1]![2] = cz + 0.35;
+        this.effects.chimneys(slot, id, k);
       }
-      const cutOf = (height: number) => (complete ? BUILT : top + height * progress);
-      if (kind === B.wall) {
-        const tile = ty * W + tx;
-        const first = this.walls.first[tile]!;
-        const n = this.walls.count[tile]!;
-        const cut = cutOf(TIERS[Math.max(1, Math.min(3, col.tier[r]!))]!.top + 0.3);
-        for (let k = 0; k < n; k++) this.batches.push(this.parts.get(this.walls.parts[first + k]!), lv, this.walls.matrices, (first + k) * 16, 1, damage + 10, cut);
-      } else if (kind === B.gate) {
-        const pieces = this.walls.gates.get(ty * W + tx);
-        const cut = cutOf(PYLON_H + 0.3);
-        if (pieces) for (const pc of pieces) this.batches.push(this.parts.get(pc.part), lv, pc.m, 0, pc.part === 'gate/leaf' ? 0.6 : 1, pc.part === 'gate/leaf' ? damage : damage + 10, cut);
-      } else if (kind === B.massExtractor || kind === B.rareExtractor) {
-        this.drawExtractor(kind === B.massExtractor ? 'mass' : 'rare', cx, top, cz, complete ? 1 : progress, damage, lv);
-      } else if (TURRET_KINDS.has(kind)) {
-        this.drawTurret(kind, r, f, cx, top, cz, damage, complete, progress, lv);
-      } else {
-        const name = W17_BUILDING_MODEL.get(kind);
-        if (name === undefined) continue;
-        const mi = this.modelIndex.get(name)!;
-        const model = this.models[mi]!;
-        const yaw = isBelt(kind) ? BELT_YAW[col.dir[r]! & 3]! : 0;
-        _m.makeRotationY(yaw).setPosition(cx, top, cz);
-        const cut = cutOf(model.height + 0.2);
-        this.w17.push(mi, _m.elements, 0, 1, damage, cut);
-        if (kind === B.splitter || kind === B.merger) this.w17.push(this.modelIndex.get(kind === B.splitter ? 'splitterMarker' : 'mergerMarker')!, _m.elements, 0, 1, damage, cut);
-      }
+      this.drawBuilding(this.frameSink, this.walls, kind, ty * W + tx, col.dir[r]!, col.tier[r]!, cx, top, bottom, cz, fw, fh, lv, damage, complete, col.progress[r]!);
     }
+  }
+
+  /**
+   * This frame's effect state of building row `r` (anim.ts) into `this.bp`: door opening, aim,
+   * recoil and flash, running time; the muzzle of a turret (shots leave from it); and the beam
+   * turret's beam end points.
+   */
+  private animateBuilding(f: ModelFrame, r: number, slot: number, id: number, kind: number, flags: number, tx: number, ty: number, fw: number, fh: number, cx: number, top: number, cz: number): void {
+    const A = this.anim;
+    const col = f.snapshot.buildings.cols;
+    const P = this.bp;
+    A.building(slot, id, col.work[r]!);
+    P.door = 0;
+    P.yaw = REST_YAW;
+    P.pitch = 0;
+    P.recoil = 0;
+    P.run = 0;
+    P.working = false;
+    P.flash = false;
+    P.beam = false;
+    if (kind === B.gate) {
+      P.door = A.gate(slot, gateWanted(f.units, tx, ty, fw, fh));
+      return;
+    }
+    if (runsWhenComplete(kind) || isMachine(kind)) {
+      P.run = A.motion(slot, kind, flags, col.work[r]!);
+      P.working = A.moving(slot, kind, flags);
+      return;
+    }
+    if (!isTurret(kind)) return;
+    const k = this.kitKinds.get(kind)!;
+    const s = TURRET_SCALE.get(kind) ?? 1;
+    // target − 1 = an alien present: aim at its interpolated position and aim height
+    const target = col.target[r]!;
+    let ar = -1;
+    if (target > 0) {
+      const a = this.alienRow[slotOf(target - 1)]!;
+      if (a >= 0 && f.aliens.id[a] === target - 1) ar = a;
+    }
+    if (ar >= 0) {
+      P.ax = f.aliens.x[ar]!;
+      P.az = f.aliens.z[ar]!;
+      P.ay = this.ground(P.ax, P.az) + (ALIEN_AIM_HEIGHT[f.aliens.kind[ar]!] ?? 1);
+      A.aim(slot, true, Math.atan2(-(P.az - cz), P.ax - cx), flatPitch(Math.hypot(P.ax - cx, P.az - cz), P.ay - (top + k.frame.trunnionY * s), 0));
+    } else A.aim(slot, false, 0, 0);
+    P.yaw = A.yaw[slot]!;
+    P.pitch = A.pitch[slot]!;
+    if (recoils(kind)) {
+      P.flash = A.fire(slot, flags);
+      P.recoil = A.recoil(slot);
+    }
+    // the muzzle: the kind's muzzle point in the barrel's frame (with recoil), scaled about the footprint centre
+    const m = this.mz;
+    barrelPoint(m, 0, 0, 0, 0, P.yaw, P.pitch, k.frame.trunnionY, P.recoil * k.frame.recoilScale, k.muzzle[0], k.muzzle[1], k.muzzle[2]);
+    P.mx = cx + m[0]! * s;
+    P.my = top + m[1]! * s;
+    P.mz = cz + m[2]! * s;
+    const cp = Math.cos(P.pitch);
+    P.dx = Math.cos(P.yaw) * cp;
+    P.dy = Math.sin(P.pitch);
+    P.dz = -Math.sin(P.yaw) * cp;
+    this.muzzle[slot * 3] = P.mx;
+    this.muzzle[slot * 3 + 1] = P.my;
+    this.muzzle[slot * 3 + 2] = P.mz;
+    this.muzzleId[slot] = id;
+    P.beam = kind === B.beam && (flags & BF_FIRING) !== 0 && ar >= 0;
+  }
+
+  /**
+   * One building's model into `sink` (the frame's batches, or a W27 preview capture) in the pose
+   * held in `this.bp`. Walls and gates read their pieces from `layout` at anchor tile `tile`.
+   */
+  private drawBuilding(sink: BuildingSink, layout: WallLayout, kind: number, tile: number, dir: number, tier: number, cx: number, top: number, bottom: number, cz: number, fw: number, fh: number, lv: number, damage: number, complete: boolean, progress: number): void {
+    const P = this.bp;
+    if (top - bottom > 0.01) sink.plinth(cx, top + 0.02, cz, fw, top - bottom + 0.1, fh);
+    const cutOf = (height: number) => (complete ? BUILT : top + height * progress);
+    if (kind === B.wall) {
+      const first = layout.first[tile]!;
+      const n = layout.count[tile]!;
+      const cut = cutOf(TIERS[Math.max(1, Math.min(3, tier))]!.top + 0.3);
+      for (let k = 0; k < n; k++) sink.part(this.parts.get(layout.parts[first + k]!), lv, layout.matrices, (first + k) * 16, 1, damage + 10, cut);
+    } else if (kind === B.gate) {
+      const pieces = layout.gates.get(tile);
+      const frame = layout.gateFrames.get(tile);
+      const cut = cutOf(PYLON_H + 0.3);
+      if (pieces) for (const pc of pieces) if (pc.part !== 'gate/leaf') sink.part(this.parts.get(pc.part), lv, pc.m, 0, 1, damage + 10, cut);
+      // the door leaves at this frame's opening (W23 leafOffsets)
+      if (frame) {
+        leafMatrices(frame, P.door, this.leaves);
+        const leaf = this.parts.get('gate/leaf');
+        for (let k = 0; k < 4; k++) sink.part(leaf, lv, this.leaves, k * 16, 0.6, damage, cut);
+      }
+    } else if (kind === B.massExtractor || kind === B.rareExtractor) {
+      this.drawExtractor(sink, kind === B.massExtractor ? 'mass' : 'rare', cx, top, cz, complete ? 1 : progress, damage, lv, P.working, P.run);
+    } else if (TURRET_KINDS.has(kind)) {
+      const k = this.kitKinds.get(kind)!;
+      const s = TURRET_SCALE.get(kind) ?? 1;
+      const cut = complete ? BUILT : top + (k.top * s + 0.3) * progress;
+      this.pushKit(k, cx, top, cz, P.yaw, s, lv, damage, cut, P.pitch, P.recoil, sink);
+    } else {
+      const name = W17_BUILDING_MODEL.get(kind);
+      if (name === undefined) return;
+      const mi = this.modelIndex.get(name)!;
+      const model = this.models[mi]!;
+      const yaw = isBelt(kind) ? BELT_YAW[dir & 3]! : 0;
+      _m.makeRotationY(yaw).setPosition(cx, top, cz);
+      const cut = cutOf(model.height + 0.2);
+      sink.model(mi, _m.elements, 0, damage, cut);
+      if (kind === B.splitter || kind === B.merger) sink.model(this.modelIndex.get(kind === B.splitter ? 'splitterMarker' : 'mergerMarker')!, _m.elements, 0, damage, cut);
+      // W17 moving parts (generator vane, shredder rollers, assembler arm): turned by the running time
+      const moving = this.movingParts.get(name);
+      if (moving)
+        for (const mp of moving) {
+          _m2.multiplyMatrices(_m, mp.pivot).multiply(motionAt(mp.motion, P.run * mp.rate, 0, _mot));
+          sink.model(mp.batch, _m2.elements, 0, damage, cut);
+        }
+    }
+  }
+
+  /**
+   * W27: one complete building of `kind` at (tx, ty) facing `dir`, at full detail and at rest
+   * (doors shut, turret at its rest aim, nothing running), captured instead of drawn: the geometry
+   * objects and world matrices the batches would draw for it placed there. Walls and gates are laid
+   * out on their own (a lone wall, a lone gate) in a scratch layout, so the frame's layout is untouched.
+   */
+  previewBuilding(kind: number, tx: number, ty: number, dir: number, out: Captured[] = []): Captured[] {
+    out.length = 0;
+    let [fw, fh] = buildingFootprint(kind);
+    if (kind === B.gate && dir === 1) [fw, fh] = [fh, fw];
+    const { top, bottom } = footprintRange(this.terrain, tx, ty, fw, fh);
+    let layout = this.walls;
+    if (kind === B.wall || kind === B.gate) {
+      layout = this.previewWalls ??= new WallLayout(this.terrain);
+      layout.update(rowsOfPlan([[tx, ty]], kind, fw, fh, dir));
+    }
+    const P = this.bp;
+    P.door = P.pitch = P.recoil = P.run = 0;
+    P.yaw = REST_YAW;
+    P.working = P.flash = P.beam = false;
+    this.drawBuilding(captureInto(out, this), layout, kind, ty * this.terrain.w + tx, dir, 1, tx + fw / 2, top, bottom, ty + fh / 2, fw, fh, 0, 0, true, 1);
+    return out;
+  }
+
+  /** Geometries and matrices of the meshes a capture can name (models by batch index, the plinth box). */
+  modelPieces(index: number): ReadonlyArray<{ geometry: BufferGeometry }> {
+    return this.models[index]!.pieces;
+  }
+
+  get plinthGeometry(): BufferGeometry {
+    return this.plinths.mesh.geometry;
   }
 
   private buildingIcon(kind: number, r: number, snap: Snapshot, cx: number, top: number, cz: number, fw: number, fh: number): void {
@@ -602,60 +911,36 @@ export class ModelRenderer {
       return this.icon('gate', cx, y, cz, 3.2, 0, alongZ ? 0 : Math.PI / 2);
     }
     if (isBelt(kind)) return this.icon(BUILDING_ICON[kind]!, cx, y, cz, 0.9, ICON_PX.belt, BELT_YAW[snap.buildings.cols.dir[r]! & 3]!);
-    if (TURRET_KINDS.has(kind)) {
-      const slot = slotOf(snap.buildings.id[r]!);
-      return this.icon(BUILDING_ICON[kind]!, cx, y, cz, Math.max(fw, fh) * 0.9, ICON_PX.building, this.turretYaw[slot]!);
-    }
+    if (TURRET_KINDS.has(kind)) return this.icon(BUILDING_ICON[kind]!, cx, y, cz, Math.max(fw, fh) * 0.9, ICON_PX.building, this.bp.yaw);
     this.icon(BUILDING_ICON[kind]!, cx, y, cz, Math.max(fw, fh) * 0.9, ICON_PX.building);
   }
 
-  private drawExtractor(kind: 'mass' | 'rare', x: number, y: number, z: number, built: number, damage: number, lv: number): void {
-    const B_ = this.batches;
+  private drawExtractor(sink: BuildingSink, kind: 'mass' | 'rare', x: number, y: number, z: number, built: number, damage: number, lv: number, working: boolean, t: number): void {
     const P = (id: string) => this.parts.get(id);
     const base = extractorMatrix(_m, { x, y, z, rot: 0 });
-    const pose = extractorPose({ kind, x, y, z, rot: 0, built, working: false, t: 0, damage }, this.pose);
+    const pose = extractorPose({ kind, x, y, z, rot: 0, built, working, t, damage }, this.pose);
     const cut = built < 1 ? y + (EXTRACTOR_HEIGHT[kind] + 0.3) * built : BUILT;
     if (kind === 'mass') {
-      B_.push(P('mass/base'), lv, base, 0, 1, damage, cut);
-      B_.push(P('mass/drum'), lv, pivotMatrix(_m2, base, pose.spin, 0), 0, 1, damage, cut);
-      B_.push(P('mass/head'), lv, pivotMatrix(_m2, base, 0, pose.slide), 0, 1, damage, cut);
-      B_.push(P('mass/fill'), lv, pivotMatrix(_m2, base, 0, 0.08 + pose.fill), 0, 1, 0, cut);
-      B_.push(P('mass/light'), lv, base, 0, pose.light * 2, 0, cut);
+      sink.part(P('mass/base'), lv, base, 0, 1, damage, cut);
+      sink.part(P('mass/drum'), lv, pivotMatrix(_m2, base, pose.spin, 0), 0, 1, damage, cut);
+      sink.part(P('mass/head'), lv, pivotMatrix(_m2, base, 0, pose.slide), 0, 1, damage, cut);
+      sink.part(P('mass/fill'), lv, pivotMatrix(_m2, base, 0, 0.08 + pose.fill), 0, 1, 0, cut);
+      sink.part(P('mass/light'), lv, base, 0, pose.light * 2, 0, cut);
     } else {
-      B_.push(P('rare/base'), lv, base, 0, 1, damage, cut);
-      B_.push(P('rare/ring'), lv, pivotMatrix(_m2, base, pose.spin, 0), 0, 0.2, damage, cut);
-      B_.push(P('rare/pump'), lv, pivotMatrix(_m2, base, 0, pose.slide), 0, 0.2, damage, cut);
-      B_.push(P('rare/light'), lv, base, 0, pose.light * 2, 0, cut);
+      sink.part(P('rare/base'), lv, base, 0, 1, damage, cut);
+      sink.part(P('rare/ring'), lv, pivotMatrix(_m2, base, pose.spin, 0), 0, 0.2, damage, cut);
+      sink.part(P('rare/pump'), lv, pivotMatrix(_m2, base, 0, pose.slide), 0, 0.2, damage, cut);
+      sink.part(P('rare/light'), lv, base, 0, pose.light * 2, 0, cut);
     }
     if (lv <= 1)
-      for (let k = 0; k < FLOW_SEGS; k++) B_.push(P('flow/seg'), lv, pivotMatrix(_m2, base, 0, 0, flowSegment(kind, k)), 0, pose.flow[k]!, 0, cut);
+      for (let k = 0; k < FLOW_SEGS; k++) sink.part(P('flow/seg'), lv, pivotMatrix(_m2, base, 0, 0, flowSegment(kind, k)), 0, pose.flow[k]!, 0, cut);
   }
 
-  private drawTurret(kind: number, r: number, f: ModelFrame, cx: number, top: number, cz: number, damage: number, complete: boolean, progress: number, lv: number): void {
-    const k = this.kitKinds.get(kind)!;
-    const s = TURRET_SCALE.get(kind) ?? 1;
-    const col = f.snapshot.buildings.cols;
-    const id = f.snapshot.buildings.id[r]!;
-    const slot = slotOf(id);
-    if (this.turretYawId[slot] !== id) {
-      this.turretYawId[slot] = id;
-      this.turretYaw[slot] = Math.PI / 2; // a new turret faces north, where the waves come from
-    }
-    // yaw only, towards the snapshot target (alien id + 1; 0 = none: keep the last yaw)
-    const target = col.target[r]!;
-    if (target > 0) {
-      const ar = this.alienRow[slotOf(target - 1)]!;
-      if (ar >= 0 && f.aliens.id[ar] === target - 1) this.turretYaw[slot] = Math.atan2(-(f.aliens.z[ar]! - cz), f.aliens.x[ar]! - cx);
-    }
-    const cut = complete ? BUILT : top + (k.top * s + 0.3) * progress;
-    this.pushKit(k, cx, top, cz, this.turretYaw[slot]!, s, lv, damage, cut);
-  }
-
-  /** Every part of kit kind `k` at its level, placed on (x, y, z) with yaw, scaled by s. */
-  pushKit(k: Kind, x: number, y: number, z: number, yaw: number, s: number, lv: number, damage = 0, cut = BUILT): void {
+  /** Every part of kit kind `k` at its level, placed on (x, y, z) with yaw, pitch and recoil, scaled by s. */
+  pushKit(k: Kind, x: number, y: number, z: number, yaw: number, s: number, lv: number, damage = 0, cut = BUILT, pitch = 0, recoil = 0, sink: BuildingSink = this.frameSink): void {
     const piv = this.pivots;
     const m = this.tmp;
-    writePivots(piv, k.frame, 0, 0, 0, yaw, 0, 0, 0);
+    writePivots(piv, k.frame, 0, 0, 0, yaw, pitch, recoil, 0);
     for (const pl of k.placed) {
       if (pl.part.levels[lv]!.size === 0) continue;
       writePart(m, 0, piv, pl.pivot[lv]!, pl.off);
@@ -663,7 +948,7 @@ export class ModelRenderer {
       m[12] = m[12]! * s + x;
       m[13] = m[13]! * s + y;
       m[14] = m[14]! * s + z;
-      this.batches.push(this.kitPart[pl.part.index]!, lv, m, 0, 1, damage, cut);
+      sink.part(this.kitPart[pl.part.index]!, lv, m, 0, 1, damage, cut);
     }
   }
 
@@ -694,8 +979,9 @@ export class ModelRenderer {
     });
   }
 
-  private drawUnits(v: MobileView, dt: number): void {
+  private drawUnits(v: MobileView, dt: number, snap: Snapshot): void {
     const T = this.unitTracks;
+    const uc = snap.units.cols;
     for (let r = 0; r < v.count; r++) {
       const id = v.id[r]!;
       const kind = v.kind[r]!;
@@ -711,11 +997,17 @@ export class ModelRenderer {
         this.counts.culled++;
         continue;
       }
+      // the snapshot row of this unit: its state, work target and load (anim.ts beamOf, carryLoad)
+      const sr = this.uRow[slot]!;
+      const known = sr >= 0 && snap.units.id[sr] === id;
+      const beam = known ? this.beamTarget(snap, uc.state[sr]!, uc.work[sr]!) : null;
+      const load = known ? carryLoad(kind, uc.carry[sr]!) : 0;
       const lv = this.level(this.lv.u, this.lv.uId, slot, id, this.dist(x, y + h / 2, z), commander ? THRESHOLDS.commander : THRESHOLDS.engineer);
       this.tally(lv);
       if (lv === ICON_LEVEL) {
         if (commander) this.icon('commanderRing', x, y + 0.4, z, 2.4, ICON_PX.commander);
         else this.icon('engineer', x, y + 0.4, z, 0.9, ICON_PX.engineer);
+        if (beam) this.effects.workBeam(beam.reclaim, ...this.beamEnds(beam, x, y + (commander ? 2.4 : 0.6), z), (id % 37) / 37, true);
         continue;
       }
       const yaw = T.heading[slot]!;
@@ -728,28 +1020,78 @@ export class ModelRenderer {
         fresh = true;
       }
       this.rigFrame[slot] = this.frameNo;
+      if (beam) rig.aim.set(beam.x, beam.y, beam.z);
       if (fresh) {
         // first sight, a jump or a rewind: stand at rest, both feet planted on the sampled ground
         rig.place(x, z, yaw, this.ground);
         rig.update(0, x, z, yaw, this.ground);
       } else {
-        // W23's gait: advances by the distance moved; planted feet stay on their touchdown points
+        // W23's gait: advances by the distance moved; planted feet stay on their touchdown points.
+        // Standing and beaming: W23's build pose (the tool, or the commander's arm, on the target)
         const moving = step.dist > 1e-5 && dt > 0;
-        if (rig instanceof EngineerRig) rig.setAction(moving ? 'walk' : 'idle');
-        else rig.setAction(moving ? 'walk' : 'idle');
+        if (rig instanceof EngineerRig) rig.setAction(moving ? 'walk' : beam ? 'build' : 'idle');
+        else rig.setAction(moving ? 'walk' : beam ? 'build' : 'idle');
         rig.update(dt, x, z, yaw, this.ground);
       }
       if (rig instanceof CommanderRig) {
         CMD_SEGS.forEach((s, k) => this.batches.push(this.parts.get(CMD_PARTS[s]), lv, rig.mats[k]!));
         if (lv >= 2) this.icon('commander', x, y + 4.2, z, 0, ICON_PX.commander * 0.8);
+        if (beam) {
+          const e = rig.emitter;
+          this.effects.workBeam(beam.reclaim, ...this.beamEnds(beam, e.x, e.y, e.z), (id % 37) / 37, true);
+        }
       } else {
         const er = rig as EngineerRig;
         segmentParts(er.variant, false).forEach((pid, k) => {
           if (pid) this.batches.push(this.parts.get(pid), lv, er.mats[k]!);
         });
         if (lv >= 2) this.icon('engineer', x, y + 1.2, z, 0, ICON_PX.engineer * 0.8);
+        if (beam) this.effects.workBeam(beam.reclaim, ...this.beamEnds(beam, er.tip.x, er.tip.y, er.tip.z), (id % 37) / 37, true);
+        if (load > 0) {
+          // the carry pod on the back: W23's salvage box behind the pack, sized by the load, swaying
+          const sway = 0.14 * Math.sin(this.anim.t * 2.6 + (id % 13));
+          const k = POD_MIN + (POD_MAX - POD_MIN) * load;
+          _m.copy(er.mats[SEG.torso]!).multiply(_m2.makeTranslation(-0.2, 0.06 + 0.05 * k, 0)).multiply(_mot.makeRotationX(sway));
+          _m.multiply(_m2.makeScale(k, k, k));
+          this.batches.push(this.parts.get('eng/box'), lv, _m);
+        }
       }
     }
+  }
+
+  /** The point a unit beams at: a building present in the snapshot (build) or a wreck (reclaim); null when absent. */
+  private beamTarget(snap: Snapshot, state: number, work: number): { reclaim: boolean; x: number; y: number; z: number } | null {
+    const b = beamOf(state, work);
+    if (!b) return null;
+    const out = this.beamAt;
+    out.reclaim = b.reclaim;
+    const s = slotOf(b.id);
+    if (!b.reclaim) {
+      const br = s < this.bRow.length ? this.bRow[s]! : -1;
+      if (br < 0 || snap.buildings.id[br] !== b.id) return null;
+      const c = snap.buildings.cols;
+      out.x = c.tx[br]! + c.fw[br]! / 2;
+      out.z = c.ty[br]! + c.fh[br]! / 2;
+      out.y = this.bTop[s]! + 0.5;
+      return out;
+    }
+    const wr = s < this.wRow.length ? this.wRow[s]! : -1;
+    if (wr < 0 || snap.wrecks.id[wr] !== b.id) return null;
+    out.x = snap.wrecks.cols.x[wr]!;
+    out.z = snap.wrecks.cols.z[wr]!;
+    out.y = this.ground(out.x, out.z) + 0.25;
+    return out;
+  }
+
+  /** Beam end points: build = emitter → site; reclaim = wreck → emitter. */
+  private beamEnds(b: { reclaim: boolean; x: number; y: number; z: number }, ex: number, ey: number, ez: number): [number, number, number, number, number, number] {
+    const o = this.ends;
+    if (b.reclaim) {
+      o[0] = b.x; o[1] = b.y; o[2] = b.z; o[3] = ex; o[4] = ey; o[5] = ez;
+    } else {
+      o[0] = ex; o[1] = ey; o[2] = ez; o[3] = b.x; o[4] = b.y; o[5] = b.z;
+    }
+    return o;
   }
 
   /** The rig drawn for a unit slot (tests read its feet). */
@@ -823,4 +1165,56 @@ export class ModelRenderer {
 export function rowsOf(s: Snapshot): BuildingRows {
   const c = s.buildings.cols;
   return { count: s.buildings.count, id: s.buildings.id, kind: c.kind, tier: c.tier, flags: c.flags, dir: c.dir, tx: c.tx, ty: c.ty, fw: c.fw, fh: c.fh };
+}
+
+/** Building rows for a planned run of walls (or one gate): complete, tier 1, ids 1… (W27 previews). */
+export function rowsOfPlan(tiles: ReadonlyArray<readonly [number, number]>, kind: number, fw = 1, fh = 1, dir = 0): BuildingRows {
+  const n = tiles.length;
+  const rows: BuildingRows = {
+    count: n,
+    id: new Uint32Array(n),
+    kind: new Uint8Array(n).fill(kind),
+    tier: new Uint8Array(n).fill(1),
+    flags: new Uint8Array(n).fill(BF_COMPLETE | BF_STARTED),
+    dir: new Uint8Array(n).fill(dir),
+    tx: new Int16Array(n),
+    ty: new Int16Array(n),
+    fw: new Uint8Array(n).fill(fw),
+    fh: new Uint8Array(n).fill(fh),
+  };
+  tiles.forEach(([x, z], i) => {
+    rows.id[i] = i + 1;
+    rows.tx[i] = x;
+    rows.ty[i] = z;
+  });
+  return rows;
+}
+
+/** A sink that records each instance's geometries and world matrix into `out`. */
+function captureInto(out: Captured[], r: ModelRenderer): BuildingSink {
+  const copy = (m: Matrix4 | ArrayLike<number>, o: number) => {
+    const src = m instanceof Matrix4 ? m.elements : m;
+    const a = new Float32Array(16);
+    for (let i = 0; i < 16; i++) a[i] = src[o + i]!;
+    return a;
+  };
+  return {
+    part: (p, lv, m, o) => {
+      for (const g of p.levels[lv as 0 | 1 | 2].values()) out.push({ geometry: g, matrix: copy(m, o) });
+    },
+    model: (i, m, o) => {
+      for (const pc of r.modelPieces(i)) out.push({ geometry: pc.geometry, matrix: copy(m, o) });
+    },
+    plinth: (x, y, z, sx, sy, sz) => {
+      const a = new Float32Array(16);
+      a[0] = sx;
+      a[5] = sy;
+      a[10] = sz;
+      a[12] = x;
+      a[13] = y;
+      a[14] = z;
+      a[15] = 1;
+      out.push({ geometry: r.plinthGeometry, matrix: a });
+    },
+  };
 }
