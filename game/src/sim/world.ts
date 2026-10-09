@@ -67,7 +67,7 @@ import { TB_HP, Tuning, alienMaxHp, resetTune, setTune, tuneFieldIndex, unitMaxH
 import { visitRings } from './grid.ts';
 import { createWorld } from './scenarios.ts';
 import { STAT_COUNT, recordKilled, recordSpawned } from './stats.ts';
-import { RUN_CAPACITY, cancelRun, createRun, planRun, stepRuns, type WallRun } from './runs.ts';
+import { RUN_CAPACITY, cancelRun, createRun, newSites, planRun, runCapacityProblem, stepRuns, type WallRun } from './runs.ts';
 import { gateBaseHp, gateDepth, gateFootprint, inGateCorridor, planGate } from './gate.ts';
 import { WRECK_COMMANDER, applySpawnAt, clearAliens, clearWrecks, originRoutes, spawnPlaces, type SpawnOrigin } from './sandbox.ts';
 
@@ -509,7 +509,19 @@ export class World {
       case 'buildRun': {
         // The plan validation made a moment ago, on this state (validate.ts).
         const plan = this.validatedResult<ReturnType<typeof planRun>>(cmd) ?? planRun(this, cmd);
-        if (typeof plan === 'string' || plan.tiles.length === 0) break;
+        if (typeof plan === 'string' || plan.tiles.length === 0 || runCapacityProblem(this, newSites(plan))) break;
+        // W25c (queue.ts header): without Shift the builders' queues are replaced before the run is
+        // laid, so the own sites the plan keeps join the new run and dropOrphans (after this
+        // command) finds them held again; the rest of the replaced orders' sites go as before.
+        if (!cmd.queue) {
+          for (const id of cmd.ids) {
+            const slot = this.units.slotForId(id);
+            if (slot < 0 || !this.orders[slot]?.length) continue;
+            this.dropped.push(...this.orders[slot]!);
+            this.orders[slot] = [];
+            this.paths[slot] = null;
+          }
+        }
         const run = createRun(this, plan);
         if (run >= 0) this.orderAll(cmd.ids, () => ({ t: 'run', run, site: -1 }), cmd.queue);
         break;

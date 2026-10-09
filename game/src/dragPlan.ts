@@ -3,11 +3,17 @@
 // behind buildRun's planRun): the same axis choice, `to` projected onto the axis, the same depth
 // rows, skip rules and 128-tile cap, so the preview and the sites laid on release cannot differ.
 // Belt lines use beltLineTiles, which main.ts also uses to send the belt build commands.
+// W25c: a drag without Shift replaces the builders' queues, and the run then keeps their own wall
+// sites that it covers (queue.ts ownWallSites, the simulation's rule); the preview applies the same
+// function to the snapshot's queues and run-site list, so it shows those tiles as laid too.
 //
 // Not under render/: it reaches runs.ts and world.ts (canPlaceOn), which render code may not import.
 
 import { B, buildingInfo, type Cost } from './sim/kinds.ts';
 import { planRunOn, type RunPlan, type RunPlanSource } from './sim/runs.ts';
+import { ownWallSites, type ReplaceSource } from './sim/queue.ts';
+import { BF_COMPLETE, Q_BUILD, Q_RUN } from './sim/schema.ts';
+import { runSitesOf, type Snapshot } from './sim/snapshot.ts';
 import type { Terrain } from './sim/terrain.ts';
 import { canPlaceOn } from './sim/world.ts';
 
@@ -20,6 +26,11 @@ export interface DragView {
   kinds: ArrayLike<number>;
   /** Units: id and position per row (the builders' centroid picks the run's start end). */
   units: { count: number; id: ArrayLike<number>; x: ArrayLike<number>; z: ArrayLike<number> };
+  /**
+   * W25c: the snapshot the view was made from (its queues, run sites and building columns), for the
+   * replacement rule of a drag without Shift. Absent: no own sites are kept (as a queued drag).
+   */
+  snapshot?: Snapshot;
 }
 
 export interface DragPlan {
@@ -47,8 +58,39 @@ export function runSource(v: DragView): RunPlanSource {
   };
 }
 
-/** The wall run a drag from `from` to `to` lays for builders `ids` (runs.ts planRunOn). */
-export function planWallDrag(v: DragView, ids: readonly number[], from: [number, number], to: [number, number], depth = 1): RunPlan | string {
+/** queue.ts ReplaceSource over a snapshot: the queues of builders `ids` are the ones replaced. */
+export function snapshotReplaceSource(s: Snapshot, ids: readonly number[]): ReplaceSource {
+  const q = s.queues;
+  const b = s.buildings;
+  let rowOf: Map<number, number> | null = null;
+  return {
+    units: s.units.count,
+    replaced: (r) => ids.includes(s.units.id[r]!),
+    holds: (r, hold) => {
+      for (let i = q.first[r]!, end = i + q.count[r]!; i < end; i++) {
+        if (q.kind[i] === Q_BUILD) hold(q.target[i]!, -1);
+        else if (q.kind[i] === Q_RUN) hold(-1, q.run[i]!);
+      }
+    },
+    runSites: (run) => runSitesOf(s, run),
+    wallSiteTile: (id) => {
+      if (!rowOf) {
+        rowOf = new Map();
+        for (let r = 0; r < b.count; r++) rowOf.set(b.id[r]!, r);
+      }
+      const r = rowOf.get(id);
+      const c = b.cols;
+      if (r === undefined || c.kind[r] !== B.wall || c.fw[r] !== 1 || c.fh[r] !== 1 || c.flags[r]! & BF_COMPLETE) return -1;
+      return c.ty[r]! * s.mapW + c.tx[r]!;
+    },
+  };
+}
+
+/**
+ * The wall run a drag from `from` to `to` lays for builders `ids` (runs.ts planRunOn). Without
+ * `queue` (Shift), the builders' own wall sites the run covers are kept (W25c, header).
+ */
+export function planWallDrag(v: DragView, ids: readonly number[], from: [number, number], to: [number, number], depth = 1, queue = false): RunPlan | string {
   let n = 0;
   let cx = 0;
   let cz = 0;
@@ -58,7 +100,13 @@ export function planWallDrag(v: DragView, ids: readonly number[], from: [number,
     cz += v.units.z[r]!;
     n++;
   }
-  return planRunOn(runSource(v), { from, to, depth }, n > 0 ? [cx / n, cz / n] : null);
+  const src = runSource(v);
+  if (!queue && v.snapshot && n > 0) {
+    const own = ownWallSites(snapshotReplaceSource(v.snapshot, ids));
+    const W = v.terrain.w;
+    if (own.size) src.keep = (x, y) => own.get(y * W + x) ?? -1;
+  }
+  return planRunOn(src, { from, to, depth }, n > 0 ? [cx / n, cz / n] : null);
 }
 
 /**
@@ -80,12 +128,15 @@ export function beltLineTiles(x0: number, z0: number, x1: number, z1: number, di
   return out;
 }
 
-/** The whole drag plan for build kind `kind` (walls: a run 1 deep, as the wall tool lays; belts: a line). */
-export function planDrag(v: DragView, kind: number, ids: readonly number[], from: [number, number], to: [number, number], beltDir = 0): DragPlan {
+/**
+ * The whole drag plan for build kind `kind` (walls: a run 1 deep, as the wall tool lays; belts: a
+ * line). `queue`: Shift is held, so the builders' queues are appended to, not replaced.
+ */
+export function planDrag(v: DragView, kind: number, ids: readonly number[], from: [number, number], to: [number, number], beltDir = 0, queue = false): DragPlan {
   const info = buildingInfo(kind);
   const plan: DragPlan = { kind, build: [], skipped: [], cost: [0, 0, 0], refused: null };
   if (kind === B.wall) {
-    const run = planWallDrag(v, ids, from, to, 1);
+    const run = planWallDrag(v, ids, from, to, 1, queue);
     if (typeof run === 'string') plan.refused = run;
     else {
       for (const [x, y] of run.tiles) plan.build.push([x, y, 0]);

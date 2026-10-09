@@ -16,11 +16,15 @@
 // resources drain while each tile is built. Runs are always tier 1 (upgrades are the paid path).
 // `cancelRun` removes the remaining reserved tiles. W25b: so does `stop` on the run's last builders
 // (queue.ts dropOrphans, as when their run orders are replaced).
+// W25c: an unshifted run plans the builders' own wall sites that the replacement would release
+// (queue.ts ownWallSites) as its tiles, and keeps those sites in place (`reuse`) instead of skipping
+// them as walls, so replacing an overlapping run leaves exactly the tiles asked for.
 
 import { B, buildingInfo } from './kinds.ts';
 import { BF_COMPLETE, constructionState, isReserved } from './schema.ts';
 import { TILE_ROCK, tileAt, type Terrain } from './terrain.ts';
 import type { World } from './world.ts';
+import { ownWallSites, worldReplaceSource } from './queue.ts';
 
 export const RUN_CAPACITY = 32;
 export const MAX_RUN_LENGTH = 128;
@@ -40,6 +44,8 @@ export interface RunPlan {
   skipped: { rock: number; wall: number; blocked: number; total: number };
   /** W25: the skipped tiles themselves, in the same order (the drag preview draws them). */
   skippedAt: Array<[number, number]>;
+  /** W25c: per tile, the id of the builders' own wall site kept there in place, or -1 (a new site). */
+  reuse: number[];
   axis: 'x' | 'z';
   /** Which end the build starts from. */
   start: 'from' | 'to';
@@ -50,6 +56,8 @@ export interface RunCommand {
   from: [number, number];
   to: [number, number];
   depth: number;
+  /** Appends to the builders' queues; without it their queues are replaced (W25c: see the header). */
+  queue?: boolean;
 }
 
 /**
@@ -62,6 +70,11 @@ export interface RunPlanSource {
   wallAt(x: number, y: number): boolean;
   /** A tier-1 wall may be placed on the tile (world.ts canPlaceOn). */
   canPlaceWall(x: number, y: number): boolean;
+  /**
+   * W25c: the builders' own wall site on the tile that an unshifted run keeps in place (queue.ts
+   * ownWallSites), or -1. Absent: none (a queued run, or a source that does not know the queues).
+   */
+  keep?(x: number, y: number): number;
 }
 
 /** Geometry and build order of a run, or the reason it is refused. Pure: creates nothing. */
@@ -78,6 +91,9 @@ export function planRun(w: World, cmd: RunCommand): RunPlan | string {
     n++;
   }
   const W = w.terrain.w;
+  const slots = new Set<number>();
+  if (!cmd.queue) for (const id of cmd.ids) if (w.units.slotForId(id) >= 0) slots.add(w.units.slotForId(id));
+  const own = slots.size ? ownWallSites(worldReplaceSource(w, slots)) : null;
   const src: RunPlanSource = {
     terrain: w.terrain,
     wallAt: (x, y) => {
@@ -85,6 +101,7 @@ export function planRun(w: World, cmd: RunCommand): RunPlan | string {
       return occ >= 0 && buildingInfo(w.buildings.cols.kind[occ]!).role === 'wall';
     },
     canPlaceWall: (x, y) => w.canPlace(B.wall, x, y),
+    keep: own?.size ? (x, y) => own.get(y * W + x) ?? -1 : undefined,
   };
   return planRunOn(src, cmd, n > 0 ? [cx / n, cz / n] : null);
 }
@@ -116,6 +133,7 @@ export function planRunOn(src: RunPlanSource, cmd: { from: [number, number]; to:
     if (d2(endX, endY) < d2(fx, fy)) start = 'to';
   }
   const tiles: Array<[number, number]> = [];
+  const reuse: number[] = [];
   const skippedAt: Array<[number, number]> = [];
   const skipped = { rock: 0, wall: 0, blocked: 0, total: 0 };
   for (let i = 0; i < length; i++) {
@@ -123,19 +141,26 @@ export function planRunOn(src: RunPlanSource, cmd: { from: [number, number]; to:
     for (let v = 0; v < cmd.depth; v++) {
       const x = axis === 'x' ? fx + step * u : fx + side * v;
       const y = axis === 'x' ? fy + side * v : fy + step * u;
+      const keep = inside(x, y) && src.keep ? src.keep(x, y) : -1;
+      if (keep >= 0) {
+        tiles.push([x, y]);
+        reuse.push(keep);
+        continue;
+      }
       if (!inside(x, y)) skipped.blocked++;
       else if (tileAt(src.terrain, x, y) === TILE_ROCK) skipped.rock++;
       else if (src.wallAt(x, y)) skipped.wall++; // wall or gate
       else if (!src.canPlaceWall(x, y)) skipped.blocked++;
       else {
         tiles.push([x, y]);
+        reuse.push(-1);
         continue;
       }
       skipped.total++;
       skippedAt.push([x, y]);
     }
   }
-  return { tiles, skipped, skippedAt, axis, start };
+  return { tiles, skipped, skippedAt, reuse, axis, start };
 }
 
 /** Null if a run with `tiles` new sites fits the run table and the building table. */
@@ -145,14 +170,21 @@ export function runCapacityProblem(w: World, tiles: number): string | null {
   return null;
 }
 
-/** Lays the run's reserved wall sites and records it. Returns the run id, or -1 (nothing created). */
+/** New sites a plan lays (its tiles less the sites it keeps in place, W25c). */
+export const newSites = (plan: RunPlan): number => plan.reuse.reduce((n, id) => (id >= 0 ? n : n + 1), 0);
+
+/**
+ * Lays the run's reserved wall sites and records it; a tile with a kept site (`reuse`, W25c) takes
+ * that site into the run in place. Returns the run id, or -1 (nothing created).
+ */
 export function createRun(w: World, plan: RunPlan): number {
-  if (runCapacityProblem(w, plan.tiles.length)) return -1;
+  if (runCapacityProblem(w, newSites(plan))) return -1;
   const sites: number[] = [];
-  for (const [x, y] of plan.tiles) {
-    const id = w.placeBuilding(B.wall, x, y, false);
+  plan.tiles.forEach(([x, y], i) => {
+    const kept = plan.reuse[i]!;
+    const id = kept >= 0 && w.buildings.slotForId(kept) >= 0 ? kept : w.placeBuilding(B.wall, x, y, false);
     if (id >= 0) sites.push(id);
-  }
+  });
   const slot = w.runs.indexOf(null);
   const id = w.nextRunId++;
   w.runs[slot] = { id, sites, skipped: plan.skipped.total };

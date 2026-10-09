@@ -7,7 +7,7 @@ import { ALIEN_KINDS, B, BUILDING_KINDS, U, buildingInfo } from './kinds.ts';
 import { BF_COMPLETE, BF_UPGRADING } from './schema.ts';
 import { BUILD_REQUIRES, RESEARCH, RESEARCH_INDEX, TIER_REQUIRES } from './balance.ts';
 import { MAX_ORDERS, type World } from './world.ts';
-import { MAX_RUN_DEPTH, planRun, runById, runCapacityProblem } from './runs.ts';
+import { MAX_RUN_DEPTH, newSites, planRun, runById, runCapacityProblem } from './runs.ts';
 import { planGate } from './gate.ts';
 import { SPAWN_AT_MAX, spawnPlaces } from './sandbox.ts';
 import { dequeueIndex } from './queue.ts';
@@ -105,7 +105,7 @@ function check(w: World, cmd: Command): string | null {
       w.validated = { cmd, result: plan }; // the apply step and the worker reuse it
       if (typeof plan === 'string') return plan;
       if (plan.tiles.length === 0) return `nothing to build: all ${plan.skipped.total} tiles skipped (rock ${plan.skipped.rock}, wall ${plan.skipped.wall}, blocked ${plan.skipped.blocked})`;
-      return runCapacityProblem(w, plan.tiles.length);
+      return runCapacityProblem(w, newSites(plan));
     }
     case 'cancelRun':
       if (!isInt(cmd.run)) return 'cancelRun needs a run id';

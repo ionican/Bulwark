@@ -443,9 +443,9 @@ function placeBeltLine(kind: number, x0: number, z0: number, x1: number, z1: num
  * and the inputs it was made from (kind, direction, tiles, tick), so a frame with nothing changed
  * allocates nothing.
  */
-let drag: { x1: number; y1: number; from: [number, number]; to: [number, number] } | null = null;
+let drag: { x1: number; y1: number; from: [number, number]; to: [number, number]; shift: boolean } | null = null;
 let dragPlan: DragPlan | null = null;
-const dragMadeFrom = { kind: -1, dir: -1, fx: 0, fy: 0, tx: 0, ty: 0, tick: -1 };
+const dragMadeFrom = { kind: -1, dir: -1, fx: 0, fy: 0, tx: 0, ty: 0, tick: -1, queue: false };
 const dragLabelEl = document.createElement('div');
 dragLabelEl.className = 'pnl draglabel';
 dragLabelEl.style.cssText = 'position:fixed;display:none;pointer-events:none;font-size:11px;padding:2px 6px;z-index:9';
@@ -453,12 +453,14 @@ document.body.appendChild(dragLabelEl);
 
 /** The snapshot as the run planner reads it (dragPlan.ts DragView). */
 function dragView(s: Snapshot): DragView {
-  return { terrain, occupancy, kinds: s.buildings.cols.kind, units: { count: s.units.count, id: s.units.id, x: s.units.cols.x, z: s.units.cols.z } };
+  return { terrain, occupancy, kinds: s.buildings.cols.kind, units: { count: s.units.count, id: s.units.id, x: s.units.cols.x, z: s.units.cols.z }, snapshot: s };
 }
 
 /**
  * The plan for the drag now: walls and belts only (other kinds place one building on release).
- * Worked out again only when its inputs change (end tiles, tool, direction, snapshot tick).
+ * Worked out again only when its inputs change (end tiles, tool, direction, Shift, snapshot tick).
+ * Shift is the release's rule (the pointer's Shift or the keyboard's): without it the run replaces
+ * the builders' queues and keeps their own wall sites it covers (W25c, dragPlan.ts).
  */
 function currentDragPlan(): DragPlan | null {
   const s = interp.curr;
@@ -469,9 +471,10 @@ function currentDragPlan(): DragPlan | null {
   const m = dragMadeFrom;
   const [fx, fy] = drag.from;
   const [tx, ty] = drag.to;
-  if (!dragPlan || m.kind !== buildMode.kind || m.dir !== buildMode.dir || m.fx !== fx || m.fy !== fy || m.tx !== tx || m.ty !== ty || m.tick !== s.tick) {
-    Object.assign(m, { kind: buildMode.kind, dir: buildMode.dir, fx, fy, tx, ty, tick: s.tick });
-    dragPlan = planDrag(dragView(s), buildMode.kind, selectedBuilders(), [fx, fy], [tx, ty], buildMode.dir);
+  const queue = drag.shift || shiftHeld;
+  if (!dragPlan || m.kind !== buildMode.kind || m.dir !== buildMode.dir || m.fx !== fx || m.fy !== fy || m.tx !== tx || m.ty !== ty || m.tick !== s.tick || m.queue !== queue) {
+    Object.assign(m, { kind: buildMode.kind, dir: buildMode.dir, fx, fy, tx, ty, tick: s.tick, queue });
+    dragPlan = planDrag(dragView(s), buildMode.kind, selectedBuilders(), [fx, fy], [tx, ty], buildMode.dir, queue);
     dragLabelEl.textContent = dragLabel(dragPlan);
   }
   return dragPlan;
@@ -562,7 +565,7 @@ const gestures = new Gestures(orbit, {
     const a = d && tileAtScreen(d.x0, d.y0);
     const b = d && tileAtScreen(d.x1, d.y1);
     // the same end tiles buildDrag sends on release
-    drag = d && a && b ? { x1: d.x1, y1: d.y1, from: [a.tx, a.ty], to: [b.tx, b.ty] } : null;
+    drag = d && a && b ? { x1: d.x1, y1: d.y1, from: [a.tx, a.ty], to: [b.tx, b.ty], shift: d.shift } : null;
     if (!drag) dragPlan = null;
   },
   buildDrag(x0, y0, x1, y1, shift) {

@@ -14,13 +14,15 @@
 //             for all n queued orders (G_QUEUE_ORDERS), unit by unit in queue order, the columns
 //             kind i32 (schema.ts Q_*), target i32 (building or wreck id, a run's claimed tile;
 //             -1 none), run i32 (run id, 0 none), x f32, z f32 (where it points: queue.ts orderPosition),
-//             oid u32 (W25c: the order's id, units.ts Order.oid; `dequeue` names it).
+//             oid u32 (W25c: the order's id, units.ts Order.oid; `dequeue` names it); then (W25c) the
+//             runs' unfinished sites, i32 words: per run in run-table order [run id, n, site id × n]
+//             (the drag preview's replacement rule, queue.ts ownWallSites, reads them).
 //             G_QUEUE_BYTES holds the section's length in bytes.
 // Every column starts 4-byte aligned. Only live entities are written, in ascending slot order.
 // The bytes depend on simulation state only (no timings), so equal state gives byte-identical
 // snapshots — the determinism tests compare them.
 
-import { ALIEN_FIELDS, BUILDING_FIELDS, G_SHORT, PROJECTILE_FIELDS, UNIT_FIELDS, WRECK_FIELDS } from './schema.ts';
+import { ALIEN_FIELDS, BF_COMPLETE, BUILDING_FIELDS, G_SHORT, PROJECTILE_FIELDS, UNIT_FIELDS, WRECK_FIELDS } from './schema.ts';
 import { BYTES, makeArray, type AnyTypedArray, type ArrayFor, type FieldSpec, type Table } from './table.ts';
 import { SCENARIO_NAMES, type World } from './world.ts';
 import { STAT_COUNT } from './stats.ts';
@@ -168,6 +170,15 @@ export interface QueueView {
   z: Float32Array;
   /** W25c: order ids (units.ts Order.oid). */
   oid: Uint32Array;
+  /** W25c: per run [run id, n, unfinished site id × n], run-table order (runSitesOf reads it). */
+  runSites: Int32Array;
+}
+
+/** W25c: the unfinished site ids of run `run` in the snapshot (empty when it is not in the table). */
+export function runSitesOf(s: Snapshot, run: number): Int32Array {
+  const w = s.queues.runSites;
+  for (let k = 0; k < w.length; k += 2 + w[k + 1]!) if (w[k] === run) return w.subarray(k + 2, k + 2 + w[k + 1]!);
+  return new Int32Array(0);
 }
 
 export interface QueueItem {
@@ -216,8 +227,27 @@ function queuedOrders(world: World): number {
   return n;
 }
 
-/** Bytes of the queue section: a count per unit, six 4-byte columns per order. */
-const queueBytes = (units: number, orders: number) => units * 4 + orders * 6 * 4;
+/** Unfinished site ids of a run, in its build order (W25c: the queue section lists them). */
+function openSites(world: World, sites: readonly number[], out?: Int32Array, at = 0): number {
+  let n = 0;
+  for (const id of sites) {
+    const s = world.buildings.slotForId(id);
+    if (s < 0 || world.buildings.cols.flags[s]! & BF_COMPLETE) continue;
+    if (out) out[at + n] = id;
+    n++;
+  }
+  return n;
+}
+
+/** Words of the queue section's run-site list (W25c). */
+function runSiteWords(world: World): number {
+  let n = 0;
+  for (const r of world.runs) if (r) n += 2 + openSites(world, r.sites);
+  return n;
+}
+
+/** Bytes of the queue section: a count per unit, six 4-byte columns per order, the run-site words. */
+const queueBytes = (units: number, orders: number, runWords: number) => units * 4 + orders * 6 * 4 + runWords * 4;
 
 
 export function snapshotSize(world: World): number {
@@ -234,7 +264,7 @@ export function snapshotSize(world: World): number {
     sectionBytes(PROJECTILE_FIELDS, world.projectiles.count) +
     align4(routeWords(world) * 2) +
     align4(originWords(world) * 2) +
-    queueBytes(world.units.count, queuedOrders(world))
+    queueBytes(world.units.count, queuedOrders(world), runSiteWords(world))
   );
 }
 
@@ -306,7 +336,7 @@ function writeGlobals(world: World, g: Float64Array): void {
   g[G_RESPAWN_TICK] = world.commanderRespawnTick;
   g[G_COMMANDER_DEATHS] = world.commanderDeaths;
   g[G_QUEUE_ORDERS] = queuedOrders(world);
-  g[G_QUEUE_BYTES] = queueBytes(world.units.count, g[G_QUEUE_ORDERS]!);
+  g[G_QUEUE_BYTES] = queueBytes(world.units.count, g[G_QUEUE_ORDERS]!, runSiteWords(world));
 }
 
 /**
@@ -414,7 +444,17 @@ function writeQueues(world: World, buf: ArrayBuffer, offset: number): number {
       k++;
     }
   }
-  return offset + n * 24;
+  offset += n * 24;
+  const words = new Int32Array(buf, offset, runSiteWords(world));
+  let at = 0;
+  for (const r of world.runs) {
+    if (!r) continue;
+    const m = openSites(world, r.sites, words, at + 2);
+    words[at] = r.id;
+    words[at + 1] = m;
+    at += 2 + m;
+  }
+  return offset + at * 4;
 }
 
 function readSection<S extends readonly FieldSpec[]>(schema: S, n: number, buf: ArrayBuffer, offset: number): [Section<S>, number] {
@@ -481,9 +521,9 @@ export function decodeSnapshot(buf: ArrayBuffer): Snapshot {
     x: new Float32Array(buf, q0 + nOrders * 12, nOrders),
     z: new Float32Array(buf, q0 + nOrders * 16, nOrders),
     oid: new Uint32Array(buf, q0 + nOrders * 20, nOrders),
+    runSites: new Int32Array(buf, q0 + nOrders * 24, (globals[G_QUEUE_BYTES]! - queueBytes(nUnits, nOrders, 0)) / 4),
   };
-  const end = o7 + queueBytes(nUnits, nOrders);
-  if (end - o7 !== globals[G_QUEUE_BYTES]) throw new Error('snapshot queue section length mismatch');
+  const end = o7 + globals[G_QUEUE_BYTES]!;
   if (end !== h[H_BYTES]) throw new Error('snapshot length mismatch');
   return {
     buffer: buf,

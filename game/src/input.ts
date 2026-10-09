@@ -40,9 +40,10 @@ export interface GestureHost {
   buildDrag(x0: number, y0: number, x1: number, y1: number, shift: boolean): void;
   /**
    * W25: a build-mode left-drag under way: from the press to the pointer now (preview), or null
-   * when it ends (released or cancelled).
+   * when it ends (released or cancelled). `shift`: the pointer event's Shift (W25c: the preview of
+   * a drag without Shift shows the replacement rule).
    */
-  buildDragPreview?(drag: { x0: number; y0: number; x1: number; y1: number } | null): void;
+  buildDragPreview?(drag: { x0: number; y0: number; x1: number; y1: number; shift: boolean } | null): void;
 }
 
 /** Movement (|dx| + |dy|, CSS pixels) beyond which a press is a drag, not a click. */
@@ -83,7 +84,7 @@ export class Gestures {
     else if (p.mode === 'pan') this.orbit.pan(dx, dy, this.host.camera, h);
     else if (p.mode === 'dolly') this.orbit.dolly(dy);
     else if (p.mode === 'box') this.host.boxPreview({ x0: p.x0, y0: p.y0, x1: e.x, y1: e.y });
-    else if (p.mode === 'build') this.host.buildDragPreview?.({ x0: p.x0, y0: p.y0, x1: e.x, y1: e.y });
+    else if (p.mode === 'build') this.host.buildDragPreview?.({ x0: p.x0, y0: p.y0, x1: e.x, y1: e.y, shift: e.shift });
   }
 
   up(e: PointerIn): void {

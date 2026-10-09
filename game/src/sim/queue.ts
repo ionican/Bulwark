@@ -15,10 +15,20 @@
 // W25b (Richard, 9 Oct: "stop should clear them"): `stop` clears by the same rule. A unit's death
 // and an unreachable site are unchanged from W24: their sites stay.
 //
+// W25c (review finding 1): an unshifted wall run keeps the builders' own wall sites that it covers.
+// The new run used to be planned against the reservations its own replacement was about to remove,
+// so it skipped them as walls, and dropOrphans then removed them: holes. Now the sites the
+// replacement would release (ownWallSites: unfinished 1 × 1 wall sites that only the replaced
+// queues hold) are planned as part of the new run and join it in place (runs.ts createRun), before
+// dropOrphans runs, so they are held again and stay. Sites another unit holds stay that unit's.
+// The same function runs on the simulation's state (worldReplaceSource) and on the render thread's
+// snapshot (dragPlan.ts), so the drag preview shows what will be laid.
+//
 // Also here: the queue as the snapshot carries it (order kind, target, run id, position, order id),
 // and `dequeue`'s lookup by order id (W25c).
 
 import { B } from './kinds.ts';
+import { runById } from './runs.ts';
 import { BF_COMPLETE, Q_BUILD, Q_MOVE, Q_PRODUCE, Q_RECLAIM, Q_RUN, isReserved } from './schema.ts';
 import type { Order } from './units.ts';
 import type { World } from './world.ts';
@@ -89,6 +99,70 @@ export function dropOrphans(w: World, removed: readonly Order[]): void {
     w.runs[i] = null;
   }
   for (const id of sites) if (!heldSites.has(id)) removeIfReserved(w, id);
+}
+
+/** What the replacement rule reads (W25c): the units' queues, the runs' sites, and the wall sites. */
+export interface ReplaceSource {
+  /** Unit rows (or slots) to look at; `holds` skips any that are not live. */
+  units: number;
+  /** True if unit `u`'s queue is being replaced (an unshifted order to it). */
+  replaced(u: number): boolean;
+  /** Calls `hold` for each build order (its site, run -1) and run order (site -1, its run) of unit `u`. */
+  holds(u: number, hold: (site: number, run: number) => void): void;
+  /** Sites of run `run` (at least its unfinished ones; none when the run is gone). */
+  runSites(run: number): ArrayLike<number>;
+  /** Tile index (ty × map width + tx) of site `id` if it is an unfinished 1 × 1 wall site, else -1. */
+  wallSiteTile(id: number): number;
+}
+
+/**
+ * The wall sites that replacing the queues marked `replaced` would release and that a new run may
+ * keep in place, by tile index. A site is released when a replaced queue holds it (a build order on
+ * it, or a run order on a run it belongs to) and no other unit's queue does (the dropOrphans rule).
+ */
+export function ownWallSites(src: ReplaceSource): Map<number, number> {
+  const mine = new Set<number>();
+  const myRuns = new Set<number>();
+  const held = new Set<number>();
+  const heldRuns = new Set<number>();
+  for (let u = 0; u < src.units; u++) {
+    const r = src.replaced(u);
+    src.holds(u, (site, run) => {
+      if (site >= 0) (r ? mine : held).add(site);
+      if (run >= 0) (r ? myRuns : heldRuns).add(run);
+    });
+  }
+  for (const run of heldRuns) for (const site of Array.from(src.runSites(run))) held.add(site);
+  for (const run of myRuns) if (!heldRuns.has(run)) for (const site of Array.from(src.runSites(run))) mine.add(site);
+  const out = new Map<number, number>();
+  for (const site of mine) {
+    if (held.has(site)) continue;
+    const tile = src.wallSiteTile(site);
+    if (tile >= 0) out.set(tile, site);
+  }
+  return out;
+}
+
+/** ReplaceSource over the simulation's state; `slots` are the unit slots whose queues are replaced. */
+export function worldReplaceSource(w: World, slots: ReadonlySet<number>): ReplaceSource {
+  const c = w.buildings.cols;
+  return {
+    units: w.units.highWater,
+    replaced: (u) => slots.has(u),
+    holds: (u, hold) => {
+      if (!w.units.alive[u]) return;
+      for (const o of w.orders[u] ?? []) {
+        if (o.t === 'build') hold(o.id, -1);
+        else if (o.t === 'run') hold(-1, o.run);
+      }
+    },
+    runSites: (run) => runById(w, run)?.sites ?? [],
+    wallSiteTile: (id) => {
+      const s = w.buildings.slotForId(id);
+      if (s < 0 || c.kind[s] !== B.wall || c.fw[s] !== 1 || c.fh[s] !== 1 || c.flags[s]! & BF_COMPLETE) return -1;
+      return c.ty[s]! * w.terrain.w + c.tx[s]!;
+    },
+  };
 }
 
 /** Footprint centre of building `id`, or null when it no longer exists. */
