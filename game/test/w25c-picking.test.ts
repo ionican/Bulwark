@@ -8,9 +8,9 @@
 // head, torso and foot segment origins.
 
 import { describe, expect, it } from 'vitest';
-import { PerspectiveCamera, Vector3, type Matrix4 } from 'three';
+import { Box3, InstancedMesh, Matrix4, PerspectiveCamera, Vector3 } from 'three';
 import { World } from '../src/sim/world.ts';
-import { B, U } from '../src/sim/kinds.ts';
+import { A, ALIEN_KINDS, B, U, UNIT_KINDS, alienInfo, unitInfo } from '../src/sim/kinds.ts';
 import { decodeSnapshot, encodeSnapshot } from '../src/sim/snapshot.ts';
 import { map1Terrain } from '../src/sim/terrain.ts';
 import { applyRig } from '../src/render/cameraRig.ts';
@@ -18,6 +18,8 @@ import { groundHeight } from '../src/render/ground.ts';
 import { boxSelect, buildOccupancy, pickScreen, type PickView } from '../src/render/picking.ts';
 import { CSEG, CommanderRig } from '../src/render/workshop/w23/rig/commander.ts';
 import { EngineerRig, SEG, VARIANTS } from '../src/render/workshop/w23/rig/engineer.ts';
+import { alienVolume, unitVolume } from '../src/render/pickVolumes.ts';
+import { draw, renderer, snapshotOf } from './w24r2a-fixtures.ts';
 
 const VW = 1440;
 const VH = 900;
@@ -116,6 +118,58 @@ describe('W25c finding 5: units are picked by their volumes at every camera tilt
       }
       const c = toScreen(cam, new Vector3(49, ground(49, 81), 81));
       expect(boxSelect(cam, c.sx - 15, c.sy - 15, c.sx + 15, c.sy + 15, VW, VH, terrain, view)).toEqual([{ type: 'building', id: gun, kind: B.gun }]);
+    });
+  }
+});
+
+describe('W25c finding 5: the pick volumes are sized to the drawn models', () => {
+  /** Height above the ground and reach from the centre of every instance drawn for one entity (level 0, at rest). */
+  function measure(make: (w: World) => void): { height: number; reach: number } {
+    const { r } = renderer();
+    const x = 40.5;
+    const z = 92.5;
+    const ww = new World(1, terrain, { waves: false });
+    make(ww);
+    draw(r, snapshotOf(ww), { level: 0 });
+    r.group.updateMatrixWorld(true);
+    const m = new Matrix4();
+    const box = new Box3();
+    let top = -Infinity;
+    let reach = 0;
+    r.group.traverse((o) => {
+      if (!(o instanceof InstancedMesh) || !o.visible || o.count === 0) return;
+      if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+      for (let i = 0; i < o.count; i++) {
+        o.getMatrixAt(i, m);
+        m.premultiply(o.matrixWorld);
+        const t = new Vector3().setFromMatrixPosition(m);
+        if (Math.hypot(t.x - x, t.z - z) > 5) continue; // deposits and the like elsewhere on the map
+        box.copy(o.geometry.boundingBox!).applyMatrix4(m);
+        top = Math.max(top, box.max.y);
+        for (const [bx, bz] of [[box.min.x, box.min.z], [box.max.x, box.max.z], [box.min.x, box.max.z], [box.max.x, box.min.z]] as const) reach = Math.max(reach, Math.hypot(bx - x, bz - z));
+      }
+    });
+    return { height: top - ground(x, z), reach };
+  }
+
+  for (const k of UNIT_KINDS) {
+    it(`unit ${k}: the volume covers the model and is no more than 0.15 tiles over it (or the simulation's radius)`, () => {
+      const got = measure((ww) => ww.spawnUnit(U[k], 40.5, 92.5));
+      const v = unitVolume(U[k]);
+      expect(v.height).toBeGreaterThanOrEqual(got.height);
+      expect(v.height).toBeLessThanOrEqual(got.height + 0.15);
+      expect(v.radius).toBeGreaterThanOrEqual(got.reach);
+      expect(v.radius).toBeLessThanOrEqual(Math.max(got.reach + 0.15, unitInfo(U[k]).radius));
+    });
+  }
+  for (const k of ALIEN_KINDS) {
+    it(`alien ${k}: the volume covers the model and is no more than 0.15 tiles over it`, () => {
+      const got = measure((ww) => ww.spawnAlien(A[k], 40.5, 92.5));
+      const v = alienVolume(A[k]);
+      expect(v.height).toBeGreaterThanOrEqual(got.height);
+      expect(v.height).toBeLessThanOrEqual(got.height + 0.15);
+      expect(v.radius).toBeGreaterThanOrEqual(got.reach);
+      expect(v.radius).toBeLessThanOrEqual(Math.max(got.reach + 0.15, alienInfo(A[k]).radius));
     });
   }
 });

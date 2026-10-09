@@ -1,13 +1,19 @@
-// Selection without mesh raycasting. The cursor ray is intersected with the drawn ground
-// (ground.ts: the same triangles as the ground mesh), and the hit is looked up in the simulation's own
-// tables: the building occupancy grid for buildings, a radius test on positions for mobiles.
+// Selection without mesh raycasting. Buildings: the cursor ray is intersected with the drawn ground
+// (ground.ts: the same triangles as the ground mesh) and the hit tile is looked up in the building
+// occupancy grid. Units and aliens (W25c, review finding 5): the cursor ray is tested against a
+// vertical cylinder per entity, standing on the drawn ground, sized to its kind's model
+// (pickVolumes.ts) and widened by `pickPx` screen pixels; the nearest hit along the ray wins. Box
+// selection tests each unit's or alien's projected cylinder against the screen rectangle. The ground
+// point alone used to stand in for a mobile, so with the camera tilted low a click on a 3.7-tile
+// commander's torso hit the ground far behind it. Wrecks are flat and keep the ground-radius test.
 // The result does not depend on which LOD is drawn, so it works the same at every zoom level.
 
 import { Vector3, type PerspectiveCamera } from 'three';
 import { alienInfo, unitInfo } from '../sim/kinds.ts';
 import type { Terrain } from '../sim/terrain.ts';
-import { heightRange, rayGround } from './ground.ts';
+import { groundHeight, heightRange, rayGround } from './ground.ts';
 import { worldPerPixel } from './cameraRig.ts';
+import { alienVolume, unitVolume, type PickVolume } from './pickVolumes.ts';
 
 export type PickType = 'unit' | 'building' | 'alien' | 'wreck';
 
@@ -128,7 +134,70 @@ export function pickAt(view: PickView, gx: number, gz: number, pad: number): Pic
   return null;
 }
 
-/** Pick under a screen pixel. Mobiles get a reach of `pickPx` screen pixels on top of their radius. */
+const _o = new Vector3();
+const _d = new Vector3();
+
+/**
+ * Distance along the ray (origin o, unit direction d) at which it enters the vertical cylinder of
+ * radius `r` round (cx, cz) from height y0 to y1, or -1 if it misses (or the cylinder is behind).
+ */
+export function rayCylinder(o: Vector3, d: Vector3, cx: number, cz: number, r: number, y0: number, y1: number): number {
+  // the ray's interval inside the infinite cylinder, from the ground-plane circle
+  const ox = o.x - cx;
+  const oz = o.z - cz;
+  const a = d.x * d.x + d.z * d.z;
+  const c = ox * ox + oz * oz - r * r;
+  let t0: number;
+  let t1: number;
+  if (a < 1e-12) {
+    if (c > 0) return -1;
+    t0 = -Infinity;
+    t1 = Infinity;
+  } else {
+    const b = ox * d.x + oz * d.z;
+    const disc = b * b - a * c;
+    if (disc < 0) return -1;
+    const q = Math.sqrt(disc);
+    t0 = (-b - q) / a;
+    t1 = (-b + q) / a;
+  }
+  // and inside the slab y0..y1
+  if (Math.abs(d.y) < 1e-12) {
+    if (o.y < y0 || o.y > y1) return -1;
+  } else {
+    const ta = (y0 - o.y) / d.y;
+    const tb = (y1 - o.y) / d.y;
+    t0 = Math.max(t0, Math.min(ta, tb));
+    t1 = Math.min(t1, Math.max(ta, tb));
+  }
+  t0 = Math.max(t0, 0);
+  return t0 <= t1 ? t0 : -1;
+}
+
+/** Row of the mobile in `rows` whose cylinder the ray enters first, or -1. `pad` px widen each. */
+function nearestVolume(rows: MobileRows, volume: (kind: number) => PickVolume, terrain: Terrain, camera: PerspectiveCamera, vh: number, pad: number): number {
+  let best = -1;
+  let bestT = Infinity;
+  for (let r = 0; r < rows.count; r++) {
+    const x = rows.x[r]!;
+    const z = rows.z[r]!;
+    const v = volume(rows.kind[r]!);
+    const y = groundHeight(terrain, x, z);
+    const extra = pad * worldPerPixel(camera, Math.hypot(x - _o.x, y + v.height / 2 - _o.y, z - _o.z), vh);
+    const t = rayCylinder(_o, _d, x, z, v.radius + extra, y - extra, y + v.height + extra);
+    if (t >= 0 && t < bestT) {
+      bestT = t;
+      best = r;
+    }
+  }
+  return best;
+}
+
+/**
+ * Pick under a screen pixel. Order: the player unit whose volume the cursor ray enters first, then
+ * the building on the ground tile under the cursor, then the nearest alien volume, then a wreck by
+ * ground radius. Mobiles' volumes are widened by `pickPx` screen pixels.
+ */
 export function pickScreen(
   camera: PerspectiveCamera,
   sx: number,
@@ -139,9 +208,27 @@ export function pickScreen(
   view: PickView,
   pickPx = 8,
 ): Pick | null {
+  _o.copy(camera.position);
+  _d.set((sx / vw) * 2 - 1, -(sy / vh) * 2 + 1, 0.5).unproject(camera).sub(_o).normalize();
+  const u = nearestVolume(view.units, unitVolume, terrain, camera, vh, pickPx);
+  if (u >= 0) return { type: 'unit', id: view.units.id[u]!, kind: view.units.kind[u]! };
   const hit = screenToGround(camera, sx, sy, vw, vh, terrain);
-  if (!hit) return null;
-  return pickAt(view, hit.x, hit.z, pickPx * worldPerPixel(camera, hit.dist, vh));
+  if (hit) {
+    const tx = Math.floor(hit.x);
+    const tz = Math.floor(hit.z);
+    if (tx >= 0 && tz >= 0 && tx < view.mapW && tz < view.mapH) {
+      const row = view.occupancy[tz * view.mapW + tx]! - 1;
+      if (row >= 0) return { type: 'building', id: view.buildings.id[row]!, kind: view.buildings.kind[row]! };
+    }
+  }
+  const a = nearestVolume(view.aliens, alienVolume, terrain, camera, vh, pickPx);
+  if (a >= 0) return { type: 'alien', id: view.aliens.id[a]!, kind: view.aliens.kind[a]! };
+  if (hit && view.wrecks) {
+    const pad = pickPx * worldPerPixel(camera, hit.dist, vh);
+    const r = nearestMobile(view.wrecks, hit.x, hit.z, pad, () => 0.6);
+    if (r >= 0) return { type: 'wreck', id: view.wrecks.id[r]!, kind: view.wrecks.kind[r]! };
+  }
+  return null;
 }
 
 function insideQuad(q: GroundHit[], x: number, z: number): boolean {
@@ -159,9 +246,60 @@ function insideQuad(q: GroundHit[], x: number, z: number): boolean {
   return true;
 }
 
+const _p = new Vector3();
+
 /**
- * Box selection: the screen rectangle's corners are cast to the ground and entities inside the
- * ground quad are returned. Player units if any are inside, otherwise buildings, otherwise aliens.
+ * True if mobile volume `v` standing at (x, y, z) overlaps the screen rectangle [x0, x1] × [y0, y1]
+ * (CSS px): its axis from foot to top projected to the screen, widened by its radius in pixels at
+ * that depth (the projected cylinder, as a screen-space capsule). False if any of it is behind the camera.
+ */
+function volumeInRect(camera: PerspectiveCamera, vw: number, vh: number, x: number, y: number, z: number, v: PickVolume, x0: number, y0: number, x1: number, y1: number): boolean {
+  const ends: Array<[number, number]> = [];
+  for (const h of [0, v.height]) {
+    _p.set(x, y + h, z).applyMatrix4(camera.matrixWorldInverse);
+    if (_p.z > -camera.near) return false;
+    _p.applyMatrix4(camera.projectionMatrix);
+    ends.push([((_p.x + 1) / 2) * vw, ((1 - _p.y) / 2) * vh]);
+  }
+  const dist = Math.hypot(x - camera.position.x, y + v.height / 2 - camera.position.y, z - camera.position.z);
+  const rad = v.radius / worldPerPixel(camera, dist, vh);
+  return segmentRectDistance(ends[0]!, ends[1]!, x0, y0, x1, y1) <= rad;
+}
+
+/** Distance from screen segment a–b to the rectangle (0 when they touch). */
+function segmentRectDistance(a: [number, number], b: [number, number], x0: number, y0: number, x1: number, y1: number): number {
+  const inside = (p: [number, number]) => p[0] >= x0 && p[0] <= x1 && p[1] >= y0 && p[1] <= y1;
+  if (inside(a) || inside(b)) return 0;
+  const corners: Array<[number, number]> = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  for (let i = 0; i < 4; i++) if (segmentsCross(a, b, corners[i]!, corners[(i + 1) % 4]!)) return 0;
+  let d = Infinity;
+  for (const c of corners) d = Math.min(d, pointSegment(c, a, b));
+  for (const p of [a, b]) d = Math.min(d, Math.hypot(Math.max(x0 - p[0], 0, p[0] - x1), Math.max(y0 - p[1], 0, p[1] - y1)));
+  return d;
+}
+
+function pointSegment(p: [number, number], a: [number, number], b: [number, number]): number {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const l2 = dx * dx + dy * dy;
+  const t = l2 > 0 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0;
+  return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy);
+}
+
+function segmentsCross(a: [number, number], b: [number, number], c: [number, number], d: [number, number]): boolean {
+  const cross = (o: [number, number], p: [number, number], q: [number, number]) => (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0]);
+  const d1 = cross(c, d, a);
+  const d2 = cross(c, d, b);
+  const d3 = cross(a, b, c);
+  const d4 = cross(a, b, d);
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+}
+
+/**
+ * Box selection. Player units whose projected volume overlaps the screen rectangle, if any;
+ * otherwise buildings whose footprint centre lies in the rectangle's ground quad (its corners cast
+ * to the ground, as before W25c; none when a corner misses the ground); otherwise aliens by
+ * projected volume.
  */
 export function boxSelect(
   camera: PerspectiveCamera,
@@ -174,24 +312,35 @@ export function boxSelect(
   terrain: Terrain,
   view: PickView,
 ): Pick[] {
-  const corners = [
-    screenToGround(camera, Math.min(x0, x1), Math.min(y0, y1), vw, vh, terrain),
-    screenToGround(camera, Math.max(x0, x1), Math.min(y0, y1), vw, vh, terrain),
-    screenToGround(camera, Math.max(x0, x1), Math.max(y0, y1), vw, vh, terrain),
-    screenToGround(camera, Math.min(x0, x1), Math.max(y0, y1), vw, vh, terrain),
-  ];
-  if (corners.some((c) => c === null)) return [];
-  const q = corners as GroundHit[];
+  const rx0 = Math.min(x0, x1);
+  const rx1 = Math.max(x0, x1);
+  const ry0 = Math.min(y0, y1);
+  const ry1 = Math.max(y0, y1);
+  camera.updateMatrixWorld();
   const out: Pick[] = [];
-  const u = view.units;
-  for (let r = 0; r < u.count; r++) if (insideQuad(q, u.x[r]!, u.z[r]!)) out.push({ type: 'unit', id: u.id[r]!, kind: u.kind[r]! });
+  const mobiles = (rows: MobileRows, type: 'unit' | 'alien', volume: (kind: number) => PickVolume) => {
+    for (let r = 0; r < rows.count; r++) {
+      const x = rows.x[r]!;
+      const z = rows.z[r]!;
+      if (volumeInRect(camera, vw, vh, x, groundHeight(terrain, x, z), z, volume(rows.kind[r]!), rx0, ry0, rx1, ry1)) out.push({ type, id: rows.id[r]!, kind: rows.kind[r]! });
+    }
+  };
+  mobiles(view.units, 'unit', unitVolume);
   if (out.length) return out;
-  const b = view.buildings;
-  for (let r = 0; r < b.count; r++) {
-    if (insideQuad(q, b.tx[r]! + b.fw[r]! / 2, b.ty[r]! + b.fh[r]! / 2)) out.push({ type: 'building', id: b.id[r]!, kind: b.kind[r]! });
+  const corners = [
+    screenToGround(camera, rx0, ry0, vw, vh, terrain),
+    screenToGround(camera, rx1, ry0, vw, vh, terrain),
+    screenToGround(camera, rx1, ry1, vw, vh, terrain),
+    screenToGround(camera, rx0, ry1, vw, vh, terrain),
+  ];
+  if (!corners.some((c) => c === null)) {
+    const q = corners as GroundHit[];
+    const b = view.buildings;
+    for (let r = 0; r < b.count; r++) {
+      if (insideQuad(q, b.tx[r]! + b.fw[r]! / 2, b.ty[r]! + b.fh[r]! / 2)) out.push({ type: 'building', id: b.id[r]!, kind: b.kind[r]! });
+    }
+    if (out.length) return out;
   }
-  if (out.length) return out;
-  const a = view.aliens;
-  for (let r = 0; r < a.count; r++) if (insideQuad(q, a.x[r]!, a.z[r]!)) out.push({ type: 'alien', id: a.id[r]!, kind: a.kind[r]! });
+  mobiles(view.aliens, 'alien', alienVolume);
   return out;
 }
