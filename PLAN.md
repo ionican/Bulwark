@@ -302,6 +302,23 @@ Richard: "when placing a building we should see a wireframe pulsing version of i
 
 Tests in `game/test/w27-*.test.ts`. The frozen Verify's vitest line gains the `"test/w27-"` filter alongside `"test/w24r2b-" "test/w26-"`; nothing else in Verify changes.
 
+### W28 — construction hover readout replaces the "waiting for" labels (Richard, 2026-10-09)
+
+- Remove the W25b text labels "waiting for <resource>" on sites and on their builders (render/waitView.ts / waiting.ts). Keep the hourglass marker on a starved site (a shape cue visible without hovering) and the resource readout's "▲SHORT · N sites waiting" line. Richard can drop those later.
+- Hovering the mouse over a building site (reserved, started, or a complete building being upgraded) shows a small panel by the cursor:
+  - the kind's name and "upgrading to tier N" when upgrading;
+  - percent complete from the snapshot `progress` (whole percent; "reserved — not started" for a reserved site);
+  - intake per resource the build costs (mass, energy, parts, rare — only those with a non-zero cost), per second of game time: cost_r × Δprogress ÷ Δgame-seconds between the last two snapshots of that building. Cost is the same per-kind (or upgrade) cost the simulation's `workOf` charges (sim/economy.ts stepConstruction: spend per tick = cost × progress done); read it from the pure data modules render code may import (kinds.ts / tuning), not from world.ts. A starved site shows 0/s for that update and the number when supply returns, so it oscillates as Richard describes — no smoothing that hides that;
+  - the number of builders (snapshot `builders`).
+- Render-side only: no simulation or snapshot change (fingerprint identical). Hover uses the existing building picking; the panel follows the cursor, hides when not over a site, never blocks clicks, updates once per snapshot, and never relies on colour (text and numbers). Paused: intake shows the last value or "paused", never a division by zero.
+
+#### W28 acceptance criteria
+
+1. Unit tests (`game/test/w28-*.test.ts`) over snapshot pairs: a site advancing 0.1 progress over 1 game second for a kind costing 200 mass / 600 energy shows 20 mass/s and 60 energy/s; a starved pair (no progress change) shows 0/s; a reserved site shows "reserved — not started"; an upgrade uses the upgrade cost; resources with zero cost are not listed; a paused pair (equal ticks) shows no division by zero.
+2. The W25b label meshes/text are gone; the hourglass marker and the ▲SHORT readout remain. Change only the W25b assertions that test the removed labels, and list them.
+3. Browser check with real mouse (in check-queue.mjs, which already drives a starved wall run): hover a started site — the panel shows a percent and a mass intake; with free spending off and mass run out it reads 0 mass/s on at least one update and a positive value on another while supply trickles in; moving off the site hides the panel. Screenshot `Resources/Bulwark Art Reference/w28-hover-readout.png`.
+4. The frozen Verify's vitest line gains `"test/w28-"`; nothing else in Verify changes.
+
 ### Run 2 decisions made here (Richard can overturn)
 
 - **Terrain:** the playable map keeps the game's own gently rolling ground (the simulation does not use height, and buildings can go anywhere); the red-canyon look comes from W17 textures, lighting, haze, terraced outcrops on rock tiles and canyon scenery beyond the map edge. Making map 1 itself a canyon would change the playable map and needs a design decision first.
