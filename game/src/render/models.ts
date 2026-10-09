@@ -85,6 +85,25 @@ export const TURRET_KINDS: ReadonlyMap<number, string> = new Map([
   [B.tempTurret, 'lookout'],
 ]);
 /**
+ * W27b (Richard, 2026-10-09: "could do with less detail in it - perhaps an outline and basic"): the
+ * detail level the placement preview draws per kind, 2 = simple, 1 = middle (the renderer's own LOD
+ * levels of the kit parts). Simple by default; middle where the simple level loses the kind's
+ * shape or its bounds (over 0.05 tiles from the full model's): the extractors (simple drops the
+ * drum, head and ring), the gate (no door frame), and the turrets whose simple level is a block.
+ * W17 model kinds (economy, chain, shield, belts) have one level, which they keep.
+ */
+const PREVIEW_LEVEL: ReadonlyMap<number, number> = new Map([
+  [B.massExtractor, 1],
+  [B.rareExtractor, 1],
+  [B.gate, 1],
+  [B.gun, 1],
+  [B.area, 1],
+  [B.beam, 1],
+  [B.tempTurret, 1],
+]);
+export const previewLevel = (kind: number): number => PREVIEW_LEVEL.get(kind) ?? 2;
+
+/**
  * Kit turrets are modelled for a 2 × 2 footprint; the heavy cannon's is 3 × 3 and the temporary
  * turret's 1 × 1, so those two are scaled about their footprint centre.
  */
@@ -922,14 +941,15 @@ export class ModelRenderer {
   }
 
   /**
-   * W27: complete buildings of `kind` at the anchor tiles `tiles` ([x, z, dir] each), at full
-   * detail and at rest (doors shut, turrets at their rest aim, nothing running), captured into `out`
+   * W27: complete buildings of `kind` at the anchor tiles `tiles` ([x, z, dir] each), at detail
+   * `level` (W27b: the kind's preview level, previewLevel) and at rest (doors shut, turrets at their
+   * rest aim, nothing running), captured into `out`
    * instead of drawn: the geometry objects and world matrices the batches would draw for them placed
    * there, plinths on sloping ground included. Walls and gates are laid out together in a scratch
    * layout (a dragged wall run autotiles as the placed run will; one tile is a lone wall or gate),
    * so the frame's layout is untouched. The placement ghost passes one tile, the drag preview the run.
    */
-  previewRun(kind: number, tiles: ReadonlyArray<readonly [number, number, number]>, out: Captured[] = []): Captured[] {
+  previewRun(kind: number, tiles: ReadonlyArray<readonly [number, number, number]>, out: Captured[] = [], level = previewLevel(kind)): Captured[] {
     out.length = 0;
     if (tiles.length === 0) return out;
     const dir0 = tiles[0]![2];
@@ -943,7 +963,7 @@ export class ModelRenderer {
     const sink = this.capture(out);
     for (const [tx, ty, dir] of tiles) {
       const { top, bottom } = footprintRange(this.terrain, tx, ty, fw, fh);
-      this.drawBuilding(sink, REST_POSE, layout, kind, ty * this.terrain.w + tx, dir, 1, tx + fw / 2, top, bottom, ty + fh / 2, fw, fh, 0, 0, true, 1);
+      this.drawBuilding(sink, REST_POSE, layout, kind, ty * this.terrain.w + tx, dir, 1, tx + fw / 2, top, bottom, ty + fh / 2, fw, fh, level, 0, true, 1);
     }
     return out;
   }

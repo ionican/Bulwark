@@ -59,7 +59,6 @@ function drawn(root: Object3D, pick: (o: Mesh) => boolean): Drawn {
 /** The placed building's model meshes (no icons, outlines, overlays or the map's bare deposits). */
 const isModel = (o: Mesh) =>
   !o.name.startsWith('icon/') && o.name !== 'reserved-outline' && !o.name.startsWith('overlay/') && !String(o.userData.part ?? '').startsWith('deposit/');
-const isWire = (o: Mesh) => o.name === 'overlay/preview/wire';
 
 const SPOTS: Array<[string, number, number, number]> = [...KIND_SPOTS.map(([k, x, y, d]) => [k, x, y, d ?? 0] as [string, number, number, number]), ['gate', 72, 66, 0]];
 
