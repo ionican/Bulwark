@@ -13,6 +13,13 @@ import { ICON_LEVEL } from '../src/render/models.ts';
 import { CommanderRig } from '../src/render/workshop/w23/rig/commander.ts';
 import { drawAt, fx, nextEpoch, renderer, snapAt, terrain } from './w24r2b-fixtures.ts';
 
+/**
+ * How far from the commander's centre its tracer may start: the gun is on its right forearm, and a
+ * rig posed at full detail puts the muzzle 1.18 tiles from the centre (measured: (66.52, 63.91) for
+ * a commander at (65.5, 64.5)). The stale origins this guards against were 1.9 to 7.4 tiles away.
+ */
+const MUZZLE_REACH = 1.25;
+
 describe('finding 3: a commander tracer starts at the commander as drawn this frame', () => {
   /** A world with a commander at (x, z) and an alien 10 tiles north of it. */
   function scene3(x: number, z: number) {
@@ -44,7 +51,7 @@ describe('finding 3: a commander tracer starts at the commander as drawn this fr
     fireFrom(w, cmd, alien, 94.5, 94.5);
     drawAt(r, snapAt(w, 20), { t: 1, dt: 0, world: nextEpoch(), level: ICON_LEVEL });
     const [x, z] = tail(scene);
-    expect(Math.hypot(x - 94.5, z - 94.5), `tracer tail at (${x.toFixed(2)}, ${z.toFixed(2)})`).toBeLessThan(1);
+    expect(Math.hypot(x - 94.5, z - 94.5), `tracer tail at (${x.toFixed(2)}, ${z.toFixed(2)})`).toBeLessThan(MUZZLE_REACH);
   });
 
   it('walking while zoomed out (icon detail), a new shot starts at the commander, not where it was last drawn in full', () => {
@@ -62,7 +69,7 @@ describe('finding 3: a commander tracer starts at the commander as drawn this fr
     fireFrom(w, cmd, alien, 73.5, 64.5);
     drawAt(r, snapAt(w, 91), { t: (t += 0.05), dt: 0.05, world: E, level: ICON_LEVEL });
     const [x, z] = tail(scene);
-    expect(Math.hypot(x - 73.5, z - 64.5), `tracer tail at (${x.toFixed(2)}, ${z.toFixed(2)})`).toBeLessThan(1);
+    expect(Math.hypot(x - 73.5, z - 64.5), `tracer tail at (${x.toFixed(2)}, ${z.toFixed(2)})`).toBeLessThan(MUZZLE_REACH);
   });
 
   it('drawn in full this frame, the tracer still starts at the rig muzzle', () => {

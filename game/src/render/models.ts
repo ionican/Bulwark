@@ -376,6 +376,14 @@ export class ModelRenderer {
   readonly alienTracks: Tracks;
   /** Frame number each unit's rig was last posed in (a rig not posed last frame is placed afresh). */
   private readonly rigFrame: Uint32Array;
+  /**
+   * Each unit slot's interpolated position this frame (x, z) and the frame it was written, culled or
+   * not, and a rig posed at rest for the shot origin of a commander whose own rig was not posed this
+   * frame (icon detail, off screen, or after a load).
+   */
+  private readonly unitAt: Float32Array;
+  private readonly unitAtFrame: Uint32Array;
+  private readonly restRig = new CommanderRig();
   private frameNo = 0;
   private readonly extractorAt = new Map<number, number>();
   private readonly frustum = new Frustum();
@@ -528,6 +536,8 @@ export class ModelRenderer {
     this.unitTracks = new Tracks(C.units);
     this.alienTracks = new Tracks(C.aliens);
     this.rigFrame = new Uint32Array(C.units);
+    this.unitAt = new Float32Array(C.units * 2);
+    this.unitAtFrame = new Uint32Array(C.units);
   }
 
   /**
@@ -602,11 +612,24 @@ export class ModelRenderer {
       return true;
     }
     if (type === T_UNIT) {
+      // the rig's muzzle only when that rig was posed this frame; otherwise the commander's muzzle
+      // at rest, at its interpolated position and heading this frame (W24 review: a rig cached
+      // before a load, or last posed before zooming out, put the tracer where it used to stand)
+      if (ss >= this.unitAtFrame.length || P.cols.srcKind[pr] !== U.commander) return false;
       const rig = this.rigOf(src);
-      if (!(rig instanceof CommanderRig)) return false;
-      out[o] = rig.muzzle.x;
-      out[o + 1] = rig.muzzle.y;
-      out[o + 2] = rig.muzzle.z;
+      let m: Vector3;
+      if (rig instanceof CommanderRig && this.rigFrame[ss] === this.frameNo) m = rig.muzzle;
+      else if (this.unitAtFrame[ss] === this.frameNo) {
+        const x = this.unitAt[ss * 2]!;
+        const z = this.unitAt[ss * 2 + 1]!;
+        const yaw = this.unitTracks.heading[ss]!;
+        this.restRig.place(x, z, yaw, this.ground);
+        this.restRig.update(0, x, z, yaw, this.ground);
+        m = this.restRig.muzzle;
+      } else return false;
+      out[o] = m.x;
+      out[o + 1] = m.y;
+      out[o + 2] = m.z;
       return true;
     }
     if (type === T_ALIEN) {
@@ -1041,6 +1064,11 @@ export class ModelRenderer {
       const slot = slotOf(id);
       // walking: distance moved and heading from the interpolated positions (walk.ts)
       const step = T.step(slot, id, x, z, Math.atan2(-v.fz[r]!, v.fx[r]!), dt, 0, v.cut?.[r] ?? 0);
+      if (slot < this.unitAtFrame.length) {
+        this.unitAt[slot * 2] = x;
+        this.unitAt[slot * 2 + 1] = z;
+        this.unitAtFrame[slot] = this.frameNo;
+      }
       const y = this.ground(x, z);
       const commander = kind === U.commander;
       const h = commander ? 3.6 : 0.9;
