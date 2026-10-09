@@ -259,3 +259,14 @@ All eight accepted; PLAN.md revised.
 Verify → run under `bash -c` with quoted vitest filters; check-render always writes and requires the 2b screenshots; behavioural tests must change over effect-clock time; the calling session runs the tests-first commit against the pre-2b renderer to prove they fail. Not accepted: "remove the undeclared W26 dependency" — W26 (idle units column, Richard 2026-10-09) was added to PLAN.md during the review and is built in the same run, so its tests stay in this Verify.
 
 No round 2 (Richard's one-plan-review rule). Run 2b and W26 locked.
+
+## Act 3 — Build (run 2b, W26, W27)
+
+`author` subagent (Opus 5.5 · high), ~115 min, commits `e084eb9` (tests first) .. `4d7af01`; W27 (pulsing wireframe placement preview, Richard) added mid-run as plan commit `6d933f9`. Calling session's out-of-band check, 2026-10-09 10:3x–10:4x:
+- Red: at `e084eb9` the new tests fail 44 of 56 across all 8 files (separate worktree, own `npm ci`).
+- Frozen Verify run 1 at load 17→98: new tests 71/71; `npm test` failed on two timing tests only — `m2` determinism (11 s against 5 s) and `w25c-overlay` 256 × 64 update (111 ms against 100 ms). Neither file nor `queueView.ts` changed since `dc28343`; both pass alone at load 95. Run 2 at load 9→35: the same two again. Re-run once (the plan's allowance): `npm test` 416/416 at load 26.
+- Remaining steps, same run: build, `look` tsc, fingerprint (queue stripped) identical to `60ebba6` (68/14/30), check-render all passed, check-queue all passed (W26 real clicks).
+- Gate, measured at load 5–7: game camera 60.0 fps average, 59.5 1%-low, forced-complete 8.15 ms, 583 draw calls, engineers 12/12, aliens ≥ 100 drawn; strategic zoom-out 60.0 / 59.5, forced-complete 11.28 ms (terrain 7.11, post 3.57). Warm-up: longest frame in the 10 s after load 200.0 ms off → 16.8 ms on; loading 1.39 s → 1.66 s.
+- `git diff fbbef60..HEAD -- game/src/sim look model` empty. Author's `inspect.ts` attribution change (mesh group restricts attribution; tie-break only at equal distance) and `drawnCurrent` sampling (waits up to 10 frames, then samples anyway) read: both remove counting errors and cannot mark an undrawn entity as drawn.
+- Screenshots viewed: beams, recoil and smoke, shots and impacts, open gate with engineer, idle column (commander × 1, engineer × 2). Weak point: the turret's wireframe preview at the game camera reads as a dense pale mass rather than an outline — for Richard's sign-off.
+- Found during the check: the worktree's `game/node_modules` had been emptied after the author's Verify (cause not established); reinstalled with `npm ci`; the :8822 dev server kept serving.
