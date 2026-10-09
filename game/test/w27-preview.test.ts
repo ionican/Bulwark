@@ -17,7 +17,7 @@ import { Ghost } from '../src/render/ghost.ts';
 import { KIND_SPOTS } from './w24r2a-fixtures.ts';
 import { drawAt, nextEpoch, renderer, snapAt, terrain } from './w24r2b-fixtures.ts';
 
-const { r, scene } = renderer();
+const { r } = renderer();
 
 interface Drawn {
   geometries: Set<BufferGeometry>;

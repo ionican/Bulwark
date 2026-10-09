@@ -42,9 +42,17 @@ describe('W26 criterion 1: the idle set from a snapshot', () => {
     const { s, e } = fixture();
     const idle = idleUnits(s);
     for (const id of e.slice(2)) expect(idle.engineer).not.toContain(id);
-    const all = [...idle.commander, ...idle.engineer];
-    for (let r = 0; r < s.aliens.count; r++) expect(all).not.toContain(s.aliens.id[r]);
-    for (let r = 0; r < s.buildings.count; r++) expect(all).not.toContain(s.buildings.id[r]);
+    // ids are per table (an alien and a unit can share id 0): every id listed is a unit row of its type
+    for (const [type, ids] of [
+      [U.commander, idle.commander],
+      [U.engineer, idle.engineer],
+    ] as const)
+      for (const id of ids) {
+        const r = Array.prototype.indexOf.call(s.units.id, id) as number;
+        expect(r, `unit ${id}`).toBeGreaterThanOrEqual(0);
+        expect(s.units.cols.kind[r]).toBe(type);
+      }
+    expect(s.aliens.count + s.buildings.count).toBeGreaterThan(0);
     expect(Object.keys(idle).sort()).toEqual(['commander', 'engineer']);
   });
 
