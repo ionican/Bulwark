@@ -30,11 +30,8 @@ import {
   AdditiveBlending,
   Color,
   ConeGeometry,
-  DynamicDrawUsage,
   Group,
   IcosahedronGeometry,
-  InstancedBufferAttribute,
-  InstancedMesh,
   Matrix4,
   MeshBasicMaterial,
   OctahedronGeometry,
@@ -43,6 +40,7 @@ import {
   Vector3,
   BoxGeometry,
   type BufferGeometry,
+  type Material,
   type Camera,
 } from 'three';
 import { P_ALIEN, P_BEAM, P_HEAVY, P_SHELL } from '../sim/kinds.ts';
@@ -52,6 +50,7 @@ import type { MobileView } from './interp.ts';
 import { Particles, PType } from './workshop/fx/particles.ts';
 import { PARTICLE_CAPS, blastMiddle, blastSimple } from './workshop/stress/effects.ts';
 import { BEAM_CYAN, Beams } from './workshop/w23/beams.ts';
+import { SimpleBatch } from './simpleBatch.ts';
 
 export interface EffectsCapacity {
   buildings: number;
@@ -62,16 +61,10 @@ export interface EffectsCapacity {
 /** Visibility test (frustum), centre and radius in tiles; always true with culling off. */
 export type Visible = (x: number, y: number, z: number, r: number) => boolean;
 
-/** Activity of the visible effects: counts this frame, and running totals (scripts/check-render.mjs). */
+/** This frame's builders beaming (build or reclaim) and visible shots in flight (models.ts activity reads them). */
 export interface Activity {
-  /** This frame: visible builders beaming (build or reclaim), shots in flight, turret beams. */
   beams: number;
   shots: number;
-  turretBeams: number;
-  /** Running totals: frames with a visible beam, flashes on visible turrets, frames with a visible shot. */
-  beamFrames: number;
-  flashes: number;
-  shotFrames: number;
 }
 
 const NONE = 0xffffffff;
@@ -85,56 +78,6 @@ const _k = new Vector3();
 const _q = new Quaternion();
 const _m = new Matrix4();
 const TRACER_COL: Record<number, [number, number, number]> = { 0: [5, 2.9, 1.1], 1: [5.5, 2.4, 0.9], 2: [6, 2.2, 0.7] };
-const PRIME_COLOUR = new Color(1, 0.75, 0.45);
-
-/** An instanced mesh filled from zero each frame, up to a fixed capacity (overflow flagged). */
-class Pool {
-  readonly mesh: InstancedMesh;
-  readonly colours: InstancedBufferAttribute | null;
-  n = 0;
-  overflowed = false;
-
-  constructor(geometry: BufferGeometry, material: MeshBasicMaterial, readonly cap: number, name: string, colours = false) {
-    this.mesh = new InstancedMesh(geometry, material, cap);
-    this.mesh.name = name;
-    this.mesh.instanceMatrix.setUsage(DynamicDrawUsage);
-    this.mesh.frustumCulled = false;
-    this.mesh.castShadow = false;
-    this.mesh.receiveShadow = false;
-    this.mesh.count = 0;
-    this.mesh.visible = false;
-    this.mesh.renderOrder = 10;
-    this.colours = colours ? new InstancedBufferAttribute(new Float32Array(cap * 3), 3) : null;
-    if (this.colours) {
-      this.colours.setUsage(DynamicDrawUsage);
-      this.mesh.instanceColor = this.colours;
-    }
-  }
-
-  /** Next free instance index, or −1 (and `overflowed`) when full. */
-  take(): number {
-    if (this.n >= this.cap) {
-      this.overflowed = true;
-      return -1;
-    }
-    return this.n++;
-  }
-
-  commit(): void {
-    const m = this.mesh;
-    m.count = this.n;
-    m.visible = this.n > 0;
-    if (!this.n) return;
-    m.instanceMatrix.clearUpdateRanges();
-    m.instanceMatrix.addUpdateRange(0, this.n * 16);
-    m.instanceMatrix.needsUpdate = true;
-    if (this.colours) {
-      this.colours.clearUpdateRanges();
-      this.colours.addUpdateRange(0, this.n * 3);
-      this.colours.needsUpdate = true;
-    }
-  }
-}
 
 const additive = (r: number, g: number, b: number) => new MeshBasicMaterial({ color: new Color(r, g, b), toneMapped: false, transparent: true, blending: AdditiveBlending, depthWrite: false, fog: false });
 
@@ -144,11 +87,14 @@ export class Effects {
   private readonly buildBeams: Beams;
   private readonly reclaimBeams: Beams;
   private readonly turretBeams: Beams;
-  private readonly buildPulses: Pool;
-  private readonly reclaimPulses: Pool;
-  private readonly tracers: Pool;
-  private readonly alienShots: Pool;
-  private readonly flashes: Pool;
+  private readonly buildPulses: SimpleBatch;
+  private readonly reclaimPulses: SimpleBatch;
+  private readonly tracers: SimpleBatch;
+  private readonly alienShots: SimpleBatch;
+  private readonly flashes: SimpleBatch;
+  /** Every instanced pool and beam set above, for begin, commit and `overflowed`. */
+  private readonly pools: SimpleBatch[];
+  private readonly beamSets: Beams[];
   private beamOverflow = false;
   /** Beams pushed this frame: build, reclaim, turret (Beams drops one past its capacity silently). */
   private readonly beamN = [0, 0, 0];
@@ -162,6 +108,8 @@ export class Effects {
   // projectile slots: id, origin and last drawn head; the frame each was last seen
   private readonly pId: Uint32Array;
   private readonly pOrigin: Float32Array;
+  /** Flight height over the origin (ground + 0.6), sampled once when the slot is assigned. */
+  private readonly pFlight: Float32Array;
   private readonly pHead: Float32Array;
   private readonly pKind: Uint8Array;
   private readonly pSeen: Uint32Array;
@@ -177,7 +125,7 @@ export class Effects {
   private wppd = 0;
   private t = 0;
   private dt = 0;
-  readonly activity: Activity = { beams: 0, shots: 0, turretBeams: 0, beamFrames: 0, flashes: 0, shotFrames: 0 };
+  readonly activity: Activity = { beams: 0, shots: 0 };
 
   constructor(readonly capacity: EffectsCapacity) {
     this.group.name = 'effects';
@@ -190,15 +138,24 @@ export class Effects {
     this.buildBeams = named(new Beams(C.units), 'overlay/fx/build-beam');
     this.reclaimBeams = named(new Beams(C.units), 'overlay/fx/reclaim-beam');
     this.turretBeams = named(new Beams(C.buildings), 'overlay/fx/turret-beam');
-    this.buildPulses = new Pool(new OctahedronGeometry(0.09, 0), additive(0.6, 2.4, 2.8), C.units * PULSES, 'overlay/fx/build-pulse');
+    const pool = (geometry: BufferGeometry, material: Material, cap: number, name: string, colours = false) => {
+      const p = new SimpleBatch(geometry, material, cap, name, colours);
+      p.mesh.renderOrder = 10;
+      p.mesh.castShadow = false;
+      p.mesh.receiveShadow = false;
+      return p;
+    };
+    this.buildPulses = pool(new OctahedronGeometry(0.09, 0), additive(0.6, 2.4, 2.8), C.units * PULSES, 'overlay/fx/build-pulse');
     const ring = new TorusGeometry(0.1, 0.028, 4, 10).rotateY(Math.PI / 2); // faces along +x (the beam)
-    this.reclaimPulses = new Pool(ring, additive(0.6, 2.4, 2.8), C.units * PULSES, 'overlay/fx/reclaim-pulse');
+    this.reclaimPulses = pool(ring, additive(0.6, 2.4, 2.8), C.units * PULSES, 'overlay/fx/reclaim-pulse');
     const streak = new BoxGeometry(1, 1, 1).translate(0.5, 0, 0);
-    this.tracers = new Pool(streak, new MeshBasicMaterial({ color: 0xffffff, toneMapped: false, fog: false }), C.projectiles, 'overlay/fx/tracer', true);
-    this.alienShots = new Pool(new IcosahedronGeometry(0.13, 0), additive(1.4, 3.2, 0.9), C.projectiles, 'overlay/fx/alien-shot');
+    this.tracers = pool(streak, new MeshBasicMaterial({ color: 0xffffff, toneMapped: false, fog: false }), C.projectiles, 'overlay/fx/tracer', true);
+    this.alienShots = pool(new IcosahedronGeometry(0.13, 0), additive(1.4, 3.2, 0.9), C.projectiles, 'overlay/fx/alien-shot');
     const cone = new ConeGeometry(0.16, 0.55, 7, 1, true).rotateZ(-Math.PI / 2).translate(0.27, 0, 0); // opens forward along +x
-    this.flashes = new Pool(cone, additive(6, 3.6, 1.5), C.buildings, 'overlay/fx/flash');
-    for (const p of [this.buildPulses, this.reclaimPulses, this.tracers, this.alienShots, this.flashes]) this.group.add(p.mesh);
+    this.flashes = pool(cone, additive(6, 3.6, 1.5), C.buildings, 'overlay/fx/flash');
+    this.pools = [this.buildPulses, this.reclaimPulses, this.tracers, this.alienShots, this.flashes];
+    this.beamSets = [this.buildBeams, this.reclaimBeams, this.turretBeams];
+    for (const p of this.pools) this.group.add(p.mesh);
     this.particles = new Particles(PARTICLE_CAPS);
     this.particles.smokeMesh.name = 'overlay/fx/smoke';
     this.particles.glowMesh.name = 'overlay/fx/glow';
@@ -209,6 +166,7 @@ export class Effects {
     this.fBig = new Uint8Array(C.buildings);
     this.pId = new Uint32Array(C.projectiles).fill(NONE);
     this.pOrigin = new Float32Array(C.projectiles * 3);
+    this.pFlight = new Float32Array(C.projectiles);
     this.pHead = new Float32Array(C.projectiles * 3);
     this.pKind = new Uint8Array(C.projectiles);
     this.pSeen = new Uint32Array(C.projectiles);
@@ -219,7 +177,7 @@ export class Effects {
   }
 
   get overflowed(): boolean {
-    return this.beamOverflow || this.flashOverflow || this.buildPulses.overflowed || this.reclaimPulses.overflowed || this.tracers.overflowed || this.alienShots.overflowed || this.flashes.overflowed;
+    return this.beamOverflow || this.flashOverflow || this.pools.some((p) => p.overflowed);
   }
 
   /** Drops every effect (a world reset): no impacts for the rows that vanish with it. */
@@ -242,13 +200,10 @@ export class Effects {
     this.wppd = wppd;
     this.t = t;
     this.dt = dt;
-    this.buildBeams.begin();
-    this.reclaimBeams.begin();
-    this.turretBeams.begin();
-    for (const p of [this.buildPulses, this.reclaimPulses, this.tracers, this.alienShots, this.flashes]) p.n = 0;
+    for (const b of this.beamSets) b.begin();
+    for (const p of this.pools) p.begin();
     this.beamN.fill(0);
-    const a = this.activity;
-    a.beams = a.shots = a.turretBeams = 0;
+    this.activity.beams = this.activity.shots = 0;
     this.frameNo++;
   }
 
@@ -256,12 +211,13 @@ export class Effects {
    * A build beam (emitter → site) or a reclaim beam (wreck → emitter): `a` to `b`, with pulses that
    * travel from a to b as the effect clock advances. `seed` staggers the pulses per unit.
    */
-  workBeam(reclaim: boolean, ax: number, ay: number, az: number, bx: number, by: number, bz: number, seed: number, visible: boolean): void {
+  workBeam(reclaim: boolean, ax: number, ay: number, az: number, bx: number, by: number, bz: number, seed: number): void {
     const beams = reclaim ? this.reclaimBeams : this.buildBeams;
     if (++this.beamN[reclaim ? 1 : 0]! > this.capacity.units) this.beamOverflow = true;
     _a.set(ax, ay, az);
     _b.set(bx, by, bz);
     beams.push(_a, _b, reclaim ? 0.04 : 0.028, BEAM_CYAN, reclaim ? 3.2 : 4, this.camPos, this.wppd, 2.4);
+    this.activity.beams++;
     const pool = reclaim ? this.reclaimPulses : this.buildPulses;
     _d.subVectors(_b, _a);
     const len = _d.length();
@@ -278,25 +234,23 @@ export class Effects {
       _m.compose(_s.set(ax + (bx - ax) * u, ay + (by - ay) * u, az + (bz - az) * u), _q, _k);
       _m.toArray(pool.mesh.instanceMatrix.array as Float32Array, i * 16);
     }
-    if (visible) this.activity.beams++;
   }
 
   /** The beam turret's beam, muzzle → target; its width pulses with the effect clock. */
-  turretBeam(ax: number, ay: number, az: number, bx: number, by: number, bz: number, seed: number, visible: boolean): void {
+  turretBeam(ax: number, ay: number, az: number, bx: number, by: number, bz: number, seed: number): void {
     if (++this.beamN[2]! > this.capacity.buildings) this.beamOverflow = true;
     _a.set(ax, ay, az);
     _b.set(bx, by, bz);
     const pulse = 0.75 + 0.25 * Math.sin(this.t * 31 + seed * 6.283);
     this.turretBeams.push(_a, _b, 0.09 * pulse, BEAM_CYAN, 6 * pulse, this.camPos, this.wppd, 3 * pulse);
-    if (visible) this.activity.turretBeams++;
   }
 
   /**
    * A muzzle flash at (x, y, z) along (dx, dy, dz) (a unit vector), and W21's muzzle blast: the
    * middle-detail blast for a turret drawn at full or middle detail, one forward flash otherwise.
    */
-  flash(x: number, y: number, z: number, dx: number, dy: number, dz: number, big: boolean, close: boolean, visible: boolean): void {
-    let i = this.fN;
+  flash(x: number, y: number, z: number, dx: number, dy: number, dz: number, big: boolean, close: boolean): void {
+    const i = this.fN;
     if (i >= this.fAge.length) {
       this.flashOverflow = true;
       return;
@@ -310,14 +264,12 @@ export class Effects {
     this.fDir[i * 3 + 2] = dz;
     this.fAge[i] = 0;
     this.fBig[i] = big ? 1 : 0;
-    i = 0;
     _d.set(dx, dy, dz);
     if (close) {
       _a.set(dz, 0, -dx).normalize(); // side
       _b.set(x - dx * 0.3, y - dy * 0.3, z - dz * 0.3); // brake ports a little behind the muzzle
       blastMiddle(this.particles, x, y, z, _d, _a, _b);
     } else blastSimple(this.particles, x, y, z, _d);
-    if (visible) this.activity.flashes++;
   }
 
   /**
@@ -345,6 +297,7 @@ export class Effects {
           this.pOrigin[s * 3 + 1] = g + 0.3;
           this.pOrigin[s * 3 + 2] = z;
         }
+        this.pFlight[s] = ground(this.pOrigin[s * 3]!, this.pOrigin[s * 3 + 2]!) + 0.6;
       }
       this.pSeen[s] = f;
       this.aliveNext[n++] = s;
@@ -353,7 +306,7 @@ export class Effects {
       const oy = this.pOrigin[s * 3 + 1]!;
       const oz = this.pOrigin[s * 3 + 2]!;
       const travel = Math.hypot(x - ox, z - oz);
-      const y = g + (oy - (ground(ox, oz) + 0.6)) * Math.exp(-travel / 3);
+      const y = g + (oy - this.pFlight[s]!) * Math.exp(-travel / 3);
       this.pHead[s * 3] = x;
       this.pHead[s * 3 + 1] = y;
       this.pHead[s * 3 + 2] = z;
@@ -381,7 +334,7 @@ export class Effects {
       _m.compose(_s.set(x - _d.x * len, y - _d.y * len, z - _d.z * len), _q, _b.set(len, w, w));
       _m.toArray(this.tracers.mesh.instanceMatrix.array as Float32Array, i * 16);
       const c = TRACER_COL[kind] ?? TRACER_COL[0]!;
-      this.tracers.colours!.setXYZ(i, c[0], c[1], c[2]);
+      this.tracers.mesh.instanceColor!.setXYZ(i, c[0], c[1], c[2]);
     }
     // rows seen last frame and not this one are gone: an impact at the last drawn head
     for (let i = 0; i < this.aliveN; i++) {
@@ -447,42 +400,19 @@ export class Effects {
       _m.compose(_s.set(this.fPos[i * 3]!, this.fPos[i * 3 + 1]!, this.fPos[i * 3 + 2]!), _q, _a.set(sz, sz * (1 - 0.4 * u), sz * (1 - 0.4 * u)));
       _m.toArray(this.flashes.mesh.instanceMatrix.array as Float32Array, k * 16);
     }
-    this.buildBeams.commit();
-    this.reclaimBeams.commit();
-    this.turretBeams.commit();
-    for (const p of [this.buildPulses, this.reclaimPulses, this.tracers, this.alienShots, this.flashes]) p.commit();
+    for (const b of this.beamSets) b.commit();
+    for (const p of this.pools) p.commit();
     if (this.cam) this.particles.update(this.dt, this.cam);
-    const a = this.activity;
-    if (a.beams > 0) a.beamFrames++;
-    if (a.shots > 0) a.shotFrames++;
   }
 
-  /** Every effect mesh drawn once at `p` (the warm-up frame compiles their programs), or back to none. */
+  /**
+   * The particle meshes drawn once at (x, y, z) for the warm-up frame (their programs compiled), or
+   * cleared. The pools and beams are instanced meshes, primed with the rest by models.ts prime.
+   */
   prime(on: boolean, x = 0, y = 0, z = 0, camera: Camera | null = null): void {
     if (!on) {
-      for (const p of [this.buildPulses, this.reclaimPulses, this.tracers, this.alienShots, this.flashes]) {
-        p.n = 0;
-        p.commit();
-      }
-      for (const b of [this.buildBeams, this.reclaimBeams, this.turretBeams]) {
-        b.begin();
-        b.commit();
-      }
       this.particles.clear();
       return;
-    }
-    _a.set(x, y, z);
-    _b.set(x + 2, y, z);
-    for (const b of [this.buildBeams, this.reclaimBeams, this.turretBeams]) {
-      b.begin();
-      b.push(_a, _b, 0.05, PRIME_COLOUR, 1, this.camPos, this.wppd);
-      b.commit();
-    }
-    for (const p of [this.buildPulses, this.reclaimPulses, this.tracers, this.alienShots, this.flashes]) {
-      p.n = 0;
-      const i = p.take();
-      _m.makeTranslation(x, y + 0.5, z).toArray(p.mesh.instanceMatrix.array as Float32Array, i * 16);
-      p.commit();
     }
     this.particles.spawn({ type: PType.Smoke, x, y: y + 1, z, life: 1, s0: 0.5, s1: 1, r: 0.5, g: 0.5, b: 0.5, a: 0.5 });
     this.particles.spawn({ type: PType.Flash, x, y: y + 1, z, life: 1, s0: 0.5, s1: 1, r: 2, g: 2, b: 2, a: 1 });

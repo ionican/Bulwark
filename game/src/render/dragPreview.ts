@@ -9,19 +9,19 @@
 // inspection counts them as overlays; inspectDrag reads them back from the scene.
 //
 // W27 (models view): each tile that will be built also carries the pulsing wireframe of what will
-// stand there (preview.ts), in step with the placement ghost. A wall run is laid out with W23's
-// autotiler as one run (a scratch wall layout of the planned tiles), so the wireframes are the
-// wall parts the run will be drawn with; other kinds use models.ts previewBuilding per tile. The
-// wireframes are recomputed only when the planned tiles change.
+// stand there (preview.ts), in step with the placement ghost, from models.ts previewRun: the run is
+// laid out in one call (walls and gates through W23's autotiler, as the placed run will be drawn),
+// with the plinths a placed building gets on sloping ground. The wireframes are recomputed only
+// when the planned tiles change.
 
 import { InstancedMesh, MeshBasicMaterial, type BufferGeometry, type Object3D } from 'three';
-import { B, buildingFootprint } from '../sim/kinds.ts';
+import { buildingFootprint } from '../sim/kinds.ts';
 import type { Terrain } from '../sim/terrain.ts';
 import { groundHeight } from './ground.ts';
 import { ghostMarkGeometry, ghostOutlineGeometry } from './geometry.ts';
-import { rowsOfPlan, type Captured, type ModelRenderer } from './models.ts';
+import type { Captured, ModelRenderer } from './models.ts';
 import { WireframePool, pulseOpacity } from './preview.ts';
-import { WallLayout } from './wallLayout.ts';
+import { SimpleBatch } from './simpleBatch.ts';
 
 /** What the preview draws: footprint anchors to build, tiles skipped. */
 export interface DragTiles {
@@ -33,69 +33,20 @@ export interface DragTiles {
 /** Marks lie this far above the ground (tiles), over the reserved outlines (models.ts: 0.06). */
 const LIFT = 0.14;
 
-class Pool {
-  mesh: InstancedMesh;
-  private n = 0;
-  constructor(
-    private readonly parent: Object3D,
-    private readonly geometry: BufferGeometry,
-    private readonly material: MeshBasicMaterial,
-    private readonly name: string,
-  ) {
-    this.mesh = this.make(128);
-  }
-  private make(cap: number): InstancedMesh {
-    const m = new InstancedMesh(this.geometry, this.material, cap);
-    m.name = this.name;
-    m.frustumCulled = false;
-    m.renderOrder = 16; // with the placement ghost
-    m.count = 0;
-    m.visible = false;
-    this.parent.add(m);
-    return m;
-  }
-  reset() {
-    this.n = 0;
-  }
-  /** A flat mark centred on (x, z), half extents (hx, hz). */
-  push(x: number, y: number, z: number, hx: number, hz: number) {
-    if (this.n >= this.mesh.instanceMatrix.count) {
-      const old = this.mesh;
-      this.mesh = this.make(old.instanceMatrix.count * 2);
-      (this.mesh.instanceMatrix.array as Float32Array).set(old.instanceMatrix.array as Float32Array);
-      old.removeFromParent();
-      old.dispose();
-    }
-    const a = this.mesh.instanceMatrix.array as Float32Array;
-    const o = this.n++ * 16;
-    a.fill(0, o, o + 16);
-    a[o] = hx;
-    a[o + 5] = 1;
-    a[o + 10] = hz;
-    a[o + 12] = x;
-    a[o + 13] = y;
-    a[o + 14] = z;
-    a[o + 15] = 1;
-  }
-  commit() {
-    const m = this.mesh;
-    m.count = this.n;
-    m.visible = this.n > 0;
-    if (this.n > 0) {
-      m.instanceMatrix.clearUpdateRanges();
-      m.instanceMatrix.addUpdateRange(0, this.n * 16);
-      m.instanceMatrix.needsUpdate = true;
-    }
-  }
+/** A pool of flat marks drawn with the placement ghost: `push(x, y, z, hx, hz)` (half extents). */
+function marks(parent: Object3D, geometry: BufferGeometry, material: MeshBasicMaterial, name: string): SimpleBatch {
+  const b = new SimpleBatch(geometry, material, Infinity, name);
+  b.mesh.renderOrder = 16; // with the placement ghost
+  parent.add(b.mesh);
+  return b;
 }
 
 export class DragPreview {
-  private readonly build: Pool;
-  private readonly skipOutline: Pool;
-  private readonly skipCross: Pool;
+  private readonly build: SimpleBatch;
+  private readonly skipOutline: SimpleBatch;
+  private readonly skipCross: SimpleBatch;
   private readonly terrain: Terrain;
   private readonly wire: WireframePool | null;
-  private walls: WallLayout | null = null;
   private readonly captured: Captured[] = [];
   /** Kind and build tiles the wireframes were made for (kind, then x, z, dir per tile). */
   private planned = new Int32Array(64);
@@ -111,14 +62,16 @@ export class DragPreview {
     this.terrain = terrain;
     this.wire = models ? new WireframePool(parent, 'overlay/drag/wire') : null;
     const flat = new MeshBasicMaterial({ vertexColors: true, depthTest: false, depthWrite: false, toneMapped: false });
-    this.build = new Pool(parent, ghostOutlineGeometry(true), flat, 'overlay/drag/build');
-    this.skipOutline = new Pool(parent, ghostOutlineGeometry(false), flat, 'overlay/drag/skip');
-    this.skipCross = new Pool(parent, ghostMarkGeometry(false), flat, 'overlay/drag/skip-cross');
+    this.build = marks(parent, ghostOutlineGeometry(true), flat, 'overlay/drag/build');
+    this.skipOutline = marks(parent, ghostOutlineGeometry(false), flat, 'overlay/drag/skip');
+    this.skipCross = marks(parent, ghostMarkGeometry(false), flat, 'overlay/drag/skip-cross');
   }
 
   /** Draws `tiles` (null: nothing). Call every frame while a drag is under way; `time` is real time in seconds (the pulse). */
   update(tiles: DragTiles | null, time = 0): void {
-    for (const p of [this.build, this.skipOutline, this.skipCross]) p.reset();
+    this.build.begin();
+    this.skipOutline.begin();
+    this.skipCross.begin();
     this.shown = tiles;
     this.wires(tiles, time);
     if (tiles) {
@@ -127,17 +80,19 @@ export class DragPreview {
       for (const [tx, ty] of tiles.build) {
         const x = tx + fw / 2;
         const z = ty + fh / 2;
-        this.build.push(x, groundHeight(t, x, z) + LIFT, z, fw / 2, fh / 2);
+        this.build.push(x, groundHeight(t, x, z) + LIFT, z, fw / 2, 1, fh / 2);
       }
       for (const [tx, ty] of tiles.skipped) {
         const x = tx + 0.5;
         const z = ty + 0.5;
         const y = groundHeight(t, x, z) + LIFT;
-        this.skipOutline.push(x, y, z, 0.5, 0.5);
-        this.skipCross.push(x, y + 0.01, z, 0.36, 0.36);
+        this.skipOutline.push(x, y, z, 0.5, 1, 0.5);
+        this.skipCross.push(x, y + 0.01, z, 0.36, 1, 0.36);
       }
     }
-    for (const p of [this.build, this.skipOutline, this.skipCross]) p.commit();
+    this.build.commit();
+    this.skipOutline.commit();
+    this.skipCross.commit();
   }
 
   /** The wireframes of the tiles to be built: refilled only when the plan changes; the pulse every call. */
@@ -151,28 +106,7 @@ export class DragPreview {
       return;
     }
     W.opacity = pulseOpacity(time);
-    if (this.samePlan(tiles)) return;
-    if (tiles.kind === B.wall) {
-      // one run through W23's autotiler: the parts the placed run will be drawn with
-      const walls = (this.walls ??= new WallLayout(this.terrain));
-      walls.update(rowsOfPlan(tiles.build.map(([x, z]) => [x, z] as const), B.wall));
-      W.begin();
-      for (const [x, z] of tiles.build) {
-        const tile = z * this.terrain.w + x;
-        const first = walls.first[tile]!;
-        const n = walls.count[tile]!;
-        for (let k = 0; k < n; k++)
-          for (const g of M.parts.get(walls.parts[first + k]!).levels[0].values()) W.push(g, walls.matrices, (first + k) * 16);
-      }
-      W.commit();
-      return;
-    }
-    W.begin();
-    for (const [x, z, dir] of tiles.build) {
-      M.previewBuilding(tiles.kind, x, z, dir, this.captured);
-      for (const c of this.captured) W.push(c.geometry, c.matrix);
-    }
-    W.commit();
+    if (!this.samePlan(tiles)) W.fill(M.previewRun(tiles.kind, tiles.build, this.captured));
   }
 
   /** True when `tiles` plans the same kind and build tiles as the wireframes drawn; else records them. */

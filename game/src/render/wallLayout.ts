@@ -23,7 +23,7 @@ import type { Terrain } from '../sim/terrain.ts';
 import { footprintRange } from './ground.ts';
 import { wallMatrix } from './workshop/w23/walls/geometry.ts';
 import { WallGrid, type Gate } from './workshop/w23/walls/grid.ts';
-import { gateInstance, leafOffsets, wallInstances } from './workshop/w23/walls/layout.ts';
+import { LEAF_Z, gateInstance, wallInstances } from './workshop/w23/walls/layout.ts';
 
 /** Gate run axis from the building's dir column (sim/gate.ts: AXIS_X = 0, AXIS_Z = 1). */
 export const GATE_AXIS_Z = 1;
@@ -57,10 +57,47 @@ export interface GateFrame {
   rot: number;
 }
 
-/** The four door leaves of a gate opened by `open` (0 shut … 1 open, W23 leafOffsets): 16 floats each into `out`. */
+/**
+ * The four door leaves of a gate opened by `open` (0 shut … 1 open): 16 floats each into `out`.
+ * W23's leafOffsets and wallMatrix written out without allocating (called per gate per frame);
+ * test/w24r2b-gate.test.ts holds them equal to the W23 functions.
+ */
 export function leafMatrices(f: GateFrame, open: number, out: Float32Array): Float32Array {
-  leafOffsets(open).forEach((off, k) => wallMatrix(_c, f.cx, f.y, f.cz, f.rot, off).toArray(out, k * 16));
+  const o = open < 0 ? 0 : open > 1 ? 1 : open;
+  const inner = 0.25 + 1.0 * o;
+  const outer = 0.75 + 0.5 * o;
+  leaf(out, 0, f, inner, -LEAF_Z);
+  leaf(out, 1, f, outer, LEAF_Z);
+  leaf(out, 2, f, -inner, LEAF_Z);
+  leaf(out, 3, f, -outer, -LEAF_Z);
   return out;
+}
+
+const ROT_COS = [1, 0, -1, 0] as const;
+const ROT_SIN = [0, -1, 0, 1] as const;
+
+/** wallMatrix(f.cx, f.y, f.cz, f.rot, [ox, 0, oz]) into out[k * 16 …] (column-major). */
+function leaf(out: Float32Array, k: number, f: GateFrame, ox: number, oz: number): void {
+  const r = ((f.rot % 4) + 4) % 4;
+  const c = ROT_COS[r]!;
+  const s = ROT_SIN[r]!;
+  const i = k * 16;
+  out[i] = c;
+  out[i + 1] = 0;
+  out[i + 2] = -s;
+  out[i + 3] = 0;
+  out[i + 4] = 0;
+  out[i + 5] = 1;
+  out[i + 6] = 0;
+  out[i + 7] = 0;
+  out[i + 8] = s;
+  out[i + 9] = 0;
+  out[i + 10] = c;
+  out[i + 11] = 0;
+  out[i + 12] = f.cx + c * ox + s * oz;
+  out[i + 13] = f.y;
+  out[i + 14] = f.cz - s * ox + c * oz;
+  out[i + 15] = 1;
 }
 
 const _a = new Matrix4();
@@ -79,7 +116,7 @@ export class WallLayout {
   /** First instance and instance count per tile. */
   readonly first: Int32Array;
   readonly count: Uint16Array;
-  /** Gate pieces (doors closed) by the gate's anchor tile index. */
+  /** Gate pieces except the door leaves, by the gate's anchor tile index (the leaves move: see gateFrames). */
   readonly gates = new Map<number, GatePiece[]>();
   /** Gate frames by the gate's anchor tile index (the leaves move: run 2b draws them from this). */
   readonly gateFrames = new Map<number, GateFrame>();
@@ -172,7 +209,6 @@ export class WallLayout {
         const y = footprintRange(this.terrain, x, z, fw, fh).top;
         wallMatrix(_a, cx, y, cz, gi.rot, [0, 0, 0]);
         const pieces: GatePiece[] = gi.parts.map((pc) => ({ part: pc.part, m: new Float32Array(_c.copy(_a).multiply(wallMatrix(_b, pc.off[0], pc.off[1], pc.off[2], pc.rot, [0, 0, 0])).elements) }));
-        for (const off of leafOffsets(0)) pieces.push({ part: 'gate/leaf', m: new Float32Array(wallMatrix(_c, cx, y, cz, gi.rot, off).elements) });
         this.gates.set(i, pieces);
         this.gateFrames.set(i, { cx, y, cz, rot: gi.rot });
       }

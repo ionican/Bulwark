@@ -2,7 +2,7 @@
 // a tick when placement is allowed, a dashed outline and a cross when it is not.
 //
 // W27 (models view): the building is drawn as a wireframe of the full-detail model the renderer
-// draws for it placed there (models.ts previewBuilding), pulsing once a second with real time
+// draws for it placed there (models.ts previewRun), pulsing once a second with real time
 // (preview.ts); where placement is blocked the pulse stops and the wireframe turns red (in addition
 // to the dashed outline and cross, never instead of them). The wireframe is captured again only
 // when the kind, tile or direction changes. Greybox view (no model renderer): the simple model,
@@ -77,17 +77,15 @@ export class Ghost {
     const x = tx + fw / 2;
     const z = ty + fh / 2;
     const y = heightAt(this.terrain, x, z);
-    if (this.models && this.wire) {
+    const M = this.models;
+    if (M && this.wire) {
       const c = this.capturedFor;
       if (c[0] !== kind || c[1] !== tx || c[2] !== ty || c[3] !== dir) {
         c[0] = kind;
         c[1] = tx;
         c[2] = ty;
         c[3] = dir;
-        this.models.previewBuilding(kind, tx, ty, dir, this.captured);
-        this.wire.begin();
-        for (const c of this.captured) this.wire.push(c.geometry, c.matrix);
-        this.wire.commit();
+        this.wire.fill(M.previewRun(kind, [[tx, ty, dir]], this.captured));
       }
       this.wire.group.visible = true;
     } else {
@@ -110,7 +108,7 @@ export class Ghost {
     this.update(time);
   }
 
-  /** The pulse: call each frame with real time in seconds. Blocked placement holds steady. */
+  /** The pulse at real time `time` (seconds); blocked placement holds steady and turns red. */
   update(time: number): void {
     if (!this.wire || !this.state) return;
     this.wire.opacity = this.state.ok ? pulseOpacity(time) : BLOCKED_OPACITY;
@@ -124,6 +122,7 @@ export class Ghost {
   }
 
   private hideMarks(): void {
-    for (const m of [...this.simple, ...this.outline, ...this.mark]) m.visible = false;
+    for (const m of this.simple) m.visible = false;
+    for (let i = 0; i < 2; i++) this.outline[i]!.visible = this.mark[i]!.visible = false;
   }
 }

@@ -312,13 +312,22 @@ const shredder: Make = (m) => {
   return { name: 'shredder', parts, radius: 1.3, height: 1.2 };
 };
 
+/**
+ * Game adaptation (W24 run 2b): the smelter's two chimney tops in model space (x, y, z), exported so
+ * the game's chimney smoke (render/models.ts) rises from the stacks this model draws.
+ */
+export const SMELTER_CHIMNEY_TOPS: ReadonlyArray<readonly [number, number, number]> = [
+  [-0.35, 2.36, -0.35],
+  [-0.35, 2.36, 0.35],
+];
+
 const smelter: Make = (m) => {
   const b = new Builder(m);
   machineBody(b, 0.8);
-  for (const z of [-0.35, 0.35]) {
-    b.add('trim', cyl(0.17, 0.22, 1.5, 14), { x: -0.35, y: 0.88, z });
-    b.add('copper', torus(0.2, 0.03, 6, 16), { x: -0.35, y: 1.3, z });
-    b.add('hot', torus(0.15, 0.03, 6, 16), { x: -0.35, y: 2.36, z });
+  for (const [x, top, z] of SMELTER_CHIMNEY_TOPS) {
+    b.add('trim', cyl(0.17, 0.22, 1.5, 14), { x, y: 0.88, z });
+    b.add('copper', torus(0.2, 0.03, 6, 16), { x, y: 1.3, z });
+    b.add('hot', torus(0.15, 0.03, 6, 16), { x, y: top, z });
   }
   b.add('hot', cbox(0.012, 0.12, 0.5, 0.004), { x: 0.83, y: 0.35 });
   b.add('ivory', taper(cbox(0.7, 0.4, 1.2, 0.04), 0.7), { x: 0.4, y: 0.88 });

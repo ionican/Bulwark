@@ -7,6 +7,7 @@
 // well as by the outline and mark shapes (ghost.ts); the colour is additional, never the only cue.
 
 import { DynamicDrawUsage, Group, InstancedMesh, MeshBasicMaterial, type BufferGeometry, type Object3D } from 'three';
+import { growInstances } from './simpleBatch.ts';
 
 /** Pulse period, seconds. */
 export const PULSE_PERIOD = 1;
@@ -31,7 +32,7 @@ export function pulseOpacity(time: number): number {
 export class WireframePool {
   readonly group = new Group();
   readonly material: MeshBasicMaterial;
-  private readonly meshes = new Map<BufferGeometry, { mesh: InstancedMesh; n: number }>();
+  private readonly meshes = new Map<BufferGeometry, { readonly mesh: InstancedMesh; n: number }>();
 
   constructor(
     parent: Object3D,
@@ -53,13 +54,7 @@ export class WireframePool {
       e = { mesh: this.make(geometry, 16), n: 0 };
       this.meshes.set(geometry, e);
     }
-    if (e.n >= e.mesh.instanceMatrix.count) {
-      const old = e.mesh;
-      e.mesh = this.make(geometry, old.instanceMatrix.count * 2);
-      (e.mesh.instanceMatrix.array as Float32Array).set(old.instanceMatrix.array as Float32Array);
-      old.removeFromParent();
-      old.dispose();
-    }
+    if (e.n >= e.mesh.instanceMatrix.count) growInstances(e.mesh);
     const a = e.mesh.instanceMatrix.array as Float32Array;
     const k = e.n++ * 16;
     for (let i = 0; i < 16; i++) a[k + i] = m[o + i]!;
@@ -75,6 +70,13 @@ export class WireframePool {
         mesh.instanceMatrix.needsUpdate = true;
       }
     }
+  }
+
+  /** Exactly the captured instances (models.ts previewRun), replacing what was there. */
+  fill(captured: ReadonlyArray<{ geometry: BufferGeometry; matrix: ArrayLike<number> }>): void {
+    this.begin();
+    for (const c of captured) this.push(c.geometry, c.matrix);
+    this.commit();
   }
 
   /** Hides every instance. */

@@ -58,7 +58,12 @@ export class Beams {
     this.mesh.count = this.n;
     this.mesh.visible = this.n > 0;
     if (this.n) {
+      // game adaptation (W24 run 2b): upload only the streaks written, not the whole capacity
+      this.mesh.instanceMatrix.clearUpdateRanges();
+      this.mesh.instanceMatrix.addUpdateRange(0, this.n * 16);
       this.mesh.instanceMatrix.needsUpdate = true;
+      this.colours.clearUpdateRanges();
+      this.colours.addUpdateRange(0, this.n * 3);
       this.colours.needsUpdate = true;
     }
   }

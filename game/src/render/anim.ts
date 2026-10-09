@@ -36,30 +36,17 @@
 // while paused, at most 100 ms; a world reset restarts it with a zero delta. Pause freezes every
 // animation; 2×/3×/10× speed them up. The strategic-zoom icons do not animate.
 //
-// Resets (Animator.begin): the global signal is the worker's world epoch (RunnerInfo.world: loads,
-// rewinds, world replacement) or the snapshot tick going backwards — never the interpolator's
-// per-row cuts. On a reset every effect state is dropped: recoil 0, doors snapped to what the
+// Resets (EffectClock, the one detector; Animator.begin reads `time.reset`): the global signal is the
+// worker's world epoch (RunnerInfo.world: loads, rewinds, world replacement) or the snapshot tick
+// going backwards — never the interpolator's per-row cuts. On a reset every effect state is dropped: recoil 0, doors snapped to what the
 // snapshot implies, aim snapped to the current target (or rest), particles and tracers cleared,
 // and each turret's last-flashed tick seeded to the restored tick, so a restored BF_FIRING is not
 // replayed as a new shot. A new id in a building slot drops that slot's state. Pause resets nothing.
 
 import { ALIEN_KINDS, B, CARRY_CAPACITY, U, alienInfo } from '../sim/kinds.ts';
 import { BF_ACTIVE, BF_COMPLETE, BF_FIRING, BF_STARVED, US_BUILDING, US_RECLAIMING } from '../sim/schema.ts';
-
-/** The matrix above as data (the readout and the notes list it; the code below implements it). */
-export const ANIMATION_MATRIX = [
-  { animation: 'build beam', kinds: ['commander', 'engineer'], drivenBy: 'state US_BUILDING and work − 1 = a building id present', offWhen: 'any other state, or the id absent' },
-  { animation: 'reclaim beam', kinds: ['commander', 'engineer'], drivenBy: 'state US_RECLAIMING and work − 1 = a wreck id present', offWhen: 'any other state, or the id absent' },
-  { animation: 'carry pod', kinds: ['engineer'], drivenBy: 'carry > 0', offWhen: 'carry 0' },
-  { animation: 'extractor running', kinds: ['massExtractor', 'rareExtractor'], drivenBy: 'BF_COMPLETE', offWhen: 'not complete' },
-  { animation: 'generator running', kinds: ['generator'], drivenBy: 'BF_COMPLETE', offWhen: 'not complete' },
-  { animation: 'machine working', kinds: ['smelter', 'assembler', 'shredder'], drivenBy: 'BF_ACTIVE, not BF_STARVED, work advancing', offWhen: 'work not advancing, or starved' },
-  { animation: 'gate doors', kinds: ['gate'], drivenBy: 'a player unit within 2 tiles', offWhen: 'none in range (aliens never open)' },
-  { animation: 'turret aim', kinds: ['gun', 'area', 'heavy', 'tempTurret', 'beam'], drivenBy: 'target − 1 = an alien present', offWhen: 'no target: hold 1 s, ease to rest over 2 s' },
-  { animation: 'recoil + muzzle flash', kinds: ['gun', 'area', 'heavy', 'tempTurret'], drivenBy: 'BF_FIRING in a newer snapshot tick', offWhen: '—' },
-  { animation: "beam turret's beam", kinds: ['beam'], drivenBy: 'BF_FIRING and a present target', offWhen: 'flag clear' },
-  { animation: 'shots', kinds: ['P_BULLET', 'P_SHELL', 'P_HEAVY', 'P_ALIEN'], drivenBy: 'every observed projectile row', offWhen: 'row gone: impact' },
-] as const;
+import { wrapPi } from './walk.ts';
+import { smoothstep } from './workshop/noise.ts';
 
 /** Gate doors open for a player unit this close to any of the gate's tiles (tiles). */
 export const GATE_RANGE = 2;
@@ -78,8 +65,10 @@ export const PITCH_MAX = 1.1;
 export const FLASH_LIFE = 0.08;
 /** Largest effect-clock step per frame (seconds). */
 export const MAX_STEP = 0.1;
-/** Aliens are drawn 1.5 × their simulation size; turrets aim at this height above the ground (the body centre). */
-export const ALIEN_AIM_HEIGHT: readonly number[] = ALIEN_KINDS.map((_, k) => alienInfo(k).radius * 1.5);
+/** Aliens are drawn this many times their simulation size (models.ts). */
+export const ALIEN_SCALE = 1.5;
+/** Turrets aim at this height above the ground: the drawn body's centre. */
+export const ALIEN_AIM_HEIGHT: readonly number[] = ALIEN_KINDS.map((_, k) => alienInfo(k).radius * ALIEN_SCALE);
 
 /**
  * W20's barrel recoil cycle (look/src/bench/recoil.ts RECOIL, pure): 0.16 tiles back in 0.05 s, held
@@ -108,20 +97,17 @@ export function flatPitch(dx: number, dy: number, dz: number): number {
   return Math.atan2(dy, Math.hypot(dx, dz));
 }
 
-const wrapPi = (a: number): number => Math.atan2(Math.sin(a), Math.cos(a));
-const smooth = (u: number): number => {
-  const v = u < 0 ? 0 : u > 1 ? 1 : u;
-  return v * v * (3 - 2 * v);
-};
-
 // ---- inputs: one function per row of the matrix ------------------------------------------------
 
-/** Build or reclaim beam of a unit: which, and the target id, or null (off). Presence is checked by the caller's lookup. */
-export function beamOf(state: number, work: number): { reclaim: boolean; id: number } | null {
-  if (work <= 0) return null;
-  if (state === US_BUILDING) return { reclaim: false, id: work - 1 };
-  if (state === US_RECLAIMING) return { reclaim: true, id: work - 1 };
-  return null;
+/**
+ * Build or reclaim beam of a unit: false when off; else true, with which and the target id written
+ * to `out`. Presence of the target is checked by the caller's lookup.
+ */
+export function beamOf(state: number, work: number, out: { reclaim: boolean; id: number }): boolean {
+  if (work <= 0 || (state !== US_BUILDING && state !== US_RECLAIMING)) return false;
+  out.reclaim = state === US_RECLAIMING;
+  out.id = work - 1;
+  return true;
 }
 
 /** Carry pod load 0..1 of a unit (0: no pod). Engineers only. */
@@ -138,16 +124,22 @@ export const isMachine = (kind: number): boolean => kind === B.smelter || kind =
 export const recoils = (kind: number): boolean => kind === B.gun || kind === B.area || kind === B.heavy || kind === B.tempTurret;
 export const isTurret = (kind: number): boolean => recoils(kind) || kind === B.beam;
 
-/** Ground distance from (x, z) to the tile rectangle [tx, tx + fw) × [ty, ty + fh). */
-export function rectDistance(x: number, z: number, tx: number, ty: number, fw: number, fh: number): number {
-  const dx = x < tx ? tx - x : x > tx + fw ? x - tx - fw : 0;
-  const dz = z < ty ? ty - z : z > ty + fh ? z - ty - fh : 0;
-  return Math.hypot(dx, dz);
-}
-
-/** Whether a player unit in `units` (interpolated positions) is in range of a gate. Aliens are not passed in: they never open gates. */
+/**
+ * Whether a player unit in `units` (interpolated positions) is within GATE_RANGE of a gate's tiles
+ * [tx, tx + fw) × [ty, ty + fh). Aliens are not passed in: they never open gates.
+ */
 export function gateWanted(units: { count: number; x: ArrayLike<number>; z: ArrayLike<number> }, tx: number, ty: number, fw: number, fh: number): boolean {
-  for (let r = 0; r < units.count; r++) if (rectDistance(units.x[r]!, units.z[r]!, tx, ty, fw, fh) <= GATE_RANGE) return true;
+  const x1 = tx + fw;
+  const z1 = ty + fh;
+  const r2 = GATE_RANGE * GATE_RANGE;
+  for (let r = 0; r < units.count; r++) {
+    const x = units.x[r]!;
+    const z = units.z[r]!;
+    if (x < tx - GATE_RANGE || x > x1 + GATE_RANGE || z < ty - GATE_RANGE || z > z1 + GATE_RANGE) continue;
+    const dx = x < tx ? tx - x : x > x1 ? x - x1 : 0;
+    const dz = z < ty ? ty - z : z > z1 ? z - z1 : 0;
+    if (dx * dx + dz * dz <= r2) return true;
+  }
   return false;
 }
 
@@ -171,12 +163,13 @@ export interface EffectTime {
   t: number;
   /** This frame's advance (0 while paused and on a reset). */
   dt: number;
+  /** This frame is a global reset (a new world epoch, or the tick went backwards). */
+  reset: boolean;
 }
 
 export class EffectClock implements EffectTime {
   t = 0;
   dt = 0;
-  /** This frame restarted the clock (a world reset). */
   reset = false;
   private readonly watch = new ResetWatch();
 
@@ -208,7 +201,6 @@ export class Animator {
   /** The current frame is a global reset. */
   reset = false;
   tick = 0;
-  private readonly watch = new ResetWatch();
   private readonly id: Uint32Array;
   readonly door: Float32Array;
   private readonly doorClear: Float32Array;
@@ -226,6 +218,8 @@ export class Animator {
   private readonly workTick: Float64Array;
   /** Work progress per tick last measured (machines). */
   private readonly rate: Float32Array;
+  /** The slot last passed to `motion` is in motion this frame. */
+  working = false;
   /** Fresh this frame (a new id in the slot, or a reset): its state was just dropped. */
   private fresh = false;
 
@@ -249,12 +243,12 @@ export class Animator {
   private first = true;
 
   /**
-   * Once per frame: the snapshot tick, the world epoch, the effect clock. Returns true on a global
-   * reset. The renderer's first frame counts as one (a loaded game shows its doors and aims as the
-   * snapshot implies, and a BF_FIRING in it is not a new shot).
+   * Once per frame: the snapshot tick and the effect clock. Returns true on a global reset (the
+   * clock's `reset`). The renderer's first frame counts as one (a loaded game shows its doors and
+   * aims as the snapshot implies, and a BF_FIRING in it is not a new shot).
    */
-  begin(tick: number, world: number, time: EffectTime): boolean {
-    this.reset = this.watch.check(tick, world) || this.first;
+  begin(tick: number, time: EffectTime): boolean {
+    this.reset = time.reset || this.first;
     this.first = false;
     this.tick = tick;
     this.t = time.t;
@@ -318,7 +312,7 @@ export class Animator {
       return;
     }
     this.lostFor[s]! += this.dt;
-    const u = smooth((this.lostFor[s]! - AIM_HOLD) / AIM_EASE);
+    const u = smoothstep(AIM_HOLD, AIM_HOLD + AIM_EASE, this.lostFor[s]!);
     this.yaw[s] = this.heldYaw[s]! + wrapPi(REST_YAW - this.heldYaw[s]!) * u;
     this.pitch[s] = this.heldPitch[s]! * (1 - u);
   }
@@ -346,7 +340,8 @@ export class Animator {
    * BF_STARVED, `work` advancing): seconds of motion so far, advanced by the effect clock × a rate.
    * Machines: the rate follows work progress per tick between snapshots (relative to 1/30 per
    * tick, clamped 0.5–3); the rate is measured when the tick changes, so repeated snapshots of the
-   * same tick and batched snapshots (several ticks) both give the right figure.
+   * same tick and batched snapshots (several ticks) both give the right figure. Sets `working`:
+   * whether the slot is in motion this frame (a machine working, an extractor or generator running).
    */
   motion(s: number, kind: number, flags: number, work: number): number {
     let speed = 0;
@@ -364,14 +359,8 @@ export class Animator {
       const on = flags & BF_ACTIVE && !(flags & BF_STARVED) && this.rate[s]! > 1e-6;
       speed = on ? Math.min(3, Math.max(0.5, this.rate[s]! * 30)) : 0;
     }
+    this.working = speed > 0;
     this.run[s]! += this.dt * speed;
     return this.run[s]!;
-  }
-
-  /** Whether slot `s` is in motion this frame (a machine working, an extractor or generator running). */
-  moving(s: number, kind: number, flags: number): boolean {
-    if (runsWhenComplete(kind)) return (flags & BF_COMPLETE) !== 0;
-    if (isMachine(kind)) return (flags & BF_ACTIVE) !== 0 && !(flags & BF_STARVED) && this.rate[s]! > 1e-6;
-    return false;
   }
 }

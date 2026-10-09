@@ -191,9 +191,13 @@ describe('W27 criterion 4: the wall drag preview', () => {
     }
     expect(tilesWith.size).toBe(9);
     expect(crosses).toBe(1);
-    // the wire geometry is the W23 wall parts' full-detail geometry
+    // the wire geometry is the W23 wall parts' full-detail geometry, and the plinth a placed wall
+    // gets on sloping ground (the same plinth rule as a placed building, as the single ghost)
     const wallGeos = new Set<BufferGeometry>();
     for (const p of r.parts.parts) if (p.asset === 'wall') for (const g of p.levels[0].values()) wallGeos.add(g);
+    r.group.traverse((o) => {
+      if (o instanceof InstancedMesh && o.name === 'plinth') wallGeos.add(o.geometry);
+    });
     ui.traverse((o) => {
       if (o instanceof InstancedMesh && o.name === 'overlay/drag/wire' && o.count > 0) expect(wallGeos.has(o.geometry)).toBe(true);
     });
