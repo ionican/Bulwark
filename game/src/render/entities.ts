@@ -266,7 +266,10 @@ export class EntityRenderer {
     const fill = new MeshBasicMaterial({ color: '#f4efe6', depthTest: false, depthWrite: false });
     this.bars = new Batch(scene, [barGeometry(), barGeometry()], [back, fill], 1024, 13, C.buildings + C.aliens + C.units);
     this.bars.meshes[1]!.renderOrder = 14;
-    this.markers = new Batch(scene, [selectionMarkerGeometry()], [icon], 2048, 15, C.buildings + C.aliens + C.units + C.wrecks);
+    // Selection markers test depth (Richard, 2026-10-09: the brackets of a unit behind a turret drew
+    // over the turret), so buildings and terrain in front hide them; the strategic icons do not.
+    const marker = new MeshBasicMaterial({ vertexColors: true, depthWrite: false });
+    this.markers = new Batch(scene, [selectionMarkerGeometry()], [marker], 2048, 15, C.buildings + C.aliens + C.units + C.wrecks);
     if (BUILDING_KINDS.length + ALIEN_KINDS.length + UNIT_KINDS.length === 0) throw new Error('no kinds');
   }
 
