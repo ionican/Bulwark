@@ -157,13 +157,13 @@ describe('W25 acceptance 2: no Shift replaces, and orphaned reserved sites go', 
     expect(exists(w, gate)).toBe(true);
   });
 
-  it('an existing command with nothing queued removes nothing (stop is unchanged: reserved sites stay)', () => {
+  it('stop clears the queue by the same rule (W25b, Richard 9 Oct: "stop should clear them"): the orphaned reserved site goes', () => {
     const w = flat();
     const a = w.spawnUnit(U.engineer, 40.5, 40.5);
     const X = build(w, [a], B.gun, 6, 6, true);
     apply(w, { t: 'stop', ids: [a] });
     expect(ordersOf(w, a)).toEqual([]);
-    expect(exists(w, X)).toBe(true);
+    expect(exists(w, X)).toBe(false);
   });
 });
 

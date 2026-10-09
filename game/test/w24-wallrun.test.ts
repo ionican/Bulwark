@@ -179,7 +179,7 @@ describe('one order per builder, and the run table', () => {
     expect(w.applyRejected.some((r) => /run table is full/.test(r.reason))).toBe(true);
   });
 
-  it('stop leaves the remaining reserved tiles; cancelRun removes them and keeps started ones', () => {
+  it('stop (W25b) removes the remaining reserved tiles and frees the run; started ones stay', () => {
     const w = flat();
     const e = w.spawnUnit(U.engineer, 8.5, 10.5);
     w.enqueue({ t: 'buildRun', ids: [e], from: [10, 10], to: [19, 10], depth: 1 });
@@ -189,9 +189,19 @@ describe('one order per builder, and the run table', () => {
     w.enqueue({ t: 'stop', ids: [e] });
     for (let i = 0; i < 20; i++) w.step();
     const p = runProgress(w, run);
-    expect(p.reserved).toBe(9);
+    expect(p.reserved).toBe(0);
     expect(p.started + p.complete).toBe(1);
-    expect(runById(w, run.id)).toBe(run); // still in the table
+    expect(runById(w, run.id)).toBeNull();
+  });
+
+  it('cancelRun removes the reserved tiles and keeps started ones', () => {
+    const w = flat();
+    const e = w.spawnUnit(U.engineer, 8.5, 10.5);
+    w.enqueue({ t: 'buildRun', ids: [e], from: [10, 10], to: [19, 10], depth: 1 });
+    w.step();
+    const run = onlyRun(w);
+    while (runProgress(w, run).started === 0) w.step(); // the first tile has build power
+    expect(runProgress(w, run).reserved).toBe(9);
     expect(w.submit({ t: 'cancelRun', run: run.id })).toBeNull();
     w.step();
     expect(runById(w, run.id)).toBeNull();
