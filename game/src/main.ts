@@ -21,6 +21,7 @@ import { groundHeight } from './render/ground.ts';
 import { drawnMeshes, entitiesOf, inspectScene } from './render/inspect.ts';
 import { LOD_THRESHOLDS } from './render/lod.ts';
 import { Interpolator } from './render/interp.ts';
+import { maxStepPerTick } from './mobileStep.ts';
 import { boxSelect, buildOccupancy, pickScreen, screenToGround, type GroundHit, type Pick, type PickView } from './render/picking.ts';
 import { createView } from './render/view.ts';
 import {
@@ -160,12 +161,12 @@ resize();
 
 const worker = new Worker(new URL('./sim/worker.ts', import.meta.url), { type: 'module' });
 const send = (msg: ToWorker, transfer: Transferable[] = []) => worker.postMessage(msg, transfer);
-const interp = new Interpolator(CAPACITY);
+const interp = new Interpolator(CAPACITY, { maxStepPerTick });
 const occupancy = new Int32Array(terrain.w * terrain.h);
 let lastTickMs = 0;
 const tickSamples: number[] = [];
 
-let runnerInfo: RunnerInfo = { speed: 1, paused: false, checkpoints: [] };
+let runnerInfo: RunnerInfo = { speed: 1, paused: false, world: 0, checkpoints: [] };
 const rejected: Array<{ reason: string; cmd: Command }> = [];
 const notices: string[] = [];
 let lastSave: { bytes: number; tick: number; name: string } | null = null;
@@ -219,7 +220,7 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
   }
   runnerInfo = msg.runner;
   const snap = decodeSnapshot(msg.buffer);
-  const dropped = interp.push(snap, performance.now());
+  const dropped = interp.push(snap, performance.now(), msg.runner.world);
   if (dropped) send({ type: 'recycle', buffer: dropped.buffer }, [dropped.buffer]);
   buildOccupancy(buildingRows(snap), terrain.w, terrain.h, occupancy);
   // Sandbox: the commander fell; say when the next one comes (the simulation carries on).

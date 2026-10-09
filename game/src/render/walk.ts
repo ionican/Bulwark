@@ -9,10 +9,13 @@
 //   phase     aliens: W21's gait phase, advanced by distance × the kind's rate (W21: the rusher's legs
 //             5.5 rad per tile); the other kinds' wheels, drill and hover bob are driven by it too
 //   seed      from the id (W21 drew it at random; here it is fixed per id)
-// Reset (`step` returns reset): an id seen for the first time in its slot, a jump of more than 2 tiles
-// between frames (teleport, eviction, respawn), or every slot when the snapshot tick goes backwards
-// (rewind, load). A reset places the entity afresh: the rigs plant both feet under it, the phase goes
-// back to the seed's, so no leg is stretched and no foot slides.
+// Reset (`step` returns reset): a discontinuity the interpolator found between snapshots (W25c,
+// interp.ts: a jump of more than 2 tiles, a new id, the tick going backwards, a world replaced on
+// load or rewind; that row is not interpolated, so the entity is already at its destination), once
+// per snapshot that cut it; and, as before, an id seen for the first time in its slot, a jump of more
+// than 2 tiles between frames, or every slot when the snapshot tick goes backwards. A reset places
+// the entity afresh: the rigs plant both feet under it, the phase goes back to the seed's, so no leg
+// is stretched and no foot slides.
 // The W23 rigs (workshop/w23/rig) keep each unit's legs and planted feet; this module only feeds them.
 
 import { Matrix4, Quaternion, Vector3 } from 'three';
@@ -39,6 +42,8 @@ export class Tracks {
   readonly heading: Float32Array;
   readonly phase: Float32Array;
   readonly seed: Float32Array;
+  /** The interpolator's cut number last acted on per slot (W25c). */
+  private readonly cutSeen: Uint32Array;
   private lastTick = -1;
   private readonly out: Step = { reset: false, dist: 0 };
 
@@ -49,6 +54,7 @@ export class Tracks {
     this.heading = new Float32Array(cap);
     this.phase = new Float32Array(cap);
     this.seed = new Float32Array(cap);
+    this.cutSeen = new Uint32Array(cap);
   }
 
   /** Call once per frame with the snapshot tick: a tick going backwards resets every slot. */
@@ -59,14 +65,17 @@ export class Tracks {
 
   /**
    * Advances slot `s` (entity `id`) to (x, z). `facing` is the heading used on a reset (from the
-   * snapshot's facing vector); `rate` the phase per tile; `dt` the frame's seconds (0 when paused).
+   * snapshot's facing vector); `rate` the phase per tile; `dt` the frame's seconds (0 when paused);
+   * `cut` the row's interp.ts cut number (0 = none): a new one resets the slot once.
    */
-  step(s: number, id: number, x: number, z: number, facing: number, dt: number, rate = 0): Step {
+  step(s: number, id: number, x: number, z: number, facing: number, dt: number, rate = 0, cut = 0): Step {
     const o = this.out;
     const dx = x - this.x[s]!;
     const dz = z - this.z[s]!;
     const dist = Math.hypot(dx, dz);
-    if (this.id[s] !== id || dist > RESET_JUMP) {
+    const newCut = cut !== 0 && cut !== this.cutSeen[s];
+    if (newCut) this.cutSeen[s] = cut;
+    if (this.id[s] !== id || dist > RESET_JUMP || newCut) {
       const fresh = this.id[s] !== id;
       this.id[s] = id;
       this.x[s] = x;

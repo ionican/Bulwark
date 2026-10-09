@@ -46,6 +46,8 @@ export class SimRunner {
   private readonly tracked = new Map<StampedCommand, number>();
   speed = 1;
   paused = false;
+  /** W25c: worlds replaced so far by load and rewind (RunnerInfo.world; the renderer's interpolator reads it). */
+  worldEpoch = 0;
   readonly checkpoints: Checkpoint[] = [];
   private nextTickAt: number;
 
@@ -173,6 +175,7 @@ export class SimRunner {
     if (i < 0) return 'no checkpoint yet: the first one is taken when wave 1 arrives';
     const cp = this.checkpoints[i]!;
     this.world = deserializeWorld(cp.bytes);
+    this.worldEpoch++;
     this.checkpoints.length = i + 1;
     return { wave: cp.wave, tick: cp.tick };
   }
@@ -180,6 +183,7 @@ export class SimRunner {
   /** Replaces the world with a loaded save; checkpoints from the old game are dropped. */
   load(bytes: Uint8Array): void {
     this.world = deserializeWorld(bytes);
+    this.worldEpoch++;
     this.checkpoints.length = 0;
   }
 }

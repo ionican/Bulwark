@@ -20,6 +20,8 @@ export type ToWorker =
 export interface RunnerInfo {
   speed: number;
   paused: boolean;
+  /** W25c: worlds replaced so far (loads and rewinds); the interpolator does not interpolate across a change. */
+  world: number;
   checkpoints: Array<{ wave: number; tick: number }>;
 }
 

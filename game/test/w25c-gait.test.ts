@@ -13,6 +13,8 @@ import { slotOf } from '../src/sim/table.ts';
 import { CAPACITY, World } from '../src/sim/world.ts';
 import { decodeSnapshot, encodeSnapshot } from '../src/sim/snapshot.ts';
 import { Interpolator } from '../src/render/interp.ts';
+import { maxStepPerTick } from '../src/mobileStep.ts';
+import { TU_SPEED, setTune } from '../src/sim/tuning.ts';
 import { ENGINEER_LEGS } from '../src/render/workshop/w23/rig/specs.ts';
 import { camera, renderer, terrain } from './w24r2a-fixtures.ts';
 
@@ -26,7 +28,10 @@ const L = ENGINEER_LEGS.leg;
 
 /** The interpolator under test, with the world epoch passed as main.ts passes the worker's (load, rewind). */
 class Path {
-  readonly interp = new Interpolator(CAPACITY);
+  readonly interp: Interpolator;
+  constructor(opts = {}) {
+    this.interp = new Interpolator(CAPACITY, opts);
+  }
   now = 0;
   /** Pushes a snapshot of `w` (`epoch`: the worker's world counter) and draws `frames` frames at 60 fps. */
   push(w: World, epoch = 0, frames = 6, each?: () => void): void {
@@ -117,6 +122,23 @@ describe('W25c finding 4: discontinuities are found between snapshots, before in
     p.push(w, 0, 6, () => xs.push(p.at('units', e)[0]));
     expect(xs[0]).toBeCloseTo(40.5, 5); // alpha 0: the previous snapshot's position
     expect(xs[5]!).toBeGreaterThan(41.5);
+  });
+
+  it('fast but legitimate walking (sandbox speed × 10: 2.5 tiles a tick) is interpolated and walked, with main.ts’s step limit', () => {
+    const p = new Path({ maxStepPerTick });
+    const { w, e, a } = walkingWorld();
+    setTune(w, 'unit', U.engineer, TU_SPEED, 10);
+    p.push(w);
+    const rig = r.rigOf(e)!;
+    const xs: number[] = [];
+    for (let t = 0; t < 4; t++) {
+      walkTick(w, e, a);
+      w.units.cols.x[unitSlot(w, e)]! += 2.25; // 2.5 tiles a tick in all
+      p.push(w, 0, 6, () => xs.push(p.at('units', e)[0]));
+    }
+    // every frame moves on by about 2.5 / 6 tiles: no frame stands still at a snapshot position
+    for (let k = 1; k < xs.length; k++) expect(xs[k]! - xs[k - 1]!, `frame ${k}`).toBeGreaterThan(0.3);
+    expect(rig.legs.phase).toBeGreaterThan(1);
   });
 
   it('rewind (the tick goes backwards, 15 tiles away): drawn at the rewound position at once, feet planted there, no walk back', () => {

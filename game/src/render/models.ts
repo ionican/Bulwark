@@ -703,7 +703,7 @@ export class ModelRenderer {
       const z = v.z[r]!;
       const slot = slotOf(id);
       // walking: distance moved and heading from the interpolated positions (walk.ts)
-      const step = T.step(slot, id, x, z, Math.atan2(-v.fz[r]!, v.fx[r]!), dt);
+      const step = T.step(slot, id, x, z, Math.atan2(-v.fz[r]!, v.fx[r]!), dt, 0, v.cut?.[r] ?? 0);
       const y = this.ground(x, z);
       const commander = kind === U.commander;
       const h = commander ? 3.6 : 0.9;
@@ -768,7 +768,7 @@ export class ModelRenderer {
       const z = v.z[r]!;
       const slot = slotOf(id);
       // walking: heading, W21 gait phase (by distance) and seed derived here (walk.ts)
-      T.step(slot, id, x, z, Math.atan2(-v.fz[r]!, v.fx[r]!), dt, ALIEN_PHASE_PER_TILE[kind] ?? 0);
+      T.step(slot, id, x, z, Math.atan2(-v.fz[r]!, v.fx[r]!), dt, ALIEN_PHASE_PER_TILE[kind] ?? 0, v.cut?.[r] ?? 0);
       const y = g(x, z);
       const ak = this.alienParts[kind]!;
       if (!this.visible(x, y + 0.6, z, ak.radius + 1)) {

@@ -26,7 +26,7 @@ function sendSnapshot(tickMs: number, ticksRun: number) {
       buffer,
       tickMs,
       ticksRun,
-      runner: { speed: runner.speed, paused: runner.paused, checkpoints: runner.checkpoints.map((c) => ({ wave: c.wave, tick: c.tick })) },
+      runner: { speed: runner.speed, paused: runner.paused, world: runner.worldEpoch, checkpoints: runner.checkpoints.map((c) => ({ wave: c.wave, tick: c.tick })) },
     },
     [buffer],
   );
