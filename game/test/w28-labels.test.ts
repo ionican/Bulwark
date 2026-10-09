@@ -9,7 +9,7 @@ import { WaitOverlay, inspectWaiting } from '../src/render/waitView.ts';
 import * as waitView from '../src/render/waitView.ts';
 import * as waiting from '../src/render/waiting.ts';
 import { economyText } from '../src/ui/hud.ts';
-import { camera, mobile, snapshotOf } from './w24r2a-fixtures.ts';
+import { camera, snapshotOf } from './w24r2a-fixtures.ts';
 import { richardsSequence } from './w25b-fixtures.ts';
 
 describe('W28: no "waiting for" labels; the hourglass and ▲SHORT stay', () => {
@@ -21,7 +21,7 @@ describe('W28: no "waiting for" labels; the hourglass and ▲SHORT stay', () => 
     expect(ws.sites.length).toBeGreaterThan(0);
     const scene = new Scene();
     const o = new WaitOverlay(scene, createWorld(1, 'sandbox').terrain);
-    o.update({ camera: camera({ x: 64, z: 62, distance: 40, yaw: 0 }), viewportHeight: 900, snapshot: snap, units: mobile(snap.units) });
+    o.update({ camera: camera({ x: 64, z: 62, distance: 40, yaw: 0 }), viewportHeight: 900, snapshot: snap });
     const got = inspectWaiting(scene);
     expect(got.sites.length).toBe(ws.sites.length);
     for (const m of got.sites) {

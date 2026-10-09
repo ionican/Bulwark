@@ -25,7 +25,7 @@ import { waitingState } from '../src/render/waiting.ts';
 import { WaitOverlay, inspectWaiting } from '../src/render/waitView.ts';
 import { economyText } from '../src/ui/hud.ts';
 import { flatWorld } from './fixtures.ts';
-import { camera, mobile, snapshotOf } from './w24r2a-fixtures.ts';
+import { camera, snapshotOf } from './w24r2a-fixtures.ts';
 import { inProgress, richardsSequence, sites } from './w25b-fixtures.ts';
 
 describe('W25b: waiting made visible', () => {
@@ -94,7 +94,7 @@ describe('W25b: waiting made visible', () => {
     const ws = waitingState(snap);
     const scene = new Scene();
     const o = new WaitOverlay(scene, createWorld(1, 'sandbox').terrain);
-    o.update({ camera: camera({ x: 64, z: 62, distance: 40, yaw: 0 }), viewportHeight: 900, snapshot: snap, units: mobile(snap.units) });
+    o.update({ camera: camera({ x: 64, z: 62, distance: 40, yaw: 0 }), viewportHeight: 900, snapshot: snap });
     const got = inspectWaiting(scene);
     expect(got.sites.length).toBe(3);
     for (const m of got.sites) {
@@ -108,7 +108,7 @@ describe('W25b: waiting made visible', () => {
     const { w: rich } = richardsSequence(true);
     while (rich.tick < 300) rich.step();
     const snap2 = snapshotOf(rich);
-    o.update({ camera: camera({ x: 64, z: 62, distance: 40, yaw: 0 }), viewportHeight: 900, snapshot: snap2, units: mobile(snap2.units) });
+    o.update({ camera: camera({ x: 64, z: 62, distance: 40, yaw: 0 }), viewportHeight: 900, snapshot: snap2 });
     expect(inspectWaiting(scene)).toEqual({ sites: [] });
   });
 
@@ -147,7 +147,7 @@ describe('W25b: the marker follows the shortage tick by tick', () => {
     const o = new WaitOverlay(scene, w.terrain);
     const draw = () => {
       const snap = snapshotOf(w);
-      o.update({ camera: camera({ x: 15, z: 15, distance: 30, yaw: 0 }), viewportHeight: 900, snapshot: snap, units: mobile(snap.units) });
+      o.update({ camera: camera({ x: 15, z: 15, distance: 30, yaw: 0 }), viewportHeight: 900, snapshot: snap });
       return inspectWaiting(scene);
     };
     // full supply while the 40 mass lasts: no marker on any snapshot

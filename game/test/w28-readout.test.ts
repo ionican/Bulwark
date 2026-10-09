@@ -17,7 +17,7 @@ function gunPair() {
   w.step();
   const a = snapshotOf(w);
   const b = snapshotOf(w);
-  const r = Array.prototype.findIndex.call(a.buildings.kind, (k: number) => k === B.gun);
+  const r = a.buildings.cols.kind.subarray(0, a.buildings.count).indexOf(B.gun);
   expect(r, 'the gun site').toBeGreaterThanOrEqual(0);
   return { a, b, id: a.buildings.id[r]!, r };
 }
@@ -113,7 +113,7 @@ describe('W28: construction hover readout', () => {
       w.step();
       const spent = before - w.pool[0]!; // no commander, so no income: the change is what construction spent
       const curr = snapshotOf(w);
-      const r = Array.prototype.findIndex.call(curr.buildings.kind, (k: number) => k === B.gun);
+      const r = curr.buildings.cols.kind.subarray(0, curr.buildings.count).indexOf(B.gun);
       if (r < 0) continue;
       id = curr.buildings.id[r]!;
       const o = siteReadout(prev, curr, id);

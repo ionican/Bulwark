@@ -44,11 +44,6 @@ export interface WaitingState {
   builders: WaitingBuilder[];
 }
 
-/** "waiting for mass", "waiting for mass and energy". */
-export function waitingText(short: readonly ResourceName[]): string {
-  return `waiting for ${short.length > 1 ? `${short.slice(0, -1).join(', ')} and ${short[short.length - 1]}` : (short[0] ?? 'resources')}`;
-}
-
 export function waitingState(snap: Snapshot): WaitingState {
   const mask = snap.globals[G_SHORT]! | 0;
   const short = RESOURCE_NAMES.filter((_, k) => (mask & (1 << k)) !== 0);

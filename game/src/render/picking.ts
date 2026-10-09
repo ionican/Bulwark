@@ -193,6 +193,24 @@ function nearestVolume(rows: MobileRows, volume: (kind: number) => PickVolume, t
   return best;
 }
 
+/** The building row on the ground tile `hit` falls in, or −1. */
+function buildingRowAt(hit: GroundHit | null, view: PickView): number {
+  if (!hit) return -1;
+  const tx = Math.floor(hit.x);
+  const tz = Math.floor(hit.z);
+  if (tx < 0 || tz < 0 || tx >= view.mapW || tz >= view.mapH) return -1;
+  return view.occupancy[tz * view.mapW + tx]! - 1;
+}
+
+/**
+ * The building on the ground tile under a screen pixel (its id), or −1. Units standing in front
+ * are ignored: W28's hover readout reads the site even while its builders stand on it.
+ */
+export function buildingAtScreen(camera: PerspectiveCamera, sx: number, sy: number, vw: number, vh: number, terrain: Terrain, view: PickView): number {
+  const row = buildingRowAt(screenToGround(camera, sx, sy, vw, vh, terrain), view);
+  return row >= 0 ? view.buildings.id[row]! : -1;
+}
+
 /**
  * Pick under a screen pixel. Order: the player unit whose volume the cursor ray enters first, then
  * the building on the ground tile under the cursor, then the nearest alien volume, then a wreck by
@@ -213,14 +231,8 @@ export function pickScreen(
   const u = nearestVolume(view.units, unitVolume, terrain, camera, vh, pickPx);
   if (u >= 0) return { type: 'unit', id: view.units.id[u]!, kind: view.units.kind[u]! };
   const hit = screenToGround(camera, sx, sy, vw, vh, terrain);
-  if (hit) {
-    const tx = Math.floor(hit.x);
-    const tz = Math.floor(hit.z);
-    if (tx >= 0 && tz >= 0 && tx < view.mapW && tz < view.mapH) {
-      const row = view.occupancy[tz * view.mapW + tx]! - 1;
-      if (row >= 0) return { type: 'building', id: view.buildings.id[row]!, kind: view.buildings.kind[row]! };
-    }
-  }
+  const row = buildingRowAt(hit, view);
+  if (row >= 0) return { type: 'building', id: view.buildings.id[row]!, kind: view.buildings.kind[row]! };
   const a = nearestVolume(view.aliens, alienVolume, terrain, camera, vh, pickPx);
   if (a >= 0) return { type: 'alien', id: view.aliens.id[a]!, kind: view.aliens.kind[a]! };
   if (hit && view.wrecks) {

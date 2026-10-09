@@ -13,7 +13,9 @@ import { Orbit, applyRig, clampRig, pitchFor, worldPerPixel, type Rig } from './
 import { Gestures } from './input.ts';
 import { Ghost } from './render/ghost.ts';
 import { DASH_NAMES, QUEUE_MAX_INSTANCES, QueueOverlay, canvasLabel, inspectQueue } from './render/queueView.ts';
-import { WaitOverlay, canvasWaitLabel, inspectWaiting } from './render/waitView.ts';
+import { WaitOverlay, canvasWaitMark, inspectWaiting } from './render/waitView.ts';
+import { siteReadout, type SiteReadout } from './render/siteReadout.ts';
+import { SiteHover } from './ui/siteHover.ts';
 import { waitingCounts, waitingState } from './render/waiting.ts';
 import { DragPreview, inspectDrag } from './render/dragPreview.ts';
 import { beltLineTiles, dragLabel, planDrag, type DragPlan, type DragView } from './dragPlan.ts';
@@ -22,7 +24,7 @@ import { drawnMeshes, entitiesOf, inspectScene } from './render/inspect.ts';
 import { LOD_THRESHOLDS } from './render/lod.ts';
 import { Interpolator, type MobileView } from './render/interp.ts';
 import { maxStepPerTick } from './mobileStep.ts';
-import { boxSelect, buildOccupancy, pickScreen, screenToGround, type GroundHit, type Pick, type PickView } from './render/picking.ts';
+import { boxSelect, buildOccupancy, buildingAtScreen, pickScreen, screenToGround, type GroundHit, type Pick, type PickView } from './render/picking.ts';
 import { createView, NO_WARMUP, type WarmupReport } from './render/view.ts';
 import { inspectPreview } from './render/preview.ts';
 import { EffectClock } from './render/anim.ts';
@@ -141,7 +143,13 @@ const entities = view.entities;
 const ghost = new Ghost(scene, terrain, view.models);
 const queueView = new QueueOverlay(scene, terrain, canvasLabel());
 // W25b: hourglass markers on sites (and labels on builders) waiting for a short resource.
-const waitView = new WaitOverlay(scene, terrain, canvasWaitLabel());
+const waitView = new WaitOverlay(scene, terrain, canvasWaitMark());
+// W28: the construction hover readout (render/siteReadout.ts) in a panel by the cursor (ui/siteHover.ts)
+const siteHover = new SiteHover();
+/** The readout shown, the tick of the snapshot it was worked out on, and whether the previous snapshot is of the same world. */
+let siteShown: { readout: SiteReadout; tick: number } | null = null;
+let samePrevWorld = false;
+let lastRunnerWorld = -1;
 const dragPreview = new DragPreview(scene, terrain, view.models);
 const hud = new Hud();
 
@@ -241,11 +249,14 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
   runnerInfo = msg.runner;
   const snap = decodeSnapshot(msg.buffer);
   const dropped = interp.push(snap, performance.now(), msg.runner.world);
+  samePrevWorld = msg.runner.world === lastRunnerWorld;
+  lastRunnerWorld = msg.runner.world;
   // W26: the idle units column follows each snapshot
   idleNow = idleUnits(snap);
   idleColumn.update(idleNow);
   if (dropped) send({ type: 'recycle', buffer: dropped.buffer }, [dropped.buffer]);
   buildOccupancy(buildingRows(snap), terrain.w, terrain.h, occupancy);
+  updateSiteHover(); // W28: once per snapshot
   // Sandbox: the commander fell; say when the next one comes (the simulation carries on).
   const deaths = snap.globals[G_COMMANDER_DEATHS]!;
   if (deaths > commanderDeathsSeen) {
@@ -654,12 +665,37 @@ canvas.addEventListener('pointerdown', (e) => {
 canvas.addEventListener('pointermove', (e) => {
   mouse = { x: e.clientX, y: e.clientY };
   gestures.move(ptr(e));
+  updateSiteHover(true);
 });
 canvas.addEventListener('pointerup', (e) => gestures.up(ptr(e)));
 canvas.addEventListener('pointercancel', () => gestures.cancel());
 canvas.addEventListener('pointerleave', () => {
   mouse = null;
+  updateSiteHover();
 });
+
+/**
+ * W28: the hover readout for the building site under the cursor, from the last two snapshots.
+ * `moved`: the cursor moved; the panel follows it, and the figures are only worked out again when
+ * the cursor reaches another building (otherwise they change once per snapshot).
+ */
+function updateSiteHover(moved = false): void {
+  const curr = interp.curr;
+  const view = mouse && curr ? pickView() : null;
+  const id = view ? buildingAtScreen(camera, mouse!.x, mouse!.y, vw, vh, terrain, view) : -1;
+  if (moved && id >= 0 && siteShown?.readout.id === id && siteShown.tick === curr!.tick) {
+    siteHover.move(mouse!.x, mouse!.y);
+    return;
+  }
+  const readout = id >= 0 ? siteReadout(samePrevWorld ? interp.prev : null, curr!, id) : null;
+  if (!readout) {
+    siteShown = null;
+    siteHover.hide();
+    return;
+  }
+  siteShown = { readout, tick: curr!.tick };
+  siteHover.show(id, readout.lines, mouse!.x, mouse!.y);
+}
 canvas.addEventListener(
   'wheel',
   (e) => {
@@ -1022,7 +1058,7 @@ function frame(now: number) {
     b.times.push(performance.now() - t0);
     b.stamps.push(now);
   } else if (snap) queueView.update({ camera, viewportHeight: vh, snapshot: snap, units: interp.units, selection });
-  if (snap) waitView.update({ camera, viewportHeight: vh, snapshot: snap, units: interp.units });
+  if (snap) waitView.update({ camera, viewportHeight: vh, snapshot: snap });
   updateDragPreview();
   updateGhost();
   updateMs = performance.now() - tUpdate;
@@ -1647,6 +1683,22 @@ const game = {
   },
   /** W25b: the waiting markers read back from the scene graph (render/waitView.ts inspectWaiting). */
   inspectWaiting: () => inspectWaiting(scene),
+  /**
+   * W28: the construction hover panel: shown or not, the building, the snapshot tick its figures
+   * come from, its text lines (read from the page), and the intake per resource (null: paused or
+   * measuring).
+   */
+  get siteHover() {
+    const r = siteShown?.readout;
+    return {
+      visible: siteHover.el.style.display === 'block',
+      id: r?.id ?? -1,
+      tick: siteShown?.tick ?? -1,
+      lines: [...siteHover.el.children].map((d) => d.textContent ?? ''),
+      intake: r ? Object.fromEntries(r.intake.map((i) => [i.resource, i.perSecond])) : {},
+      note: r?.intakeNote ?? '',
+    };
+  },
   /** The resource readout as drawn (text). */
   get resourceReadout() {
     return document.querySelector('.hud.res')?.textContent ?? '';

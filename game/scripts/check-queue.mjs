@@ -22,10 +22,15 @@
 //     1,100 mass · 1,650 energy"; after release it is gone and the reserved wall sites stand on
 //     exactly the previewed tiles; Esc mid-drag queues nothing
 //   - W25b, waiting for resources: free spending off, a real wall drag (no Shift) for both engineers at
-//     speed 3; once the mass runs out, every site being built carries an hourglass marker labelled
-//     "waiting for mass" and each of its builders the same label (read from the scene), and the
-//     resource readout says "▲SHORT · N sites waiting" on the MASS row; free spending back on
-//     clears the markers
+//     speed 3; once the mass runs out, every site being built carries an hourglass marker (read from
+//     the scene; W28 removed its words and the builder labels), and the resource readout says
+//     "▲SHORT · N sites waiting" on the MASS row; free spending back on clears the markers
+//   - W28, the construction hover readout: the real mouse over a started, starved wall site shows a
+//     panel with its percent and its mass intake; sampled on every snapshot for 8 s, the figure is
+//     positive and at most the mass income while the trickle is shared (economy.ts shares it every
+//     tick, so a steadily starved site does not drop to 0 here); once its builders are stopped (X)
+//     the same site reads 0 mass/s and 0 builders; the panel takes no pointer events; moving off
+//     the site hides it; screenshot w28-hover-readout.png
 //   - W25b, Stop: the X key on the two engineers removes the run's reserved tiles and the run;
 //     its started tiles stay
 //   - W25c, the queue overlay benchmark (__game.queueBench: synthetic queues drawn by the live
@@ -63,7 +68,8 @@ const shotsDir = arg('--shots');
 const ORIGIN = arg('--origin') ?? `http://127.0.0.1:${PORT}`;
 const serve = !arg('--origin');
 /** W26's screenshot is written on every run: to --shots, else the vault's art reference folder. */
-const w26Shots = shotsDir ?? ART_REF;
+// W26 and W28 screenshots go to the art reference folder unless --shots names another
+const artShots = shotsDir ?? ART_REF;
 
 const failures = [];
 const fail = (msg) => {
@@ -416,10 +422,9 @@ async function run() {
   const drawn = js('__game.inspectWaiting()');
   const markOk =
     drawn.sites.length === ws.sites.length &&
-    drawn.sites.every((m) => m.text === 'waiting for mass' && m.icon === 'hourglass' && ws.sites.some((s) => s.id === m.site && Math.abs(s.x - m.x) < 1e-3 && Math.abs(s.z - m.z) < 1e-3)) &&
-    drawn.builders.length > 0 &&
-    drawn.builders.every((l) => l.text === 'waiting for mass' && l.icon === 'hourglass' && [e1, e2].includes(l.unit));
-  check(markOk, `mass ran out: ${drawn.sites.length} site(s) carry an hourglass marker "waiting for mass", ${drawn.builders.length} builder label(s) (scene)`, `waiting markers: state ${JSON.stringify(ws)}, scene ${JSON.stringify(drawn)}`);
+    drawn.sites.every((m) => m.icon === 'hourglass' && !('text' in m) && ws.sites.some((s) => s.id === m.site && Math.abs(s.x - m.x) < 1e-3 && Math.abs(s.z - m.z) < 1e-3)) &&
+    !('builders' in drawn);
+  check(markOk, `mass ran out: ${drawn.sites.length} site(s) carry an hourglass marker with no words, no builder labels (scene)`, `waiting markers: state ${JSON.stringify(ws)}, scene ${JSON.stringify(drawn)}`);
   await frames(20); // the readout refreshes every 250 ms
   const massRow = js('__game.resourceReadout').split('\n')[0];
   check(/^MASS .*▲SHORT · \d+ sites? waiting$/.test(massRow), `the readout marks mass: "${massRow.trim()}"`, `resource readout MASS row: "${massRow}"`);
@@ -429,10 +434,11 @@ async function run() {
     await frames(15);
     await shot('waiting');
   }
+  await checkHoverReadout(ws.sites);
   await until('free spending on', '__game.setUnlimited(true).then((r) => r.ok)', 10);
   await frames(10);
   const cleared = js('__game.inspectWaiting()');
-  check(cleared.sites.length === 0 && cleared.builders.length === 0, 'free spending back on: the waiting markers are gone', `markers after free spending on: ${JSON.stringify(cleared)}`);
+  check(cleared.sites.length === 0, 'free spending back on: the waiting markers are gone', `markers after free spending on: ${JSON.stringify(cleared)}`);
   // Stop (the X key) on both engineers: the run's reserved tiles and the run go, started tiles stay
   const wallsBefore = js(`__game.list('building').filter((b) => b.kindName === 'wall' && b.ty === 48).map((b) => ({ id: b.id, state: b.state }))`);
   press('x');
@@ -446,6 +452,9 @@ async function run() {
     `X (Stop): ${reservedBefore.length} reserved tiles and the run removed, ${startedBefore.length} started tile(s) stay`,
     `after X: before ${JSON.stringify(wallsBefore)}, after ${JSON.stringify(wallsAfter)}, runs ${JSON.stringify(js('__game.runs'))}`,
   );
+  const stoppedSite = startedBefore.find((id) => js(`__game.list('building').find((b) => b.id === ${id})?.state`) === 'started');
+  if (stoppedSite === undefined) fail('W28: no started wall tile left to hover after Stop');
+  else await checkHoverStopped(stoppedSite);
   js('(__game.control.speed(1), true)');
 
   errorsNow('W25b checks');
@@ -484,6 +493,89 @@ async function run() {
 }
 
 /** W26: the idle units column, in a fresh sandbox. */
+/**
+ * W28: hover a started, starved site with the real mouse. The panel's figures change once per
+ * snapshot; they are sampled in the page on every snapshot for 8 s (game speed 3).
+ */
+async function checkHoverReadout(sites) {
+  const rig = js('__game.camera.get()');
+  const site = sites[0];
+  js(`(__game.camera.set({ x: ${site.x}, z: ${site.z + 3}, distance: 22, yaw: 0, pitch: ${(55 * Math.PI) / 180} }), true)`);
+  await frames(15);
+  const p = js(`__game.screenOf('building', ${site.id})`);
+  ab('mouse', 'move', String(Math.round(p.x) - 3), String(Math.round(p.y) - 3));
+  ab('mouse', 'move', String(Math.round(p.x)), String(Math.round(p.y)));
+  await frames(10);
+  const first = js('__game.siteHover');
+  check(
+    first.visible && first.id === site.id && first.lines.some((l) => /^\d+% complete$/.test(l)) && first.lines.some((l) => / mass\/s$|^mass\/s: /.test(l)),
+    `W28: hovering site ${site.id} shows the panel: ${first.lines.join(' | ')}`,
+    `W28: hover panel over site ${site.id}: ${JSON.stringify(first)}`,
+  );
+  const panel = js(`(() => { const e = [...document.querySelectorAll('.site-hover')][0]; const r = e.getBoundingClientRect(); return { pe: getComputedStyle(e).pointerEvents, under: document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.tagName ?? null }; })()`);
+  check(panel.pe === 'none' && panel.under === 'CANVAS', 'W28: the panel takes no pointer events (the canvas is under its centre)', `W28: panel pointer events ${JSON.stringify(panel)}`);
+  const samples = js(`new Promise((res) => {
+    const out = [];
+    let last = -1;
+    const t0 = performance.now();
+    const f = () => {
+      const h = __game.siteHover;
+      if (h.tick !== last) { last = h.tick; out.push({ tick: h.tick, visible: h.visible, id: h.id, mass: h.intake.mass ?? null, note: h.note, line: h.lines.find((l) => /mass/.test(l)) ?? null }); }
+      if (performance.now() - t0 > 8000) res(out); else requestAnimationFrame(f);
+    };
+    requestAnimationFrame(f);
+  })`);
+  const income = js('__game.pool.income.mass');
+  const shown = samples.filter((s) => s.visible && s.id === site.id && s.mass !== null);
+  const masses = shown.map((s) => s.mass);
+  const counts = {};
+  for (const s of samples) counts[s.line ?? s.note] = (counts[s.line ?? s.note] ?? 0) + 1;
+  note(`W28: ${samples.length} snapshots sampled at speed 3 (mass income ${income}/s): ${Object.entries(counts).map(([k, n]) => `${k} × ${n}`).join(', ')}`);
+  check(
+    shown.length >= samples.length - 2 && shown.length > 20 && masses.every((m) => m > 0 && m <= income + 1e-3),
+    `W28: starved, the mass intake is shown on ${shown.length} of ${samples.length} snapshots, ${Math.min(...masses).toFixed(3)}–${Math.max(...masses).toFixed(3)} mass/s (> 0, ≤ the ${income} mass/s income); ${masses.filter((m) => m === 0).length} read 0`,
+    `W28: mass intake over ${samples.length} snapshots: ${JSON.stringify(samples.slice(0, 12))}`,
+  );
+  const path = await screenshot({ ab, js, frames }, join(artShots, 'w28-hover-readout.png'), { settle: 2 });
+  note(`screenshot ${path}`);
+  // off the site: the nearest tile south of it that no building covers
+  const off = js(`(() => {
+    const bs = __game.list('building');
+    const tx = Math.floor(${site.x});
+    for (let tz = Math.floor(${site.z}) + 2; tz < Math.floor(${site.z}) + 10; tz++)
+      if (!bs.some((b) => tx >= b.tx && tx < b.tx + b.fw && tz >= b.ty && tz < b.ty + b.fh)) return __game.worldToScreen(tx + 0.5, tz + 0.5);
+    return null;
+  })()`);
+  ab('mouse', 'move', String(Math.round(off.x)), String(Math.round(off.y)));
+  await frames(10);
+  const after = js('__game.siteHover');
+  check(!after.visible && after.id === -1, 'W28: moving off the site hides the panel', `W28: panel after moving off: ${JSON.stringify(after)}`);
+  js(`(__game.camera.set(${JSON.stringify(rig)}), true)`);
+}
+
+/** W28: a started site whose builders were stopped reads 0 mass/s and 0 builders on the next snapshots. */
+async function checkHoverStopped(id) {
+  const rig = js('__game.camera.get()');
+  const b = js(`__game.list('building').find((b) => b.id === ${id})`);
+  js(`(__game.camera.set({ x: ${b.tx + 0.5}, z: ${b.ty + 3.5}, distance: 22, yaw: 0, pitch: ${(55 * Math.PI) / 180} }), true)`);
+  await frames(15);
+  const p = js(`__game.screenOf('building', ${id})`);
+  ab('mouse', 'move', String(Math.round(p.x) - 3), String(Math.round(p.y) - 3));
+  ab('mouse', 'move', String(Math.round(p.x)), String(Math.round(p.y)));
+  await frames(20);
+  const h = js('__game.siteHover');
+  check(
+    h.visible && h.id === id && h.intake.mass === 0 && h.lines.includes('0 mass/s') && h.lines.includes('0 builders'),
+    `W28: after Stop, site ${id} reads ${h.lines.join(' | ')}`,
+    `W28: hover panel over stopped site ${id}: ${JSON.stringify(h)}`,
+  );
+  // off the site again, the camera back where it was
+  const off = js(`__game.worldToScreen(${b.tx + 0.5}, ${b.ty + 6.5})`);
+  ab('mouse', 'move', String(Math.round(off.x)), String(Math.round(off.y)));
+  js(`(__game.camera.set(${JSON.stringify(rig)}), true)`);
+  await frames(3);
+}
+
 async function runW26() {
   const started = Date.now();
   ab('open', `${ORIGIN}/?sandbox=1`);
@@ -549,7 +641,7 @@ async function runW26() {
   press('Escape');
   await frames(3);
   // the screenshot (the column on screen, the game running)
-  const shotPath = await screenshot({ ab, js, frames }, join(w26Shots, 'w26-idle-column.png'), { settle: 1 });
+  const shotPath = await screenshot({ ab, js, frames }, join(artShots, 'w26-idle-column.png'), { settle: 1 });
   note(`screenshot ${shotPath}`);
   // one engineer gets an order: the count drops on the next snapshot
   const busy = idle.engineer[0];
