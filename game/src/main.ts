@@ -172,6 +172,8 @@ if (warmupOn) {
 loading.remove();
 /** Startup: ms from navigation start to the first visible frame, and the longest frame in the 10 s after it. */
 const startup = { loadingMs: -1, longestFrameMs: 0, windowDone: false, frames: 0 };
+/** The snapshot the scene was last updated from (a snapshot arriving after it re-points the interpolated views). */
+let drawnSnap: unknown = null;
 /** The effect clock (render/anim.ts): frame time × speed, 0 while paused, reset on a new world. */
 const effectClock = new EffectClock();
 
@@ -1005,6 +1007,7 @@ function frame(now: number) {
       (x, y, z) => worldPerPixel(camera, Math.hypot(x - camera.position.x, y - camera.position.y, z - camera.position.z), vh),
       rig.distance > LOD_THRESHOLDS[1]!,
     );
+    drawnSnap = snap;
   }
   if (queueBench) {
     // W25c benchmark (runQueueBench): the synthetic queues in place of the selection's
@@ -1547,6 +1550,14 @@ const game = {
     const s = interp.curr;
     if (!s) return null;
     return inspectScene(scene, entitiesOf(s, interp.aliens, interp.units));
+  },
+  /**
+   * True while the interpolated views are the ones the scene was last drawn from: no snapshot has
+   * arrived since the last frame's update, so `inspect()` compares the drawing with the entities it
+   * was drawn from (a newer snapshot can hold aliens spawned since, not yet drawn).
+   */
+  get drawnCurrent() {
+    return interp.curr !== null && interp.curr === drawnSnap;
   },
   /**
    * GPU+CPU cost by forced-completion timing (render/cost.ts): blocks of `frames` renders of each
