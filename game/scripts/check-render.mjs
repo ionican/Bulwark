@@ -46,7 +46,9 @@
 //     w24-2b-gate-open, w24-2b-strategic-zoom.
 // W27 (criterion 5, real mouse): the gun turret tool, the mouse over a free tile: the wireframe
 // preview is in the scene at that tile and pulses; then a wall drag held mid-way carries wall
-// wireframes. Screenshots w27-wireframe-preview.png and w27-wall-drag-preview.png (same folder).
+// wireframes. W27b: the gun tool over a complete building: blocked, red lines, steady opacity.
+// Screenshots w27-wireframe-preview.png, w27-wireframe-preview-blocked.png and
+// w27-wall-drag-preview.png (same folder).
 //
 // With --shots <dir> it also writes the run 2a screenshots (w24-2a2-*.png: game camera, the same
 // view tilted low, map edge, aliens close up, full zoom-out) there.
@@ -261,7 +263,7 @@ async function sandboxFixture() {
 
 /** The 2b and W27 screenshots are written on every run: to --shots, else the vault's art reference folder. */
 const shots2b = shotsDir ?? ART_REF;
-const SHOTS_2B = ['w24-2b-engineers-beaming', 'w24-2b-turret-recoil-flash', 'w24-2b-shots-in-flight', 'w24-2b-gate-open', 'w24-2b-strategic-zoom', 'w27-wireframe-preview', 'w27-wall-drag-preview'];
+const SHOTS_2B = ['w24-2b-engineers-beaming', 'w24-2b-turret-recoil-flash', 'w24-2b-shots-in-flight', 'w24-2b-gate-open', 'w24-2b-strategic-zoom', 'w27-wireframe-preview', 'w27-wireframe-preview-blocked', 'w27-wall-drag-preview'];
 /** The benchmark's game camera over the base (pitch: the preset tilt for distance 50), and the full zoom-out. */
 const BENCH_CAMERA = { x: 68, z: 46, distance: 50, yaw: 0 };
 const BENCH_ZOOM = { x: 64, z: 64, distance: 200, yaw: 0 };
@@ -632,6 +634,27 @@ async function run2b() {
   if (!(Math.max(Math.abs(op1 - op0), Math.abs(op2 - op1)) > 0.05)) fail(`W27: the wireframe does not pulse (opacity ${op0}, ${op1}, ${op2})`);
   else note(`ok   W27: the wireframe pulses (opacity ${op0.toFixed(2)} → ${op1.toFixed(2)} → ${op2.toFixed(2)} over 0.75 s)`);
   await shot('w27-wireframe-preview');
+  // W27b: the gun tool over a tile a complete building stands on: blocked, red, no pulse
+  const occ = js(`(() => { const b = __game.list('building').filter((b) => b.complete && b.kindName !== 'wall').sort((p, q) => Math.hypot(p.tx - 60, p.ty - 49) - Math.hypot(q.tx - 60, q.ty - 49))[0]; return b ? { tx: b.tx, ty: b.ty, fw: b.fw, fh: b.fh, kindName: b.kindName } : null; })()`);
+  if (!occ) fail('W27b: no complete building to hover for the blocked preview');
+  else {
+    // the 2×2 gun footprint overlaps the building's last column only, so most lines lie on open ground
+    const hx = occ.tx + occ.fw - 1 + 1;
+    const hz = occ.ty + 1;
+    camera({ x: hx, z: hz + 1, distance: 14, yaw: 0, pitch: (45 * Math.PI) / 180 });
+    await frames(10);
+    const q = js(`__game.worldToScreen(${hx}, ${hz})`);
+    ab('mouse', 'move', String(Math.round(q.x)), String(Math.round(q.y)));
+    await frames(10);
+    const g = js('__game.ghost');
+    const w0 = js('__game.inspectPreview()')['overlay/preview/wire'];
+    await sleep(400);
+    const w1 = js('__game.inspectPreview()')['overlay/preview/wire'];
+    if (!g || g.ok !== false) fail(`W27b: the gun tool over the ${occ.kindName} at ${occ.tx},${occ.ty} is not blocked: ghost ${JSON.stringify(g)}`);
+    else if (!w0 || !w1 || w0.colour !== 0xff3b30 || w1.colour !== 0xff3b30 || Math.abs(w1.opacity - w0.opacity) > 1e-6) fail(`W27b: blocked preview not red and steady: ${JSON.stringify(w0)} → ${JSON.stringify(w1)}`);
+    else note(`ok   W27b: the gun tool over the ${occ.kindName} at ${occ.tx},${occ.ty}: blocked, red lines (${w1.vertices} line vertices), steady opacity ${w1.opacity.toFixed(2)}`);
+    await shot('w27-wireframe-preview-blocked');
+  }
   key('Escape', 'Escape');
   // the drag row in the middle of the screen (z 61.5 lies under the build bar from the last pose)
   camera({ x: 53, z: 58, distance: 22, yaw: 0, pitch: (55 * Math.PI) / 180 });

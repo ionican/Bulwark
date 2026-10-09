@@ -3,8 +3,9 @@
 //   1 for every building kind, the preview is drawn as line segments (feature edges, not a
 //     triangle wireframe) of the low-detail level the renderer draws for that kind (W27b, Richard
 //     2026-10-09: "could do with less detail"; models.ts previewLevel), with the world bounds of a
-//     placed complete building at the same tile and direction within 0.05 tiles, and fewer line
-//     vertices than the old full-detail wireframe for every turret kind
+//     placed complete building at the same tile and direction drawn at that level within 0.05
+//     tiles (and of one at full detail within 0.3: the low-detail level may differ slightly), and
+//     fewer line vertices than the old full-detail wireframe for every turret kind
 //   2 the wireframe's opacity pulses with real time (it is UI: no game clock involved)
 //   3 validity by shape: solid outline and a tick when allowed, dashed outline and a cross when not
 //   4 a 10-tile wall drag across one blocked tile: 9 tiles carry wall wireframes, 1 cross; pools
@@ -92,7 +93,7 @@ describe('W27 criterion 1 (W27b): the preview is the low-detail model as feature
   });
 
   for (const [k, tx, ty, dir] of SPOTS) {
-    it(`${k}: line segments of the preview level's geometry, bounds within 0.05 tiles`, () => {
+    it(`${k}: line segments of the preview level's geometry, at the placed building's bounds`, () => {
       const kind = B[k as keyof typeof B];
       const [fw, fh] = buildingFootprint(kind);
       const w = new World(1, terrain, { waves: false });
@@ -117,8 +118,13 @@ describe('W27 criterion 1 (W27b): the preview is the low-detail model as feature
       expect(wire.material, `${k}: line material`).toBe(true);
       const ids = (s: Iterable<BufferGeometry>) => [...new Set([...s].map((g) => g.uuid))].sort();
       expect([...new Set(wire.sources)].sort(), `${k}: the geometry objects of the placed model at level ${level}`).toEqual(ids(atLevel.geometries));
+      // the same model at the same place: within 0.05 tiles of the placed building at the preview's
+      // level; the low-detail level may differ slightly from full detail: within 0.3 tiles
       for (const c of ['min', 'max'] as const)
-        for (const a of ['x', 'y', 'z'] as const) expect(Math.abs(wire.box[c][a] - full.box[c][a]), `${k}: bounds ${c}.${a}`).toBeLessThan(0.05);
+        for (const a of ['x', 'y', 'z'] as const) {
+          expect(Math.abs(wire.box[c][a] - atLevel.box[c][a]), `${k}: bounds ${c}.${a} vs level ${level}`).toBeLessThan(0.05);
+          expect(Math.abs(wire.box[c][a] - full.box[c][a]), `${k}: bounds ${c}.${a} vs full detail`).toBeLessThan(0.3);
+        }
       // nothing else visible but the outline and the mark
       const others: string[] = [];
       ui.traverseVisible((o) => {

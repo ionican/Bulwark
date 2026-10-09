@@ -87,19 +87,15 @@ export const TURRET_KINDS: ReadonlyMap<number, string> = new Map([
 /**
  * W27b (Richard, 2026-10-09: "could do with less detail in it - perhaps an outline and basic"): the
  * detail level the placement preview draws per kind, 2 = simple, 1 = middle (the renderer's own LOD
- * levels of the kit parts). Simple by default; middle where the simple level loses the kind's
- * shape or its bounds (over 0.05 tiles from the full model's): the extractors (simple drops the
- * drum, head and ring), the gate (no door frame), and the turrets whose simple level is a block.
- * W17 model kinds (economy, chain, shield, belts) have one level, which they keep.
+ * levels of the kit parts), chosen by looking at the previews. Simple by default: the turrets keep
+ * base, turret body and barrel, and their bounds are within 0.3 tiles of the full model's. Middle
+ * where the simple level loses part of the shape: the rare extractor (its side pipe; bounds 0.74
+ * tiles off) and the gate (bounds 0.16 tiles off; no placement tool draws it today). W17 model kinds
+ * (generator, lab, depot, chain machines, shield, belts) have one level, which they keep.
  */
 const PREVIEW_LEVEL: ReadonlyMap<number, number> = new Map([
-  [B.massExtractor, 1],
   [B.rareExtractor, 1],
   [B.gate, 1],
-  [B.gun, 1],
-  [B.area, 1],
-  [B.beam, 1],
-  [B.tempTurret, 1],
 ]);
 export const previewLevel = (kind: number): number => PREVIEW_LEVEL.get(kind) ?? 2;
 
