@@ -10,17 +10,18 @@
 // builders keep their beams on their sites and the progress moves by fractions of a percent per
 // second, which looks frozen. With free spending on, the same orders finish (all four items).
 //
-// The fix makes the wait visible by shape and label (render/waiting.ts, render/waitView.ts,
-// ui/hud.ts): every site that builders are working on and that gets less than its full supply
-// carries an hourglass marker labelled "waiting for <resource>", each of its builders carries the
-// same label, and the resource readout marks the short resource and how many sites wait on it.
+// The fix makes the wait visible by shape (render/waiting.ts, render/waitView.ts, ui/hud.ts):
+// every site that builders are working on and that gets less than its full supply carries an
+// hourglass marker, and the resource readout marks the short resource and how many sites wait on
+// it. W28 removed the "waiting for <resource>" words from the marker and the builder labels; the
+// construction hover readout (render/siteReadout.ts) gives the figures instead.
 
 import { describe, expect, it } from 'vitest';
 import { Scene } from 'three';
 import { createWorld } from '../src/sim/scenarios.ts';
 import { B, U } from '../src/sim/kinds.ts';
 import { isReserved } from '../src/sim/schema.ts';
-import { waitingState, waitingText } from '../src/render/waiting.ts';
+import { waitingState } from '../src/render/waiting.ts';
 import { WaitOverlay, inspectWaiting } from '../src/render/waitView.ts';
 import { economyText } from '../src/ui/hud.ts';
 import { flatWorld } from './fixtures.ts';
@@ -56,8 +57,6 @@ describe('W25b: waiting made visible', () => {
       expect(b.short).toEqual(['mass']);
       expect(w.units.cols.work[w.units.slotForId(b.id)]! - 1).toBe(b.site);
     }
-    expect(waitingText(['mass'])).toBe('waiting for mass');
-    expect(waitingText(['mass', 'energy'])).toBe('waiting for mass and energy');
   });
 
   it('free spending on: nothing waits', () => {
@@ -90,7 +89,7 @@ describe('W25b: waiting made visible', () => {
     expect(ws.sites.some((s) => reserved.includes(s.id))).toBe(false);
   });
 
-  it('the scene: an hourglass marker labelled "waiting for mass" on each waiting site, and the same label over each of its builders', () => {
+  it('the scene: an hourglass marker on each waiting site', () => {
     const { snap } = starved();
     const ws = waitingState(snap);
     const scene = new Scene();
@@ -99,27 +98,18 @@ describe('W25b: waiting made visible', () => {
     const got = inspectWaiting(scene);
     expect(got.sites.length).toBe(3);
     for (const m of got.sites) {
-      expect(m.text).toBe('waiting for mass');
       expect(m.icon).toBe('hourglass');
       const s = ws.sites.find((x) => x.id === m.site)!;
       expect(s, `marker for site ${m.site}`).toBeTruthy();
       expect(m.x).toBeCloseTo(s.x, 5);
       expect(m.z).toBeCloseTo(s.z, 5);
     }
-    expect(got.builders.length).toBe(3);
-    for (const l of got.builders) {
-      expect(l.text).toBe('waiting for mass');
-      expect(l.icon).toBe('hourglass');
-      const r = Array.prototype.indexOf.call(snap.units.id, l.unit);
-      expect(l.x).toBeCloseTo(snap.units.cols.x[r]!, 5);
-      expect(l.z).toBeCloseTo(snap.units.cols.z[r]!, 5);
-    }
     // once supply is back (free spending), the markers go
     const { w: rich } = richardsSequence(true);
     while (rich.tick < 300) rich.step();
     const snap2 = snapshotOf(rich);
     o.update({ camera: camera({ x: 64, z: 62, distance: 40, yaw: 0 }), viewportHeight: 900, snapshot: snap2, units: mobile(snap2.units) });
-    expect(inspectWaiting(scene)).toEqual({ sites: [], builders: [] });
+    expect(inspectWaiting(scene)).toEqual({ sites: [] });
   });
 
   it('the resource readout marks the short resource and how many sites wait on it (text and a ▲, no colour)', () => {
@@ -169,8 +159,7 @@ describe('W25b: the marker follows the shortage tick by tick', () => {
     expect(w.shortMask & 1, 'mass ran short').toBe(1);
     // the first snapshot taken after the short tick carries the marker and the builder label
     const short = draw();
-    expect(short.sites.map((s) => s.text)).toEqual(['waiting for mass']);
-    expect(short.builders.map((b) => [b.unit, b.text])).toEqual([[e, 'waiting for mass']]);
+    expect(short.sites.map((s) => s.icon)).toEqual(['hourglass']);
     // starved for a while: still marked on every snapshot
     for (let i = 0; i < 20; i++) {
       w.step();
@@ -180,6 +169,6 @@ describe('W25b: the marker follows the shortage tick by tick', () => {
     w.pool[0] = w.pool[0]! + 1000;
     w.step();
     expect(w.shortMask & 1).toBe(0);
-    expect(draw()).toEqual({ sites: [], builders: [] });
+    expect(draw()).toEqual({ sites: [] });
   });
 });
