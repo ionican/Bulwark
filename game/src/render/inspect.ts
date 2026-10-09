@@ -6,9 +6,14 @@
 //
 // Attribution: an instance belongs to the entity whose footprint (buildings) or radius (units,
 // aliens, wrecks) contains its world translation (x, z), expanded by a margin; if several do, the
-// nearest centre wins. Meshes named `terrain/…` and the sky are ground, not entities, and are left
-// out. Mesh names tell the families apart: `greybox/…` is W13's renderer, `overlay/…` W13's
-// overlays (bars, beams, shots, routes, markers), anything else a model batch or an icon.
+// nearest centre wins. W24 run 2b: a mesh whose name says what it draws only matches entities of
+// that group — unit rigs (`eng/…`, `cmd/…`) and unit icons units, alien models and icons aliens,
+// wreck debris and icons wrecks, every other model mesh buildings — so an engineer standing on the
+// temporary turret it dropped, or on a wall tile it builds, is not counted as that building. Of
+// two entities at the same distance, one the mesh has not yet been attributed to wins.
+// Meshes named `terrain/…` and the sky are ground, not entities, and are left out. Mesh names
+// tell the families apart: `greybox/…` is W13's renderer, `overlay/…` W13's overlays (bars,
+// beams, shots, routes, markers), anything else a model batch or an icon.
 
 import { InstancedMesh, Matrix4, Mesh, type Material, type Object3D } from 'three';
 import { ALIEN_KINDS, BUILDING_KINDS, U, UNIT_KINDS, alienInfo } from '../sim/kinds.ts';
@@ -86,6 +91,18 @@ export function drawnMeshes(root: Object3D): DrawnMesh[] {
   return out;
 }
 
+const UNIT_ICONS = new Set(['icon/engineer', 'icon/commander', 'icon/commanderRing']);
+const ALIEN_PREFIXES = ALIEN_KINDS.flatMap((k) => [`w17/${k}/`, `icon/${k}`]);
+
+/** The entity group a mesh draws, from its name; null for overlays (any entity). */
+export function meshGroup(name: string): EntityRef['group'] | null {
+  if (name.startsWith('overlay/') || name.startsWith('greybox/')) return null;
+  if (name.startsWith('eng/') || name.startsWith('cmd/') || UNIT_ICONS.has(name)) return 'unit';
+  if (ALIEN_PREFIXES.some((p) => name.startsWith(p))) return 'alien';
+  if (name.startsWith('w17/wreck/') || name === 'icon/wreck') return 'wreck';
+  return 'building';
+}
+
 /** Per kind name: what was drawn on the entities of that kind. */
 export function inspectScene(root: Object3D, entities: EntityRef[], margin = 0.6): Record<string, KindReport> {
   const drawn = drawnMeshes(root);
@@ -111,6 +128,10 @@ export function inspectScene(root: Object3D, entities: EntityRef[], margin = 0.6
     (reports[kind] ??= { instances: 0, models: 0, icons: 0, greybox: 0, meshes: [], materials: [], entities: 0, covered: 0, _covered: new Set(), _meshes: new Set(), _mats: new Set() });
   for (const e of entities) rep(e.kindName).entities++;
   for (const d of drawn) {
+    const group = meshGroup(d.name);
+    // entities this mesh has already been attributed to: of two entities at the same distance (two
+    // engineers on one spot, each drawn as one icon at its centre), the one not yet taken wins
+    const taken = new Set<number>();
     for (let i = 0; i < d.count; i++) {
       const x = d.worlds[i * 16 + 12]!;
       const z = d.worlds[i * 16 + 14]!;
@@ -120,14 +141,16 @@ export function inspectScene(root: Object3D, entities: EntityRef[], margin = 0.6
       let bestD = Infinity;
       for (const ei of list) {
         const e = entities[ei]!;
+        if (group !== null && e.group !== group) continue;
         if (Math.abs(x - e.x) > e.hx + margin || Math.abs(z - e.z) > e.hz + margin) continue;
         const dd = (x - e.x) ** 2 + (z - e.z) ** 2;
-        if (dd < bestD) {
+        if (dd < bestD - 1e-9 || (Math.abs(dd - bestD) <= 1e-9 && taken.has(best) && !taken.has(ei))) {
           bestD = dd;
           best = ei;
         }
       }
       if (best < 0) continue;
+      taken.add(best);
       const e = entities[best]!;
       const r = rep(e.kindName);
       r.instances++;
