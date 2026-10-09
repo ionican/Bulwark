@@ -190,9 +190,78 @@ node scripts/check-render.mjs
 
 `fingerprint-compare.mjs` exports the baseline commit with `git archive` into a temporary directory, runs `scripts/fingerprint.test.ts` there and here, and fails unless the hashes are identical. `check-render.mjs` builds, starts `vite preview` on strict port 8823 from this tree, drives agent-browser (session `w24-2a`) through criteria 9's checks and the scene-inspection helper on both scenarios, and always stops the server and closes the session. It fails on the current tree: no `test/w24r2a-*` files and neither script exists. The calling session re-runs it, reads the new tests against criteria 1–8, and looks at every screenshot before Richard does. The look needs Richard's sign-off; a green Verify is not a visual pass.
 
-### Run 2b — animation, effects and performance (outline; planned after 2a)
+### Run 2b — animation, effects and performance (planned 2026-10-09 after W25c closed at `dc28343`)
 
-From snapshots only, with a per-kind animation input matrix and a simulation-time clock (finding 9): unit walk with planted feet, build beam to a building site or reclaim beam to a wreck (by unit state), carry; alien gait with render-side heading, phase and seed; extractors animated while complete (income extractors never get `BF_ACTIVE`); gate doors opening for player units within 2 tiles. Reset rules for teleports, rewind and load (snapshot tick going backwards), id reuse, pause and speed changes. Turrets aim directly at the target's interpolated position with the game's flat projectile physics — not W20's ballistic solver (finding 2); recoil and muzzle flash best-effort, once per newly observed firing tick from the firing flag (finding 1); shots drawn from the muzzle to their snapshot positions with W21 effect pooling but no workshop collision. Combined performance gate with a frozen camera pose and placements, per-kind visible and detail-level minima, activity counters (engineers building, turrets firing, aliens attacking) checked throughout the measurement, game camera average ≥ 55 fps and 1%-low ≥ 45, strategic zoom-out average ≥ 40 (finding 11, 12).
+Goal: everything the simulation does is visible as motion — builders beam at their sites, extractors run, gates open, turrets aim, recoil and fire, shots fly and land — driven only by snapshots, and the combined scene holds its frame rate. Gameplay, simulation and snapshot format do not change (fingerprint against `60ebba6` with `--strip-queue`, as W25c).
+
+**Already done, out of scope:** unit and alien walking with planted feet and gait (`fe171f0`, `render/walk.ts`); discontinuity resets for teleport, rewind, load and new ids (W25c, `render/interp.ts` and `mobileStep.ts`). 2b reuses them; it does not change them except to read their reset signal.
+
+**Port rule** as run 2: copy geometry, materials, rigs and pure animation from `look/` (`w23/beams.ts`, `w23/walls/gate.ts` door drive only, `w23/extractors.ts` animation section, `stress/turretPose.ts`, `stress/effects.ts` pools and meshes, W21 particles); never the workshop's fire control, ballistic solver, collision or demo clocks. `look/` stays unchanged.
+
+**Animation input matrix** (finding 9). One table in `render/anim.ts`, the only place that decides what drives each animation. Every input comes from the snapshot, the interpolator, or the render clock below.
+
+| Animation | Kinds | Driven by | Off when |
+|---|---|---|---|
+| Build beam, emitter to site | commander, engineer | `state == US_BUILDING`, `work − 1` = building id present in the snapshot | any other state, or the id is absent |
+| Reclaim beam, wreck to emitter (reverse direction, distinct pulse shape) | commander, engineer | `state == US_RECLAIMING`, `work − 1` = wreck id | as above |
+| Carry pod on the back, sized by load | engineer | `carry > 0` | `carry == 0` |
+| Extractor running (W23 animation) | massExtractor, rareExtractor | `BF_COMPLETE` (income extractors never get `BF_ACTIVE`) | not complete |
+| Machine working | generator, smelter, assembler, shredder | `BF_ACTIVE` | flag clear |
+| Gate doors | gate | a player unit (interpolated position) within 2 tiles of the gate's tiles, on either side; W23 travel time | none in range — doors drive shut; aliens never open them |
+| Turret yaw and pitch | gun, area, heavy, tempTurret, beam | `target − 1` = alien id present: aim at that alien's **interpolated** position, pitch from the game's flat projectile physics (flat trajectory to the target's height above the muzzle; no ballistic arc) | no target: hold the last aim, then ease back to rest over 2 s |
+| Recoil + muzzle flash | gun, area, heavy, tempTurret | `BF_FIRING` in a snapshot whose tick is newer than the last one this turret flashed for | — |
+| Beam turret's beam | beam | `BF_FIRING` and a present target: drawn every frame muzzle → target | flag clear |
+| Shots | `P_BULLET`, `P_SHELL`, `P_HEAVY`, `P_ALIEN` | snapshot projectile rows, interpolated; drawn as W21 tracers/shells with the source muzzle as the first point when the shooter is still present | row gone: impact effect at its last position (W21 pooled particles, no collision) |
+
+Best-effort flashes (finding 1): one snapshot can cover several ticks at speed above 1×, so flashes per turret are at most one per snapshot; the shot rows still show every projectile. Stated in the code and the notes, not hidden.
+
+**Render clock** (finding 9). Effects advance by a clock in simulation time: interpolated snapshot time, so pause freezes every animation (doors, extractors, beams' pulse, recoil decay, particles) and 2×/3×/10× speed them up. One exception, stated: the strategic-zoom icons do not animate.
+
+**Reset rules.** On a discontinuity the interpolator reports (rewind, load, world replaced, the tick going backwards) every per-entity effect state is dropped: recoil 0, doors snapped to the state the current snapshot implies, aim snapped to the current target, particles and in-flight tracers cleared, the last-flashed tick reset. On id reuse (a new id in a slot), that slot's state is dropped. On pause nothing resets.
+
+**Effect capacities.** Every pool sized from the simulation's table capacities (projectiles, units, buildings) with an `overflowed` flag as in 2a; particles bounded by W21's caps.
+
+**Shader precompile** (W25b finding). At startup, with every kind's batch present at count ≥ 1 off-screen and every effect material instantiated, call `renderer.compileAsync(scene, camera)` before the first visible frame, behind the existing loading state. Measured: the longest main-thread frame within the first 10 s of load, before and after.
+
+**Combined performance gate** (findings 11, 12). A frozen benchmark in `check-render.mjs` (gated, unlike 2a's):
+- Scene: the sandbox with fixed placements through the game's own commands — a walled base with 2 gates, 20 turrets across all five turret kinds, both extractors, every W17 building kind, 12 engineers building or reclaiming, the commander, and a sustained alien stream (spawn groups re-issued so at least 150 aliens are alive throughout) attacking the walls. Free spending on, speed 1×.
+- Camera: two frozen poses — the game camera over the base (fixed position, target and elevation, recorded in the script) and the full strategic zoom-out. 1440 × 900, quality medium, device pixel ratio 1.
+- Visibility minima checked through `__game.inspect` at the start and end of each measurement: every turret kind, every building kind, engineers, the commander and every alien kind visible, at the expected detail levels.
+- Activity counters sampled every second throughout (`__game.activity`: builders beaming, turrets firing this second, aliens attacking, shots in flight, doors moving): each must be > 0 in every second, or the run fails as "scene not active", not as a performance pass.
+- Measurement: 20 s per pose after a 5 s warm-up; frame times from `requestAnimationFrame`. Pass: game camera average ≥ 55 fps and 1%-low ≥ 45; strategic zoom-out average ≥ 40. Reported with each result: the load average at start and end, the forced-complete frame cost, draw calls and visible counts per kind. The display caps at 60 Hz, so averages above 60 are not expected.
+- If a pose fails while the 1-minute load average is above 8, the script waits for load below 8 (up to 5 min) and re-measures that pose once; both results are printed. A failure at load below 8 is a failure.
+
+#### Run 2b acceptance criteria
+
+1. **Snapshot-only:** the 2a import-graph test still passes and covers the new modules.
+2. **Input matrix:** for each row, a fixture snapshot pair turns the animation on, and a pair turns it off, asserted through the scene graph (`__game.inspect` or the test helper), not a renderer self-report. Includes: a builder whose `work` id is absent draws no beam; an alien next to a gate does not open it; an income extractor without `BF_ACTIVE` still animates when complete.
+3. **Aim:** with a target moving across a turret, the yaw-pivot parts point at the target's interpolated position within 1° and the pitch matches the flat-trajectory formula within 1°; no part outside the yaw and pitch pivots moves.
+4. **Flashes:** two consecutive snapshots with `BF_FIRING` and different ticks give two flashes; the same snapshot rendered over several frames gives one.
+5. **Clock:** paused for 2 s, every effect transform is unchanged frame to frame; at 3× the door travel takes a third of the time.
+6. **Resets:** a rewind mid-fire clears tracers and recoil and snaps doors and aim; a reused id starts from rest.
+7. **Capacity:** every projectile row at the simulation's capacity is drawn with `overflowed` false.
+8. **Precompile:** the longest main-thread frame in the first 10 s after load is reported before and after; after < 250 ms on a quiet machine (load below 8).
+9. **Performance gate** as above passes; screenshots `Resources/Bulwark Art Reference/w24-2b-*.png`: engineers beaming at a wall run, a turret mid-recoil with flash, shots in flight, an open gate with an engineer in it, the strategic zoom-out of the benchmark scene.
+10. **Simulation unchanged:** `fingerprint-compare.mjs 60ebba6 --strip-queue` identical.
+11. **No regression:** `check-queue.mjs` passes; balanced plan still wins map 1.
+
+#### Verify command — run 2b (frozen)
+
+```bash
+cd ~/Projects/worktrees/bulwark-w24/game && npm ci --no-audit --no-fund >/dev/null && \
+npx vitest run test/w24r2b-*.test.ts && npm test && npm run build && \
+(cd ../look && npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit) && \
+node scripts/fingerprint-compare.mjs 60ebba6 --strip-queue && \
+node scripts/check-render.mjs --no-build && node scripts/check-queue.mjs --no-build
+```
+
+Fails on the current tree: no `test/w24r2b-*` files exist (vitest exits non-zero on no matching files), and `check-render.mjs` has no gated benchmark yet. The calling session re-runs it, reads the new tests against criteria 1–8, and looks at every screenshot. A green Verify is not a visual pass; the look of the effects needs Richard's sign-off. `m2`'s 5 s timeout under machine load (seen in W25c) is a known flake: if `npm test` fails only on it, re-run once and record both.
+
+#### Run 2b decisions made here (Richard can overturn)
+
+- Flashes are at most one per snapshot per turret; shots themselves are never dropped.
+- Effects pause with the game; icons never animate.
+- The gate is 55 fps average and 45 1%-low at the game camera with ~150 aliens; 40 at full zoom-out.
 
 ### Run 2 decisions made here (Richard can overturn)
 

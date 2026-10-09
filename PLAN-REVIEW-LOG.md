@@ -208,3 +208,7 @@ Author commits `fad7718` (tests, red), `d1b55fc`, `b1bdc5b`. Cause of Richard's 
 ## Post-build adversarial review — 2a, follow-up, W25, W25b
 
 Codex GPT-6.1 Sol · high, thread 01a11f0b-309b-7152-b852-f36cb9e1c7d7, base `60ebba6`. Verdict needs-attention, five reproduced findings: (high) unshifted replacement of an overlapping wall run leaves holes (world.ts:428); (high) queue overlay cost unbounded — 256 units × 64 orders gave 6.66 M dash instances, 514 MiB, ~164 ms per update (queueView.ts:313); (medium) stale dequeue removes a different move/produce order — orders lack identity (queue.ts:54); (medium) gait reset detection runs on interpolated positions, so teleports and rewinds animate instead of resetting (walk.ts:64); (medium) ground-projection picking misses visible units at low tilt (picking.ts:142). All accepted; target for the overlay set at 40 engineers × 64 orders at 60 fps with hard caps for the 256-unit worst case (proportionate: a real game has a handful of engineers). Sent to a fresh `author` subagent test-first as W25c.
+
+## Run 2b — plan (`/spec`, 2026-10-09)
+
+Plan section "Run 2b" drafted by Claude from the outline and findings 1, 2, 9, 11, 12, after W25c closed at `dc28343`. Walking and discontinuity resets already landed (`fe171f0`, W25c) and are out of scope. Frozen Verify confirmed red on the current tree (no `test/w24r2b-*` files; vitest exits 1). One Codex plan round (MAX_ROUNDS 1, Richard's one-plan-review rule), GPT-6.1 Sol · xhigh.
