@@ -61,10 +61,17 @@ export interface EffectsCapacity {
 /** Visibility test (frustum), centre and radius in tiles; always true with culling off. */
 export type Visible = (x: number, y: number, z: number, r: number) => boolean;
 
-/** This frame's builders beaming (build or reclaim) and visible shots in flight (models.ts activity reads them). */
+/**
+ * What this frame committed for drawing (models.ts activity reads it): build and reclaim beams,
+ * shots in flight (tracers and alien shots) and muzzle flashes, counted from the instances uploaded
+ * in `commit`; turret beams pushed for a turret on screen. Set in `commit`, not by the states that
+ * asked for the effects (W24 review).
+ */
 export interface Activity {
   beams: number;
   shots: number;
+  flashes: number;
+  turretBeams: number;
 }
 
 const NONE = 0xffffffff;
@@ -125,7 +132,9 @@ export class Effects {
   private wppd = 0;
   private t = 0;
   private dt = 0;
-  readonly activity: Activity = { beams: 0, shots: 0 };
+  readonly activity: Activity = { beams: 0, shots: 0, flashes: 0, turretBeams: 0 };
+  /** Frustum test for the frame (models.ts sets it before drawing); turret beams on screen count. */
+  visible: Visible = () => true;
 
   constructor(readonly capacity: EffectsCapacity) {
     this.group.name = 'effects';
@@ -216,7 +225,7 @@ export class Effects {
     for (const b of this.beamSets) b.begin();
     for (const p of this.pools) p.begin();
     this.beamN.fill(0);
-    this.activity.beams = this.activity.shots = 0;
+    this.activity.beams = this.activity.shots = this.activity.flashes = this.activity.turretBeams = 0;
     this.frameNo++;
   }
 
@@ -230,7 +239,6 @@ export class Effects {
     _a.set(ax, ay, az);
     _b.set(bx, by, bz);
     beams.push(_a, _b, reclaim ? 0.04 : 0.028, BEAM_CYAN, reclaim ? 3.2 : 4, this.camPos, this.wppd, 2.4);
-    this.activity.beams++;
     const pool = reclaim ? this.reclaimPulses : this.buildPulses;
     _d.subVectors(_b, _a);
     const len = _d.length();
@@ -252,6 +260,7 @@ export class Effects {
   /** The beam turret's beam, muzzle → target; its width pulses with the effect clock. */
   turretBeam(ax: number, ay: number, az: number, bx: number, by: number, bz: number, seed: number): void {
     if (++this.beamN[2]! > this.capacity.buildings) this.beamOverflow = true;
+    else if (this.visible((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2, Math.hypot(bx - ax, by - ay, bz - az) / 2 + 0.5)) this.activity.turretBeams++;
     _a.set(ax, ay, az);
     _b.set(bx, by, bz);
     const pulse = 0.75 + 0.25 * Math.sin(this.t * 31 + seed * 6.283);
@@ -324,7 +333,6 @@ export class Effects {
       this.pHead[s * 3 + 1] = y;
       this.pHead[s * 3 + 2] = z;
       if (!visible(x, y, z, 1)) continue;
-      this.activity.shots++;
       const kind = view.kind[r]!;
       if (kind === P_ALIEN) {
         const i = this.alienShots.take();
@@ -404,6 +412,11 @@ export class Effects {
     }
     for (const b of this.beamSets) b.commit();
     for (const p of this.pools) p.commit();
+    // activity: what was uploaded for drawing this frame
+    const A = this.activity;
+    A.beams = this.buildBeams.mesh.count + this.reclaimBeams.mesh.count;
+    A.shots = this.tracers.mesh.count + this.alienShots.mesh.count;
+    A.flashes = this.flashes.mesh.count;
     this.particles.emit(this.dt);
     if (this.cam) this.particles.draw(this.cam);
   }

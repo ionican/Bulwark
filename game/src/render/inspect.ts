@@ -16,7 +16,7 @@
 // out. `greybox/…` is W13's renderer and `overlay/…` (or group 'overlay') the overlays (bars,
 // beams, shots, routes, markers, effects); both match any entity.
 
-import { InstancedMesh, Matrix4, Mesh, type Material, type Object3D } from 'three';
+import { InstancedBufferGeometry, InstancedMesh, Matrix4, Mesh, type Material, type Object3D } from 'three';
 import { ALIEN_KINDS, BUILDING_KINDS, U, UNIT_KINDS, alienInfo } from '../sim/kinds.ts';
 import type { Snapshot } from '../sim/snapshot.ts';
 import type { MobileView } from './interp.ts';
@@ -46,6 +46,22 @@ export function tagGroup(root: Object3D, group: MeshGroup | ((mesh: Mesh) => Mes
 
 /** The report key that lists drawn model meshes with no group (they are attributed to nothing). */
 export const UNGROUPED = 'ungrouped';
+
+/** The report key `__game.inspectNextFrame()` adds for the frame it inspected (InspectFrame). */
+export const INSPECT_FRAME = '__frame';
+
+/**
+ * The frame an inspection was taken on: its snapshot tick, whether the game was paused, what the
+ * scene pass submitted (renderer.info) and the least it had to (submissionFloor).
+ */
+export interface InspectFrame {
+  tick: number;
+  paused: boolean;
+  calls: number;
+  triangles: number;
+  floorCalls: number;
+  floorTriangles: number;
+}
 
 export interface EntityRef {
   group: 'building' | 'unit' | 'alien' | 'wreck';
@@ -80,12 +96,21 @@ function materialNames(m: Material | Material[]): string[] {
   return (Array.isArray(m) ? m : [m]).map((x) => x.name || x.type);
 }
 
-/** Every drawn mesh under `root` (visible, count > 0), with world instance matrices. */
+/** Whether the renderer draws a mesh with these materials at all (three.js skips a hidden material). */
+function drawable(m: Material | Material[]): boolean {
+  return (Array.isArray(m) ? m : [m]).some((x) => x.visible !== false);
+}
+
+/**
+ * Every drawn mesh under `root` (visible, count > 0, at least one material not hidden), with world
+ * instance matrices. A mesh whose materials are all hidden is not drawn (W24 review: hidden model
+ * materials left the coverage the performance gate reads unchanged).
+ */
 export function drawnMeshes(root: Object3D): DrawnMesh[] {
   root.updateMatrixWorld(true);
   const out: DrawnMesh[] = [];
   root.traverseVisible((o) => {
-    if (!(o instanceof Mesh)) return;
+    if (!(o instanceof Mesh) || !drawable(o.material)) return;
     if (o.name.startsWith('terrain/') || o.name === 'sky') return;
     // an unnamed mesh is reported by its type and parent, so an `ungrouped` entry can be traced
     const name = o.name || `(${o.type} in ${o.parent?.name || 'an unnamed group'})`;
@@ -109,6 +134,32 @@ export function drawnMeshes(root: Object3D): DrawnMesh[] {
     }
   });
   return out;
+}
+
+/**
+ * The least the main scene pass must submit for `root`: one draw call per visible mesh that has a
+ * drawable material, is not frustum-culled (frustumCulled false, so three.js always submits it)
+ * and has instances, and its triangles (instances × triangles per instance; multi-material and
+ * wireframe meshes count a call and no triangles). Shadow maps and frustum-culled meshes only add
+ * to what the renderer reports, so `renderer.info` for the scene pass must be at least this.
+ */
+export function submissionFloor(root: Object3D): { calls: number; triangles: number } {
+  let calls = 0;
+  let triangles = 0;
+  root.traverseVisible((o) => {
+    if (!(o instanceof Mesh) || o.frustumCulled || !drawable(o.material)) return;
+    const g = o.geometry;
+    let instances = 1;
+    if (o instanceof InstancedMesh) instances = o.count;
+    else if (g instanceof InstancedBufferGeometry) instances = Number.isFinite(g.instanceCount) ? g.instanceCount : 0;
+    if (instances <= 0) return;
+    calls++;
+    const m = o.material as Material | Material[];
+    if (Array.isArray(m) || (m as Material & { wireframe?: boolean }).wireframe) return;
+    const n = Math.min(g.index ? g.index.count : (g.attributes.position?.count ?? 0), g.drawRange.count);
+    triangles += Math.floor(n / 3) * instances;
+  });
+  return { calls, triangles };
 }
 
 /** Per kind name: what was drawn on the entities of that kind. */

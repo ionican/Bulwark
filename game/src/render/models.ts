@@ -330,8 +330,9 @@ export class ModelRenderer {
   readonly counts: ModelCounts = { full: 0, middle: 0, simple: 0, icon: 0, culled: 0 };
   /**
    * Run 2b activity of what is on screen (scripts/check-render.mjs): running totals of frames in
-   * which a visible builder beams, a visible turret fires (flash or beam), a visible shot flies, a
-   * visible alien attacks, and a visible gate's doors open or close. `now` is this frame's flags.
+   * which a build or reclaim beam, a shot in flight, or a muzzle flash or on-screen turret beam was
+   * committed for drawing (effects.ts activity), an attacking alien was drawn, and a gate drawn as a
+   * model had its doors opening or closing. `now` is this frame's flags.
    */
   readonly activity = { frames: 0, beaming: 0, firing: 0, shots: 0, attacking: 0, doorOpening: 0, doorClosing: 0 };
   readonly activityNow = { beaming: false, firing: false, flash: false, shots: false, attacking: false, doorOpening: false, doorClosing: false };
@@ -713,6 +714,7 @@ export class ModelRenderer {
     const time = f.time ?? { t: 0, dt, reset: false };
     const reset = this.anim.begin(snap.tick, time);
     this.effects.begin(this.camPos, cam, this.wppd, this.anim.t, this.anim.dt, reset);
+    this.effects.visible = this.visibleAt;
     this.drawBuildings(f);
     this.drawDeposits();
     this.drawUnits(f.units, dt, snap);
@@ -722,8 +724,12 @@ export class ModelRenderer {
     this.effects.commit();
     const A = this.activity;
     A.frames++;
-    N.beaming = this.effects.activity.beams > 0;
-    N.shots = this.effects.activity.shots > 0;
+    // beams, shots and flashes as committed for drawing this frame (effects.ts activity)
+    const E = this.effects.activity;
+    N.beaming = E.beams > 0;
+    N.shots = E.shots > 0;
+    N.flash = E.flashes > 0;
+    N.firing = N.flash || E.turretBeams > 0;
     if (N.beaming) A.beaming++;
     if (N.firing) A.firing++;
     if (N.shots) A.shots++;
@@ -770,10 +776,6 @@ export class ModelRenderer {
         this.counts.culled++;
         continue;
       }
-      const N = this.activityNow;
-      if (P.beam) N.firing = true;
-      if (P.doorDelta > 1e-6) N.doorOpening = true;
-      else if (P.doorDelta < -1e-6) N.doorClosing = true;
       const d = this.dist(cx, top, cz);
       const th = kind === B.wall ? THRESHOLDS.wall : kind === B.gate ? THRESHOLDS.gate : W17_BUILDING_MODEL.has(kind) ? W17_THRESHOLDS : THRESHOLDS.turret;
       const lv = this.level(this.lv.b, this.lv.bId, slot, id, d, th);
@@ -790,10 +792,10 @@ export class ModelRenderer {
         this.buildingIcon(kind, r, snap, cx, top, cz, fw, fh, P.yaw);
         continue;
       }
-      if (P.flash) {
-        this.effects.flash(P.mx, P.my, P.mz, P.dx, P.dy, P.dz, kind === B.heavy, lv <= 1);
-        N.firing = N.flash = true;
-      }
+      // a gate drawn as a model with its doors moving this frame (the leaves are drawn below)
+      if (P.doorDelta > 1e-6) this.activityNow.doorOpening = true;
+      else if (P.doorDelta < -1e-6) this.activityNow.doorClosing = true;
+      if (P.flash) this.effects.flash(P.mx, P.my, P.mz, P.dx, P.dy, P.dz, kind === B.heavy, lv <= 1);
       if (kind === B.smelter && P.working) {
         // the model's chimney tops; the smelter is drawn unturned and unscaled at (cx, top, cz) (drawBuilding)
         const k = this.chimneys;
@@ -1191,15 +1193,18 @@ export class ModelRenderer {
         this.counts.culled++;
         continue;
       }
+      // an attacking alien counts once it is drawn this frame (icon or model, below)
+      let attacking = false;
       if (!this.activityNow.attacking && this.snap) {
         const sr = slot < this.aSnapRow.length ? this.aSnapRow[slot]! : -1;
-        if (sr >= 0 && this.snap.aliens.id[sr] === id && this.snap.aliens.cols.state[sr] === AS_ATTACKING) this.activityNow.attacking = true;
+        attacking = sr >= 0 && this.snap.aliens.id[sr] === id && this.snap.aliens.cols.state[sr] === AS_ATTACKING;
       }
       const lv = this.level(this.lv.a, this.lv.aId, slot, id, this.dist(x, y, z), W17_THRESHOLDS);
       this.tally(lv);
       const heading = T.heading[slot]!;
       if (lv === ICON_LEVEL) {
         this.icon(ALIEN_ICON[kind]!, x, y + 0.4, z, ak.radius / ALIEN_SCALE, ICON_PX.alien, heading);
+        if (attacking) this.activityNow.attacking = true;
         continue;
       }
       // tilt to the ground (W21), then the heading; each part at its pivot with its motion
@@ -1214,6 +1219,7 @@ export class ModelRenderer {
         _m2.multiplyMatrices(_m, pt.pivot).multiply(motionAt(pt.motion, phase, seed, _mot));
         this.w17.push(pt.batch, _m2.elements);
       }
+      if (attacking) this.activityNow.attacking = true;
     }
   }
 

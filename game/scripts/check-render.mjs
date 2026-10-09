@@ -58,6 +58,7 @@ import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { homedir, loadavg } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { judgeSamples } from './benchGate.mjs';
 import { ART_REF, screenshot } from './shots.mjs';
 
 const GAME = fileURLToPath(new URL('..', import.meta.url));
@@ -84,6 +85,7 @@ const note = (msg) => {
   report.push(msg);
   console.log(msg);
 };
+const check = (ok, pass, failMsg) => (ok ? note(`ok   ${pass}`) : fail(failMsg));
 
 function agentBrowser() {
   const onPath = spawnSync('agent-browser', ['--version'], { encoding: 'utf8' });
@@ -379,9 +381,11 @@ const ROLES_JS = `(async () => {
  * sustain step (aliens back to 160, a new wall run if the runs are done, the shuttle turned round
  * every 7 s through the south gate between z 58.5 and 74.5, each end 7 tiles from it, a temporary
  * turret re-dropped when one has expired) and a sample of __game.activity (deltas) and
- * __game.inspectNextFrame (entities drawn per kind: covered of entities).
+ * __game.inspectNextFrame (entities drawn per kind: covered of entities; the frame's tick, pause
+ * state and scene-pass submissions). The gate's negative checks: `pauseAt` pauses the game at that
+ * second, `hideAt` hides every model material from that second (both undone at the end).
  */
-const MEASURE_JS = (seconds) => `(async () => {
+const MEASURE_JS = (seconds, { pauseAt = 0, hideAt = 0 } = {}) => `(async () => {
   const g = __game;
   const B = window.__bench;
   const R = { times: [], samples: [] };
@@ -408,16 +412,20 @@ const MEASURE_JS = (seconds) => `(async () => {
       const id = [...B.builders, ...B.droppers].find((e) => !(performance.now() - (B.dropped[e] ?? -1e9) < 76000));
       if (id !== undefined) { g.cmd.dropTurret(id); B.dropped[id] = performance.now(); }
     }
+    if (${pauseAt} && s === ${pauseAt} && !g.paused) g.control.pause();
+    if (${hideAt} && s === ${hideAt}) g.hideModelMaterials(true);
     // sample
     const a = g.activity;
     const d = {};
     for (const k of ['beaming', 'firing', 'shots', 'attacking', 'doorOpening', 'doorClosing']) d[k] = a[k] - prev[k];
     prev = a;
     // inspected inside the next frame, against the entities that frame was drawn from
-    const { ${UNGROUPED}: ungrouped, ...rep } = await g.inspectNextFrame();
-    R.samples.push({ s, d, cov: Object.fromEntries(Object.entries(rep).map(([k, e]) => [k, [e.covered, e.entities]])), alive, ungrouped: ungrouped?.meshes ?? [] });
+    const { ${UNGROUPED}: ungrouped, __frame: frame, ...rep } = await g.inspectNextFrame();
+    R.samples.push({ s, d, cov: Object.fromEntries(Object.entries(rep).map(([k, e]) => [k, [e.covered, e.entities]])), alive, ungrouped: ungrouped?.meshes ?? [], frame });
   }
   on = false;
+  if (${hideAt}) g.hideModelMaterials(false);
+  if (${pauseAt} && g.paused) g.control.pause();
   R.drawCalls = g.drawCalls;
   R.lod = g.lodLevelCounts;
   return R;
@@ -450,32 +458,10 @@ async function measurePose(label, rig, zoomOut) {
   const avg = iv.length / secs;
   const low = 1000 / (worst.slice(0, n1).reduce((a, b) => a + b, 0) / n1);
   const cost = js('__game.renderCost(15)');
-  const problems = [];
   const window = R.samples.filter((x) => x.s > 5);
-  // the workload must be visible: entities actually drawn (covered), every second
-  for (const x of window) {
-    const c = (k) => x.cov[k]?.[0] ?? 0;
-    const sum = (ks) => ks.reduce((a, k) => a + c(k), 0);
-    if (zoomOut) {
-      const short = Object.entries(x.cov).filter(([, [cov, ent]]) => cov < ent).map(([k, [cov, ent]]) => `${k} ${cov}/${ent}`);
-      if (short.length) problems.push(`second ${x.s}: workload not visible (not all drawn: ${short.join(', ')})`);
-    } else {
-      const miss = [];
-      if (sum(ALIENS) < 100) miss.push(`aliens ${sum(ALIENS)} < 100`);
-      if (sum(TURRETS) < 15) miss.push(`turrets ${sum(TURRETS)} < 15`);
-      if (c('engineer') < 10) miss.push(`engineers ${c('engineer')} < 10`);
-      if (c('commander') < 1) miss.push('no commander');
-      const kinds = [...BUILDING_KINDS, ...ALIENS].filter((k) => c(k) < 1);
-      if (kinds.length) miss.push(`not drawn: ${kinds.join(', ')}`);
-      if (miss.length) problems.push(`second ${x.s}: workload not visible (${miss.join('; ')})`);
-    }
-    if (x.ungrouped.length) problems.push(`second ${x.s}: drawn meshes with no entity group: ${x.ungrouped.join(', ')}`);
-    if (x.alive < 150) problems.push(`second ${x.s}: ${x.alive} aliens alive (< 150)`);
-    const idle = ['beaming', 'firing', 'attacking', 'shots'].filter((k) => !(x.d[k] > 0));
-    if (idle.length) problems.push(`second ${x.s}: scene not active (no visible ${idle.join(', ')})`);
-  }
-  const doors = window.reduce((a, x) => [a[0] + x.d.doorOpening, a[1] + x.d.doorClosing], [0, 0]);
-  if (!(doors[0] > 0 && doors[1] > 0)) problems.push(`scene not active: door opening frames ${doors[0]}, closing frames ${doors[1]} in the 20 s`);
+  // the workload must be live, visible and active every second (scripts/benchGate.mjs)
+  // doors: only at the game camera; zoomed out every gate is an icon, so no door is drawn there
+  const problems = judgeSamples(window, { zoomOut, aliens: ALIENS, turrets: TURRETS, buildingKinds: BUILDING_KINDS, doors: !zoomOut });
   const perf = zoomOut ? avg >= GATE.zoomAvg : avg >= GATE.gameAvg && low >= GATE.gameLow;
   if (!perf) problems.push(zoomOut ? `${avg.toFixed(1)} fps average < ${GATE.zoomAvg}` : `${avg.toFixed(1)} fps average / ${low.toFixed(1)} 1%-low (gate ${GATE.gameAvg} / ${GATE.gameLow})`);
   const last = window[window.length - 1];
@@ -484,9 +470,42 @@ async function measurePose(label, rig, zoomOut) {
   note(
     `benchmark ${label}: ${avg.toFixed(1)} fps average, ${low.toFixed(1)} 1%-low (mean of the slowest 1% of ${iv.length} frame intervals), longest frame ${worst[0].toFixed(1)} ms; ` +
       `load average ${loadStart.toFixed(2)} at start, ${loadEnd.toFixed(2)} at end; forced-complete frame ${cost.fullMs.toFixed(2)} ms (terrain ${cost.terrainMs.toFixed(2)}, post ${cost.postMs.toFixed(2)}); draw calls ${R.drawCalls}; ` +
-      `LOD ${JSON.stringify(R.lod)}; visible (drawn/in snapshot) ${visible}; activity frames in the 20 s ${JSON.stringify(act)}; inspect sampled once a second (its cost is in the frame times)`,
+      `LOD ${JSON.stringify(R.lod)}; last sample: tick ${last?.frame?.tick}, scene pass ${last?.frame?.calls} draw calls / ${last?.frame?.triangles} triangles (floor ${last?.frame?.floorCalls} / ${last?.frame?.floorTriangles}); visible (drawn/in snapshot) ${visible}; activity frames in the 20 s ${JSON.stringify(act)}; inspect sampled once a second (its cost is in the frame times)`,
   );
   return { label, avg, low, loadStart, loadEnd, problems };
+}
+
+/**
+ * The gate's negative checks (W24 review), on the live benchmark scene at the game camera, 6 s each:
+ * a control window must show none of the faults below; a game paused from second 3 must fail as
+ * paused or not advancing; model materials hidden from second 3 must fail as not visible (no
+ * engineer and no alien drawn). Only the problems these checks are about are compared: a 6 s
+ * window can lack door frames or an activity, a temporary turret can expire and be re-dropped, and
+ * the commander can fall.
+ */
+async function gateNegatives() {
+  camera(BENCH_CAMERA);
+  await frames(30);
+  const FAULT = /game paused|not advancing|scene pass submitted|no frame record|aliens 0 < 100|engineers 0 < 10/;
+  const run = (opts) => {
+    const R = js(MEASURE_JS(6, opts));
+    return judgeSamples(R.samples, { zoomOut: false, aliens: ALIENS, turrets: TURRETS, buildingKinds: BUILDING_KINDS, doors: false }).filter((p) => FAULT.test(p));
+  };
+  const control = run({});
+  check(control.length === 0, 'gate negative checks: the 6 s control window has no pause, held-tick, visibility or submission fault', `gate control window: ${control.join(' | ')}`);
+  const paused = run({ pauseAt: 3 });
+  await until('running again', '__game.paused === false', 10);
+  check(
+    paused.some((p) => /game paused|not advancing/.test(p)) && !paused.some((p) => /second [12]: /.test(p)),
+    `gate negative check: a pause from second 3 fails the gate (${paused.slice(0, 3).join(' | ')})`,
+    `gate negative check: a pause from second 3 was not caught as intended: ${JSON.stringify(paused)}`,
+  );
+  const hidden = run({ hideAt: 3 });
+  check(
+    hidden.some((p) => /second [3-6]: workload not visible \(aliens 0 < 100; .*engineers 0 < 10/.test(p)) && !hidden.some((p) => /second [12]: /.test(p)),
+    `gate negative check: model materials hidden from second 3 fail the gate (${hidden.slice(0, 2).map((p) => p.slice(0, 160)).join(' | ')})`,
+    `gate negative check: hidden model materials were not caught as intended: ${JSON.stringify(hidden)}`,
+  );
 }
 
 /** A pose through the gate, with the load-average retry rule. */
@@ -624,7 +643,7 @@ async function run2b() {
   await mouseDrag(a.x, a.y, b.x, b.y, 'left', 8, false);
   const drag = js('__game.dragPreview');
   const dw = js('__game.inspectPreview()')['overlay/drag/wire'];
-  if (!drag || !dw || dw.instances < drag.build.length) fail(`W27: mid-drag wall wireframes: plan ${JSON.stringify(drag?.build?.length)} tiles, wires ${JSON.stringify(dw)}`);
+  if (!drag || !dw || dw.instances < drag.build.length) fail(`W27: mid-drag wall wireframes: plan ${JSON.stringify(drag?.build?.length)} tiles, wires ${JSON.stringify(dw)}; build mode ${JSON.stringify(js('__game.buildMode'))}, selected ${JSON.stringify(js('__game.selected').map((u) => u.kindName ?? u.id))}, paused ${js('__game.paused')}, drag from ${JSON.stringify(a)} to ${JSON.stringify(b)}`);
   else note(`ok   W27: mid wall drag: ${drag.build.length} tiles planned, ${dw.instances} wall wireframe instances (${dw.geometries} wall pieces)`);
   await shot('w27-wall-drag-preview');
   key('Escape', 'Escape');
@@ -639,6 +658,11 @@ async function run2b() {
   });
   if (missing.length) fail(`screenshots missing or not written by this run: ${missing.join(', ')}`);
   else note(`ok   ${SHOTS_2B.length} run 2b and W27 screenshots written to ${shots2b}`);
+
+  // ---- the gate's negative checks, last: 18 s more of the battle would change the scene the
+  // screenshots and W27 use (the commander can fall)
+  await gateNegatives();
+  errorsNow('gate negative checks');
 }
 
 /** W24 run 2a: map 1, the sandbox inventory, input, the stress scene and the walking benchmark. */

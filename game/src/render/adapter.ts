@@ -24,6 +24,12 @@ export interface PassTiming {
   passes: Record<string, number>;
   /** CPU ms of the whole render call. */
   renderMs: number;
+  /**
+   * Draw calls and triangles each pass submitted in the last frame (renderer.info deltas around the
+   * pass; the scene pass includes its shadow maps). The run 2b gate compares the scene pass with
+   * what the scene graph says must be drawn (render/inspect.ts submissionFloor).
+   */
+  submitted: Record<string, { calls: number; triangles: number }>;
 }
 
 export interface RenderAdapter {
@@ -67,7 +73,7 @@ export function createRenderer(mode: RenderMode, quality: Quality = 'medium'): R
   let cssW = 1;
   let cssH = 1;
   const listeners: Array<(q: Quality, spec: QualitySpec) => void> = [];
-  const timing: PassTiming = { passes: {}, renderMs: 0 };
+  const timing: PassTiming = { passes: {}, renderMs: 0, submitted: {} };
   const dpr = () => Math.min(window.devicePixelRatio || 1, mode === 'greybox' ? 2 : QUALITY[q].maxDpr);
 
   const applyQuality = () => {
@@ -109,8 +115,11 @@ export function createRenderer(mode: RenderMode, quality: Quality = 'medium'): R
           const inner = pass.render.bind(pass);
           pass.render = (...args: Parameters<typeof pass.render>) => {
             const t0 = performance.now();
+            const c0 = r.info.render.calls;
+            const tr0 = r.info.render.triangles;
             inner(...args);
             timing.passes[name] = (timing.passes[name] ?? 0) + performance.now() - t0;
+            timing.submitted[name] = { calls: r.info.render.calls - c0, triangles: r.info.render.triangles - tr0 };
           };
         }
         applyQuality();
@@ -133,11 +142,13 @@ export function createRenderer(mode: RenderMode, quality: Quality = 'medium'): R
       if (!scene || !camera) return;
       r.info.reset();
       for (const k of Object.keys(timing.passes)) timing.passes[k] = 0;
+      timing.submitted = {};
       const t0 = performance.now();
       if (post) post.render(dt);
       else {
         r.render(scene, camera);
         timing.passes.scene = performance.now() - t0;
+        timing.submitted.scene = { calls: r.info.render.calls, triangles: r.info.render.triangles };
       }
       timing.renderMs = performance.now() - t0;
     },

@@ -6,7 +6,7 @@
 // ?greybox=1 (W13's greybox renderer, for comparison), ?quality=high (default medium).
 // The scenario shown is the one in the snapshot: loading a save switches to the save's scenario.
 
-import { PerspectiveCamera } from 'three';
+import { Mesh, PerspectiveCamera, type Material } from 'three';
 import { createRenderer, type Quality } from './render/adapter.ts';
 import { measureRenderCost } from './render/cost.ts';
 import { Orbit, applyRig, clampRig, pitchFor, worldPerPixel, type Rig } from './render/cameraRig.ts';
@@ -20,7 +20,7 @@ import { waitingCounts, waitingState } from './render/waiting.ts';
 import { DragPreview, inspectDrag } from './render/dragPreview.ts';
 import { beltLineTiles, dragLabel, planDrag, type DragPlan, type DragView } from './dragPlan.ts';
 import { groundHeight } from './render/ground.ts';
-import { drawnMeshes, entitiesOf, inspectScene } from './render/inspect.ts';
+import { INSPECT_FRAME, drawnMeshes, entitiesOf, inspectScene, submissionFloor, type InspectFrame } from './render/inspect.ts';
 import { LOD_THRESHOLDS } from './render/lod.ts';
 import { Interpolator, type MobileView } from './render/interp.ts';
 import { maxStepPerTick } from './mobileStep.ts';
@@ -180,8 +180,17 @@ if (warmupOn) {
 loading.remove();
 /** Startup: ms from navigation start to the first visible frame, and the longest frame in the 10 s after it. */
 const startup = { loadingMs: -1, longestFrameMs: 0, windowDone: false, frames: 0 };
-/** `__game.inspectNextFrame()` callers, answered inside the next frame straight after the scene update. */
-let inspectWaiters: Array<(r: ReturnType<typeof inspectScene>) => void> = [];
+/**
+ * `__game.inspectNextFrame()` callers. The scene is inspected inside the next frame straight after
+ * the scene update, and the answer goes out after that frame is rendered, with the frame's record
+ * (render/inspect.ts InspectFrame: tick, pause state, scene-pass submissions and their floor).
+ */
+type Inspected = ReturnType<typeof inspectScene> & { [INSPECT_FRAME]?: InspectFrame };
+/** __game.hideModelMaterials: the entity groups whose materials it hides, and each hidden material's own setting. */
+const MODEL_GROUPS = new Set(['building', 'unit', 'alien', 'wreck']);
+const hiddenMaterials = new Map<Material, boolean>();
+let inspectWaiters: Array<(r: Inspected) => void> = [];
+let inspectPending: { rep: ReturnType<typeof inspectScene>; tick: number; waiters: Array<(r: Inspected) => void> } | null = null;
 /** The effect clock (render/anim.ts): frame time × speed, 0 while paused, reset on a new world. */
 const effectClock = new EffectClock();
 
@@ -1043,11 +1052,9 @@ function frame(now: number) {
       rig.distance > LOD_THRESHOLDS[1]!,
     );
     if (inspectWaiters.length) {
-      // the views and the scene are the ones just drawn: no snapshot can arrive in between
-      const rep = inspectScene(scene, entitiesOf(snap, interp.aliens, interp.units));
-      const ws = inspectWaiters;
+      // the views and the scene are the ones about to be drawn: no snapshot can arrive in between
+      inspectPending = { rep: inspectScene(scene, entitiesOf(snap, interp.aliens, interp.units)), tick: snap.tick, waiters: inspectWaiters };
       inspectWaiters = [];
-      for (const w of ws) w(rep);
     }
   }
   if (queueBench) {
@@ -1062,8 +1069,16 @@ function frame(now: number) {
   updateDragPreview();
   updateGhost();
   updateMs = performance.now() - tUpdate;
+  const floor = inspectPending ? submissionFloor(scene) : null;
   adapter.render(dt);
   drawCalls = adapter.drawCalls();
+  if (inspectPending && floor) {
+    const sub = adapter.timing.submitted.scene ?? { calls: drawCalls, triangles: adapter.triangles() };
+    const f: InspectFrame = { tick: inspectPending.tick, paused: !!runnerInfo?.paused, calls: sub.calls, triangles: sub.triangles, floorCalls: floor.calls, floorTriangles: floor.triangles };
+    const out: Inspected = Object.assign(inspectPending.rep, { [INSPECT_FRAME]: f });
+    for (const w of inspectPending.waiters) w(out);
+    inspectPending = null;
+  }
   frames++;
   if (snap) startupFrame(now);
   frameCpu.push(performance.now() - cpu0);
@@ -1597,7 +1612,25 @@ const game = {
    * entities it was drawn from match (between frames a new snapshot can re-point the interpolated
    * views to aliens spawned since, not yet drawn).
    */
-  inspectNextFrame: () => new Promise<ReturnType<typeof inspectScene>>((res) => inspectWaiters.push(res)),
+  inspectNextFrame: () => new Promise<Inspected>((res) => inspectWaiters.push(res)),
+  /**
+   * W24 review, the gate's negative check (scripts/check-render.mjs): hides every material of every
+   * mesh that draws an entity (userData.group building, unit, alien or wreck), or restores them.
+   * Returns the number of meshes changed.
+   */
+  hideModelMaterials: (hide: boolean) => {
+    let n = 0;
+    scene.traverse((o) => {
+      if (!(o instanceof Mesh) || !MODEL_GROUPS.has(o.userData.group)) return;
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+        if (hide && !hiddenMaterials.has(m)) hiddenMaterials.set(m, m.visible);
+        m.visible = hide ? false : (hiddenMaterials.get(m) ?? m.visible);
+      }
+      n++;
+    });
+    if (!hide) hiddenMaterials.clear();
+    return n;
+  },
   /**
    * GPU+CPU cost by forced-completion timing (render/cost.ts): blocks of `frames` renders of each
    * configuration (the ground, the post stack and each post pass on and off), in 7 interleaved
