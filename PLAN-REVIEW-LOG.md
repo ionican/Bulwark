@@ -212,3 +212,50 @@ Codex GPT-6.1 Sol · high, thread 01a11f0b-309b-7152-b852-f36cb9e1c7d7, base `60
 ## Run 2b — plan (`/spec`, 2026-10-09)
 
 Plan section "Run 2b" drafted by Claude from the outline and findings 1, 2, 9, 11, 12, after W25c closed at `dc28343`. Walking and discontinuity resets already landed (`fe171f0`, W25c) and are out of scope. Frozen Verify confirmed red on the current tree (no `test/w24r2b-*` files; vitest exits 1). One Codex plan round (MAX_ROUNDS 1, Richard's one-plan-review rule), GPT-6.1 Sol · xhigh.
+
+## Round 1 — Codex (run 2b plan; GPT-6.1 Sol · xhigh, thread 01a11f8a-9dba-7202-8fa0-3a3dce32b18e)
+
+Run 2b needs revision. I ran read-only probes; the full Verify command was not run because it installs dependencies and writes build output.
+
+1. **The machine flags are wrong.** Generators produce income when complete and never receive `BF_ACTIVE`; powered machines retain that flag even with zero energy. Probes returned generator `active:false, energyIncome:5`, and smelter `active:true, starved:true, work:0`. See [economy.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/economy.ts:33) and [conveyor.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/conveyor.ts:161).  
+   **Fix:** Drive generators by `BF_COMPLETE`; require positive upkeep for machine motion, preferably deriving its rate from snapshot work progress.
+
+2. **“Every projectile” is impossible with these snapshots, including at 1×.** Turrets fire before projectiles move; a nearby shot can hit and be removed within that same tick. The probe produced projectile counts `0 → 1 → 0`, so neither surrounding snapshot contained it. Worker batching loses further shots and firing flags. See [world.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/world.ts:359), [combat.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/combat.ts:329), and [worker.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/worker.ts:20).  
+   **Fix:** Promise every *observed projectile row*, and explicitly make shots, impacts and flashes best-effort at every speed.
+
+3. **The existing interpolator does not provide a smooth simulation clock.** Its alpha always spans 100 ms, irrespective of speed. Deriving time from its snapshot pair at 3× produced a **66.7 ms simulation-time jump at one arrival**—longer than W21’s 60 ms muzzle flash. See [interp.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/interp.ts:134) and [particles.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/fx/particles.ts:416).  
+   **Fix:** Define a small effect clock with explicit pause, speed and world-reset handling, and test batched and equal-tick snapshots.
+
+4. **The promised global reset signal is unavailable through mobile cuts.** World replacement is private; exposed cuts belong to individual mobile rows. A same-tick replacement with no mobiles produced no cuts, while newly spawned aliens also produce cuts without replacing the world. Resetting the flash marker to an empty value additionally risks replaying restored `BF_FIRING` as a fresh shot. See [interp.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/interp.ts:88).  
+   **Fix:** Pass the existing worker world epoch separately, reset the clock with zero delta, and seed flash markers to the restored tick.
+
+5. **The benchmark does not sustain its required activity.** Temporary turrets expire after **30 seconds**; the two poses consume at least 50 seconds, and a load retry extends that further. Builders finish their finite work, and gates stop moving once fully open or shut. A healthy renderer can therefore fail “scene not active”. See [world.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/world.ts:696), [combat.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/combat.ts:413), and [gate.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/w23/walls/gate.ts:55).  
+   **Fix:** Recreate the fixture for each pose/retry, sustain builder work and temporary turrets, and require door transitions over the measurement window rather than every second.
+
+6. **The visibility gate can pass with most of the workload culled.** Requiring one visible representative of each kind does not require 150 visible aliens, 20 visible turrets or 12 visible engineers. Activity elsewhere in the world can satisfy the counters. The inspector already distinguishes snapshot population from covered entities. See [PLAN.md](/Users/codepanda/Projects/worktrees/bulwark-w24/PLAN.md:229) and [inspect.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/inspect.ts:40).  
+   **Fix:** Freeze numerical visible-count minima for each pose and sample them throughout measurement.
+
+7. **Scene compilation does not warm the complete rendering path.** The game renders through a composer containing shadows, ambient occlusion, bloom and SMAA; `compileAsync(scene, camera)` covers scene materials, leaving other first-use work. An after-load maximum below 250 ms also does not establish improvement or prove precompile ran. See [adapter.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/adapter.ts:137) and [post.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/workshop/stress/post.ts:37).  
+   **Fix:** Warm one representative complete adapter frame behind loading, then compare equivalent cold launches and report loading time separately.
+
+8. **The aim criterion contradicts the ported mechanism.** It forbids movement outside yaw/pitch pivots, but the pinion deliberately rotates on its own pivot in response to yaw. See [turretPose.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/stress/turretPose.ts:90).  
+   **Fix:** Assert each moving pivot’s intended transform and require only static parts to remain fixed.
+
+**Verify does reject today’s unbuilt tree, but that is only an existence check.** Running its test step returned exit 1: `zsh:1: no matches found: test/w24r2b-*.test.ts`. The current command also names absent `w26` tests, which can keep zsh failing after 2b is built. The existing render script merely reports performance and writes screenshots only with `--shots`. See [Verify](/Users/codepanda/Projects/worktrees/bulwark-w24/PLAN.md:252) and [check-render.mjs](/Users/codepanda/Projects/worktrees/bulwark-w24/game/scripts/check-render.mjs:42).  
+**Fix:** Remove the undeclared W26 dependency, quote the test filter, require the benchmark and screenshot artefacts, and demonstrate that the new behavioural tests fail against the pre-2b renderer. For each animation, assert change over advancing time; presence alone can pass existing beams and static models.
+
+VERDICT: REVISE
+### Claude's response
+
+All eight accepted; PLAN.md revised.
+1 → generator by `BF_COMPLETE`; smelter/assembler/shredder by `BF_ACTIVE` and not `BF_STARVED`, rate from `work` advancing.
+2 → every *observed* projectile row drawn; shots, impacts and flashes best-effort at every speed.
+3 → own effect clock (frame time × speed, 0 when paused, clamped 100 ms, zero-delta restart on reset); tests with batched and same-tick snapshots.
+4 → global reset from the worker world epoch (`RunnerInfo.world`) or the tick going backwards, passed directly; flash markers seeded to the restored tick.
+5 → fixture recreated per pose and retry; long re-queued builder work; temporary turrets re-dropped; an engineer walks through a gate; doors judged per 20 s window.
+6 → numeric visible minima at the game camera (100 aliens, 15 turrets, 10 engineers) sampled every second; activity counters count visible entities only.
+7 → a full composer warm-up frame behind loading, `?warmup=0` to compare, two cold launches, loading time reported separately.
+8 → aim asserts each moving pivot's intended transform (yaw, pitch, pinion); static parts fixed.
+Verify → run under `bash -c` with quoted vitest filters; check-render always writes and requires the 2b screenshots; behavioural tests must change over effect-clock time; the calling session runs the tests-first commit against the pre-2b renderer to prove they fail. Not accepted: "remove the undeclared W26 dependency" — W26 (idle units column, Richard 2026-10-09) was added to PLAN.md during the review and is built in the same run, so its tests stay in this Verify.
+
+No round 2 (Richard's one-plan-review rule). Run 2b and W26 locked.
