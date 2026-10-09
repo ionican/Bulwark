@@ -6,7 +6,7 @@
 //   node scripts/check-queue.mjs [--shots <dir>] [--no-build] [--origin <url>]
 //
 // Builds this tree and serves it with `vite preview` on strict port 8824 (or uses --origin, e.g.
-// the dev server), then drives agent-browser (session `w25`, 1440 × 900) in the sandbox:
+// the dev server), then drives agent-browser (session `w26`, 1440 × 900) in the sandbox:
 //   - selects two engineers (a click, then Shift + click), picks the gun turret (key 2), holds
 //     Shift and places three turrets with three clicks: build mode stays open while Shift is held
 //     and closes when it is released
@@ -33,6 +33,14 @@
 //     orders must update in ≤ 1 ms CPU per frame unchanged and ≤ 5 ms on a change (medians) and hold
 //     60 fps (display-capped; ≥ 58 measured); 256 × 64 must stay within the instance cap and 200
 //     labels and never take 100 ms for an update. Both are reported in full.
+//   - W26, the idle units column (a fresh sandbox; real mouse, Shift by agent-browser's keydown as
+//     above): with the commander and two engineers idle the column shows commander × 1 and
+//     engineer × 2; a click selects one engineer and the camera target moves to it (distance and
+//     tilt kept); a second click selects the other; Shift + click selects both; with the wall tool
+//     open, the clicks place nothing and order nothing (no map state changes); one engineer given a
+//     build order: the engineer count drops to 1 on the next snapshot. Screenshot
+//     w26-idle-column.png, written on every run (to --shots <dir>, else the vault's Bulwark Art
+//     Reference folder)
 //   - 0 console errors (a dash shader that fails to compile is one)
 // With --shots <dir> it also saves w25-queue-drag.png (mid-drag), gives the two engineers
 // different queues and saves w25-queue-lines.png (the two selected engineers' queue lines) and
@@ -40,19 +48,21 @@
 // It always stops the preview server and closes the agent-browser session. Exit 1 on any failure.
 
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const GAME = fileURLToPath(new URL('..', import.meta.url));
 const PORT = 8824;
-const SESSION = 'w25';
+const SESSION = 'w26';
 const args = process.argv.slice(2);
 const arg = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : null);
 const shotsDir = arg('--shots');
 const ORIGIN = arg('--origin') ?? `http://127.0.0.1:${PORT}`;
 const serve = !arg('--origin');
+/** W26's screenshot is written on every run: to --shots, else the vault's art reference folder. */
+const w26Shots = shotsDir ?? join(homedir(), 'Library', 'Mobile Documents', 'iCloud~md~obsidian', 'Documents', "Rick's World", 'Resources', 'Bulwark Art Reference');
 
 const failures = [];
 const fail = (msg) => {
@@ -474,6 +484,90 @@ async function run() {
   errorsNow('W25c queue overlay benchmark');
 }
 
+/** W26: the idle units column, in a fresh sandbox. */
+async function runW26() {
+  const started = Date.now();
+  ab('open', `${ORIGIN}/?sandbox=1`);
+  ab('set', 'viewport', '1440', '900');
+  await until('the sandbox ready', 'window.__game?.ready === true', 120);
+  ab('errors', '--clear');
+  ab('console', '--clear');
+  await until('the idle column', `(() => { const c = __game.idleColumn; return c.find((b) => b.type === 'commander')?.count === 1 && c.find((b) => b.type === 'engineer')?.count === 2; })()`, 30).catch(() => null);
+  const col = js('__game.idleColumn');
+  const idle = js('__game.idle');
+  check(
+    col[0]?.type === 'commander' && col[0].shown && col[0].count === 1 && col[1]?.type === 'engineer' && col[1].shown && col[1].count === 2,
+    'W26: the column shows commander × 1 then engineer × 2',
+    `W26: the column shows ${JSON.stringify(col)} (idle ${JSON.stringify(idle)})`,
+  );
+  const button = (type) =>
+    js(`(() => {
+      const b = document.querySelector('.idle button[data-idle="${type}"]');
+      if (!b || b.style.display === 'none') return null;
+      const r = b.getBoundingClientRect();
+      const x = r.x + r.width / 2, y = r.y + r.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      return { x, y, hit: !!hit && b.contains(hit) };
+    })()`);
+  const eb = button('engineer');
+  if (!eb || !eb.hit) throw new Error(`W26: the engineer button is missing or covered: ${JSON.stringify(eb)}`);
+  const mapState = () => JSON.stringify({ buildings: js('__game.list("building").length'), queue: js('__game.buildQueue.length'), runs: js('__game.runs.length'), orders: js('__game.queues.map((q) => q.orders.length)') });
+  const rig0 = js('__game.camera.get()');
+  const unitAt = (id) => js(`(() => { const u = __game.list('unit').find((u) => u.id === ${id}); return u ? { x: u.x, z: u.z } : null; })()`);
+  await click(eb.x, eb.y);
+  await frames(5);
+  const s1 = js('__game.selected.map((s) => s.id)');
+  const rig1 = js('__game.camera.get()');
+  // map state the next clicks must not change, with the wall tool open (it needs a builder
+  // selected, so after the first click; a click reaching the map would now place a wall)
+  press('1');
+  await frames(5);
+  const before = mapState();
+  const u1 = s1.length === 1 ? unitAt(s1[0]) : null;
+  check(
+    s1.length === 1 && idle.engineer.includes(s1[0]) && u1 && Math.hypot(rig1.x - u1.x, rig1.z - u1.z) < 0.6 && rig1.distance === rig0.distance && rig1.pitch === rig0.pitch,
+    `W26: a click selects engineer ${s1[0]} and centres the camera on it (target ${rig1.x.toFixed(1)}, ${rig1.z.toFixed(1)}; distance and tilt kept)`,
+    `W26: first click: selected ${JSON.stringify(s1)}, camera ${JSON.stringify(rig0)} → ${JSON.stringify(rig1)}, unit at ${JSON.stringify(u1)}`,
+  );
+  await click(eb.x, eb.y);
+  await frames(5);
+  const s2 = js('__game.selected.map((s) => s.id)');
+  const rig2 = js('__game.camera.get()');
+  const u2 = s2.length === 1 ? unitAt(s2[0]) : null;
+  check(
+    s2.length === 1 && idle.engineer.includes(s2[0]) && s2[0] !== s1[0] && u2 && Math.hypot(rig2.x - u2.x, rig2.z - u2.z) < 0.6,
+    `W26: a second click selects the other engineer (${s2[0]}) and centres on it`,
+    `W26: second click: selected ${JSON.stringify(s2)} after ${JSON.stringify(s1)}, camera ${JSON.stringify(rig2)}, unit at ${JSON.stringify(u2)}`,
+  );
+  shiftDown();
+  await click(eb.x, eb.y);
+  shiftUp();
+  await frames(5);
+  const s3 = js('__game.selected.map((s) => s.id)').sort((a, b) => a - b);
+  check(JSON.stringify(s3) === JSON.stringify([...idle.engineer].sort((a, b) => a - b)), `W26: Shift + click selects both idle engineers (${s3.join(', ')})`, `W26: Shift + click selected ${JSON.stringify(s3)}, idle ${JSON.stringify(idle.engineer)}`);
+  const after = mapState();
+  check(after === before && js('__game.buildMode') === 'wall', 'W26: clicks on the column change no map state (wall tool open: nothing placed, nothing ordered)', `W26: map state ${before} → ${after}, build mode ${js('__game.buildMode')}`);
+  press('Escape');
+  await frames(3);
+  // the screenshot (the column on screen, the game running)
+  mkdirSync(w26Shots, { recursive: true });
+  const shotPath = join(w26Shots, 'w26-idle-column.png');
+  ab('screenshot', shotPath);
+  note(`screenshot ${shotPath}`);
+  // one engineer gets an order: the count drops on the next snapshot
+  const busy = idle.engineer[0];
+  const order = js(`(async () => { const r = await __game.buildRun([60, 70], [63, 70], 1, { ids: [${busy}] }); return r; })()`);
+  await until('the engineer count to drop', `__game.idleColumn.find((b) => b.type === 'engineer')?.count === 1`, 10).catch(() => null);
+  const col2 = js('__game.idleColumn');
+  check(
+    order.ok && col2.find((b) => b.type === 'engineer')?.count === 1 && !js('__game.idle').engineer.includes(busy),
+    `W26: engineer ${busy} given a build order leaves the column (engineer × 1)`,
+    `W26: after the order ${JSON.stringify(order)}: column ${JSON.stringify(col2)}`,
+  );
+  check(existsSync(shotPath) && statSync(shotPath).size > 0 && statSync(shotPath).mtimeMs >= started, `W26: ${shotPath} written`, `W26: screenshot ${shotPath} not written`);
+  errorsNow('W26 idle column');
+}
+
 async function main() {
   let server = null;
   if (serve && !args.includes('--no-build')) {
@@ -501,6 +595,7 @@ async function main() {
     }
     note(`origin: ${ORIGIN}${serve ? " (this tree's build)" : ''}`);
     await run();
+    await runW26();
   } catch (e) {
     fail(String(e?.message ?? e));
   } finally {
