@@ -1,19 +1,22 @@
 // W27: the pulsing wireframe placement preview (render/ghost.ts, render/dragPreview.ts,
 // render/preview.ts), read from the scene graph.
-//   1 for every building kind, the preview is the full-detail model the renderer draws for that
-//     kind (the same geometry objects as the placed building's batches), drawn as wireframe, with
-//     the same world bounds as a placed complete building at the same tile and direction
+//   1 for every building kind, the preview is drawn as line segments (feature edges, not a
+//     triangle wireframe) of the low-detail level the renderer draws for that kind (W27b, Richard
+//     2026-10-09: "could do with less detail"; models.ts previewLevel), with the world bounds of a
+//     placed complete building at the same tile and direction within 0.05 tiles, and fewer line
+//     vertices than the old full-detail wireframe for every turret kind
 //   2 the wireframe's opacity pulses with real time (it is UI: no game clock involved)
 //   3 validity by shape: solid outline and a tick when allowed, dashed outline and a cross when not
 //   4 a 10-tile wall drag across one blocked tile: 9 tiles carry wall wireframes, 1 cross; pools
 //     stable (no allocation) across 100 frames
 
 import { describe, expect, it } from 'vitest';
-import { Box3, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, Scene, Vector3, type BufferGeometry, type Object3D } from 'three';
+import { Box3, InstancedMesh, LineBasicMaterial, LineSegments, Matrix4, Mesh, MeshBasicMaterial, Scene, Vector3, type BufferGeometry, type Object3D } from 'three';
 import { B, BUILDING_KINDS, buildingFootprint } from '../src/sim/kinds.ts';
 import { World } from '../src/sim/world.ts';
 import { DragPreview } from '../src/render/dragPreview.ts';
 import { Ghost } from '../src/render/ghost.ts';
+import { TURRET_KINDS, previewLevel } from '../src/render/models.ts';
 import { BLOCKED_COLOUR, inspectPreview } from '../src/render/preview.ts';
 import { KIND_SPOTS } from './w24r2a-fixtures.ts';
 import { drawAt, nextEpoch, renderer, snapAt, terrain } from './w24r2b-fixtures.ts';
@@ -60,46 +63,92 @@ const isWire = (o: Mesh) => o.name === 'overlay/preview/wire';
 
 const SPOTS: Array<[string, number, number, number]> = [...KIND_SPOTS.map(([k, x, y, d]) => [k, x, y, d ?? 0] as [string, number, number, number]), ['gate', 72, 66, 0]];
 
-describe('W27 criterion 1: the preview is the full-detail model, as wireframe, at the placed building’s bounds', () => {
+/** The preview's line segments under `root` named `name`: the source geometries' uuids, the world points drawn, and whether any wire is a triangle mesh. */
+function lines(root: Object3D, name: string): { sources: string[]; points: Vector3[]; box: Box3; meshes: number; material: boolean } {
+  root.updateMatrixWorld(true);
+  const out = { sources: [] as string[], points: [] as Vector3[], box: new Box3(), meshes: 0, material: true };
+  root.traverseVisible((o) => {
+    if (o.name !== name) return;
+    if (o instanceof Mesh) out.meshes++;
+    if (!(o instanceof LineSegments)) return;
+    if (!(o.material instanceof LineBasicMaterial)) out.material = false;
+    out.sources.push(...((o.userData.sources as string[]) ?? []));
+    const a = o.geometry.attributes.position!.array as Float32Array;
+    const { start, count } = o.geometry.drawRange;
+    for (let i = start; i < start + Math.min(count, a.length / 3 - start); i++) {
+      const p = new Vector3(a[i * 3], a[i * 3 + 1], a[i * 3 + 2]).applyMatrix4(o.matrixWorld);
+      out.points.push(p);
+      out.box.expandByPoint(p);
+    }
+  });
+  return out;
+}
+
+/** Triangles of a geometry (three.js draws `wireframe: true` as 6 line vertices per triangle). */
+const triangles = (g: BufferGeometry) => Math.floor((g.index ? g.index.count : g.attributes.position!.count) / 3);
+
+describe('W27 criterion 1 (W27b): the preview is the low-detail model as feature-edge lines, at the placed building’s bounds', () => {
   it('covers every building kind', () => {
     expect(SPOTS.map(([k]) => k).sort()).toEqual([...BUILDING_KINDS].sort());
   });
 
   for (const [k, tx, ty, dir] of SPOTS) {
-    it(`${k}: same geometry objects, wireframe, bounds within 0.01 tiles`, () => {
+    it(`${k}: line segments of the preview level's geometry, bounds within 0.05 tiles`, () => {
       const kind = B[k as keyof typeof B];
       const [fw, fh] = buildingFootprint(kind);
       const w = new World(1, terrain, { waves: false });
       const id = w.placeBuilding(kind, tx, ty, true, dir, fw, fh);
       expect(id, `place ${k}`).toBeGreaterThanOrEqual(0);
-      drawAt(r, snapAt(w, 10), { t: 0, dt: 0, world: nextEpoch() });
-      const placed = drawn(r.group, isModel);
-      expect(placed.instances).toBeGreaterThan(0);
+      const level = previewLevel(kind);
+      expect([0, 1, 2], `${k}: preview level`).toContain(level);
+      // the placed building at full detail (its bounds) and at the preview's level (its geometries)
+      drawAt(r, snapAt(w, 10), { t: 0, dt: 0, world: nextEpoch(), level: 0 });
+      const full = drawn(r.group, isModel);
+      expect(full.instances).toBeGreaterThan(0);
+      drawAt(r, snapAt(w, 11), { t: 0, dt: 0, world: nextEpoch(), level });
+      const atLevel = drawn(r.group, isModel);
 
       const ui = new Scene();
       const ghost = new Ghost(ui, terrain, r);
       ghost.show(kind, tx, ty, dir, true, 0.05, 0, 0);
-      const wire = drawn(ui, isWire);
-      expect(wire.instances, `${k}: wireframe instances`).toBeGreaterThan(0);
-      expect(wire.wire, `${k}: drawn as wireframe`).toBe(true);
-      const ids = (s: Set<BufferGeometry>) => [...s].map((g) => g.uuid).sort();
-      expect(ids(wire.geometries), `${k}: the placed model's geometry objects`).toEqual(ids(placed.geometries));
+      const wire = lines(ui, 'overlay/preview/wire');
+      expect(wire.meshes, `${k}: no triangle wireframe mesh`).toBe(0);
+      expect(wire.points.length, `${k}: line vertices`).toBeGreaterThan(0);
+      expect(wire.points.length % 2, `${k}: segments (pairs of vertices)`).toBe(0);
+      expect(wire.material, `${k}: line material`).toBe(true);
+      const ids = (s: Iterable<BufferGeometry>) => [...new Set([...s].map((g) => g.uuid))].sort();
+      expect([...new Set(wire.sources)].sort(), `${k}: the geometry objects of the placed model at level ${level}`).toEqual(ids(atLevel.geometries));
       for (const c of ['min', 'max'] as const)
-        for (const a of ['x', 'y', 'z'] as const) expect(Math.abs(wire.box[c][a] - placed.box[c][a]), `${k}: bounds ${c}.${a}`).toBeLessThan(0.01);
-      // the old simple model is gone: nothing else visible but the outline and the mark
+        for (const a of ['x', 'y', 'z'] as const) expect(Math.abs(wire.box[c][a] - full.box[c][a]), `${k}: bounds ${c}.${a}`).toBeLessThan(0.05);
+      // nothing else visible but the outline and the mark
       const others: string[] = [];
       ui.traverseVisible((o) => {
-        if (o instanceof Mesh && !isWire(o) && !o.name.startsWith('overlay/preview/')) others.push(o.name || o.type);
+        if ((o instanceof Mesh || o instanceof LineSegments) && o.name !== 'overlay/preview/wire' && !o.name.startsWith('overlay/preview/')) others.push(o.name || o.type);
       });
       expect(others).toEqual([]);
     });
   }
+
+  it('every turret kind draws fewer line vertices than the old full-detail triangle wireframe', () => {
+    const counts: string[] = [];
+    for (const kind of TURRET_KINDS.keys()) {
+      const [k, tx, ty, dir] = SPOTS.find(([name]) => B[name as keyof typeof B] === kind)!;
+      const before = r.previewRun(kind, [[tx, ty, dir]], [], 0).reduce((n, c) => n + 6 * triangles(c.geometry), 0);
+      const ui = new Scene();
+      new Ghost(ui, terrain, r).show(kind, tx, ty, dir, true, 0.05, 0, 0);
+      const after = lines(ui, 'overlay/preview/wire').points.length;
+      counts.push(`${k} ${before} → ${after}`);
+      expect(after, `${k}: preview line vertices`).toBeGreaterThan(0);
+      expect(after, `${k}: line vertices ${before} → ${after}`).toBeLessThan(before);
+    }
+    process.stdout.write(`W27b turret line vertices (full-detail wireframe → preview edges): ${counts.join(', ')}\n`);
+  });
 });
 
 const wireOpacity = (root: Object3D, name = 'overlay/preview/wire'): number => {
   let op = -1;
   root.traverseVisible((o) => {
-    if (op < 0 && o instanceof Mesh && o.name === name) op = (o.material as MeshBasicMaterial).opacity;
+    if (op < 0 && (o instanceof Mesh || o instanceof LineSegments) && o.name === name) op = (o.material as MeshBasicMaterial | LineBasicMaterial).opacity;
   });
   return op;
 };
@@ -174,38 +223,36 @@ describe('W27 criterion 4: the wall drag preview', () => {
     for (let x = 50; x < 60; x++) if (x !== 55) build.push([x, 60, 0]);
     const tiles = { kind: B.wall, build, skipped: [[55, 60]] as Array<[number, number]> };
     dp.update(tiles, 0);
-    ui.updateMatrixWorld(true);
-    const wires: Vector3[] = [];
     let crosses = 0;
     ui.traverseVisible((o) => {
-      if (!(o instanceof InstancedMesh)) return;
-      const a = o.instanceMatrix.array as Float32Array;
-      if (o.name === 'overlay/drag/wire') for (let i = 0; i < o.count; i++) wires.push(new Vector3(a[i * 16 + 12], a[i * 16 + 13], a[i * 16 + 14]));
-      if (o.name === 'overlay/drag/skip-cross') crosses += o.count;
+      if (o instanceof InstancedMesh && o.name === 'overlay/drag/skip-cross') crosses += o.count;
     });
+    // W27b: the wires are line segments; a tile carries a wireframe when a line vertex lies inside it
+    const wire = lines(ui, 'overlay/drag/wire');
+    expect(wire.meshes, 'no triangle wireframe mesh').toBe(0);
     const tilesWith = new Set<number>();
-    for (const p of wires) {
-      const hit = build.find(([x, z]) => Math.abs(p.x - (x + 0.5)) <= 0.75 && Math.abs(p.z - (z + 0.5)) <= 0.75);
+    for (const p of wire.points) {
+      const hit = build.find(([x, z]) => p.x > x + 0.02 && p.x < x + 0.98 && p.z > z + 0.02 && p.z < z + 0.98);
       if (hit) tilesWith.add(hit[0]);
-      expect(Math.hypot(p.x - 55.5, p.z - 60.5), 'no wireframe on the blocked tile').toBeGreaterThan(0.45);
+      expect(Math.abs(p.x - 55.5) < 0.45 && Math.abs(p.z - 60.5) < 0.45, `no wireframe on the blocked tile (${p.x.toFixed(2)}, ${p.z.toFixed(2)})`).toBe(false);
     }
     expect(tilesWith.size).toBe(9);
     expect(crosses).toBe(1);
-    // the wire geometry is the W23 wall parts' full-detail geometry, and the plinth a placed wall
-    // gets on sloping ground (the same plinth rule as a placed building, as the single ghost)
-    const wallGeos = new Set<BufferGeometry>();
-    for (const p of r.parts.parts) if (p.asset === 'wall') for (const g of p.levels[0].values()) wallGeos.add(g);
+    // the wire geometry is the W23 wall parts' geometry at the wall's preview level, and the plinth
+    // a placed wall gets on sloping ground (the same plinth rule as a placed building and the ghost)
+    const wallGeos = new Set<string>();
+    for (const p of r.parts.parts) if (p.asset === 'wall') for (const g of p.levels[previewLevel(B.wall) as 0 | 1 | 2].values()) wallGeos.add(g.uuid);
     r.group.traverse((o) => {
-      if (o instanceof InstancedMesh && o.name === 'plinth') wallGeos.add(o.geometry);
+      if (o instanceof InstancedMesh && o.name === 'plinth') wallGeos.add(o.geometry.uuid);
     });
-    ui.traverse((o) => {
-      if (o instanceof InstancedMesh && o.name === 'overlay/drag/wire' && o.count > 0) expect(wallGeos.has(o.geometry)).toBe(true);
-    });
+    expect(wire.sources.length).toBeGreaterThan(0);
+    for (const g of wire.sources) expect(wallGeos.has(g), `wire source ${g}`).toBe(true);
     // pulsing in step with the ghost, and nothing allocated frame to frame
     const pool = () => {
       const out: string[] = [];
       ui.traverse((o) => {
         if (o instanceof InstancedMesh) out.push(`${o.uuid}:${o.instanceMatrix.count}:${(o.instanceMatrix.array as Float32Array).length}`);
+        if (o instanceof LineSegments) out.push(`${o.uuid}:${(o.geometry.attributes.position!.array as Float32Array).length}`);
       });
       return out.join(',');
     };
