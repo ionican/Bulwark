@@ -48,7 +48,8 @@
 // preview is in the scene at that tile and pulses; then a wall drag held mid-way carries wall
 // wireframes. W27b: the gun tool over a complete building: blocked, red lines, steady opacity.
 // Screenshots w27-wireframe-preview.png, w27-wireframe-preview-blocked.png and
-// w27-wall-drag-preview.png (same folder).
+// w27-wall-drag-preview.png (same folder). Selection depth: an engineer selected by a real click,
+// moved behind a complete gun turret, camera yaw 0 at distance 16: w24-selection-occluded.png.
 //
 // With --shots <dir> it also writes the run 2a screenshots (w24-2a2-*.png: game camera, the same
 // view tilted low, map edge, aliens close up, full zoom-out) there.
@@ -263,7 +264,7 @@ async function sandboxFixture() {
 
 /** The 2b and W27 screenshots are written on every run: to --shots, else the vault's art reference folder. */
 const shots2b = shotsDir ?? ART_REF;
-const SHOTS_2B = ['w24-2b-engineers-beaming', 'w24-2b-turret-recoil-flash', 'w24-2b-shots-in-flight', 'w24-2b-gate-open', 'w24-2b-strategic-zoom', 'w27-wireframe-preview', 'w27-wireframe-preview-blocked', 'w27-wall-drag-preview'];
+const SHOTS_2B = ['w24-2b-engineers-beaming', 'w24-2b-turret-recoil-flash', 'w24-2b-shots-in-flight', 'w24-2b-gate-open', 'w24-2b-strategic-zoom', 'w27-wireframe-preview', 'w27-wireframe-preview-blocked', 'w27-wall-drag-preview', 'w24-selection-occluded'];
 /** The benchmark's game camera over the base (pitch: the preset tilt for distance 50), and the full zoom-out. */
 const BENCH_CAMERA = { x: 68, z: 46, distance: 50, yaw: 0 };
 const BENCH_ZOOM = { x: 64, z: 64, distance: 200, yaw: 0 };
@@ -673,6 +674,52 @@ async function run2b() {
   ab('mouse', 'up', 'left');
   await frames(5);
   errorsNow('W27');
+
+  // ---- selection markers test depth: a selected engineer behind a complete gun turret with no
+  // building in the row behind it (camera yaw 0 looks towards -z: "behind" is the smaller-z side)
+  const gun = js(`(() => {
+    const all = __game.list('building');
+    const taken = (x, z) => all.some((o) => x >= o.tx && x < o.tx + o.fw && z >= o.ty && z < o.ty + o.fh);
+    const free = (b) => [0, 1].every((dx) => !taken(b.tx + dx, b.ty - 1));
+    const b = all.filter((b) => b.complete && b.kindName === 'gun' && free(b)).sort((p, q) => Math.hypot(p.tx - 60, p.ty - 46) - Math.hypot(q.tx - 60, q.ty - 46))[0];
+    return b ? { tx: b.tx, ty: b.ty, fw: b.fw, fh: b.fh } : null;
+  })()`);
+  const eng = js(`(() => { const u = __game.list('unit').find((u) => u.kindName === 'engineer' && u.id !== window.__bench?.shuttle); return u ? { id: u.id } : null; })()`);
+  if (!gun || !eng) fail(`selection depth: no complete gun turret (${JSON.stringify(gun)}) or engineer (${JSON.stringify(eng)})`);
+  else {
+    let sel = false;
+    for (let k = 0; !sel && k < 3; k++) {
+      const u = js(`(() => { const u = __game.list('unit').find((u) => u.id === ${eng.id}); return u ? { x: u.x, z: u.z } : null; })()`);
+      if (!u) break;
+      camera({ x: u.x, z: u.z, distance: 22, yaw: 0, pitch: (70 * Math.PI) / 180 });
+      await frames(10);
+      const s2 = js(`__game.screenOf('unit', ${eng.id})`);
+      await click(s2.x, s2.y);
+      sel = js('__game.selected').some((s) => s.id === eng.id);
+    }
+    const bx = gun.tx + gun.fw / 2;
+    const bz = gun.ty - 0.7;
+    js(`__game.cmd.move([${eng.id}], ${bx}, ${bz})`);
+    let at = null;
+    for (let k = 0; k < 40; k++) {
+      await sleep(500);
+      at = js(`(() => { const u = __game.list('unit').find((u) => u.id === ${eng.id}); return u ? { x: u.x, z: u.z } : null; })()`);
+      if (at && Math.hypot(at.x - bx, at.z - bz) < 0.4) break;
+    }
+    js(`(!__game.paused && __game.control.pause(), true)`);
+    // the game camera's yaw, closer than the benchmark pose so the brackets are large enough to see
+    camera({ x: bx, z: gun.ty + gun.fh / 2 + 1, distance: 16, yaw: 0, pitch: (40 * Math.PI) / 180 });
+    await frames(10);
+    const behind = at && at.z < gun.ty && Math.abs(at.x - bx) < gun.fw / 2;
+    if (!sel) fail(`selection depth: could not select engineer ${eng.id} by clicking it (selected ${JSON.stringify(js('__game.selected'))})`);
+    else if (!behind) fail(`selection depth: engineer ${eng.id} at ${JSON.stringify(at)} is not behind the gun turret at ${gun.tx},${gun.ty}`);
+    else note(`ok   selection depth: engineer ${eng.id} selected at ${at.x.toFixed(2)}, ${at.z.toFixed(2)}, behind the gun turret at ${gun.tx},${gun.ty}; camera yaw 0, distance 16, pitch 40°`);
+    await shot('w24-selection-occluded');
+    // the gate's negative checks that follow need the game running
+    js(`(__game.paused && __game.control.pause(), true)`);
+    await until('running', '__game.paused === false', 10);
+  }
+  errorsNow('selection depth');
 
   // ---- every 2b and W27 screenshot written by this run
   const missing = SHOTS_2B.filter((n) => {
