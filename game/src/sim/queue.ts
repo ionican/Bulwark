@@ -6,13 +6,14 @@
 //
 // Ownership is the queues themselves: a site is held while any live unit's queue refers to it, by a
 // build order on the site or a run order on the wall run it belongs to. When orders are replaced
-// (an order without `queue`) or removed (dequeue, clearQueue), dropOrphans removes each reserved
+// (an order without `queue`) or removed (dequeue, clearQueue, stop), dropOrphans removes each reserved
 // site those orders referred to that no queue holds any more; it cost nothing, so there is no
 // refund. A started site stays as a part-built structure, as in SupCom. A wall run whose last run
 // order went loses its reserved tiles (those no unit holds by an assist order) and its run-table
 // slot, as cancelRun does; its started tiles stay. A gate site is never removed this way: its walls
 // were converted when the gate was ordered (gate.ts), so removing the site would destroy them.
-// `stop`, a unit's death and an unreachable site are unchanged from W24: their sites stay.
+// W25b (Richard, 9 Oct: "stop should clear them"): `stop` clears by the same rule. A unit's death
+// and an unreachable site are unchanged from W24: their sites stay.
 //
 // Also here: the queue as the snapshot carries it (order kind, target, run id, position).
 

@@ -14,7 +14,8 @@
 // command before anything is created. Every run tile is an ordinary wall site, created reserved:
 // it costs nothing and blocks nobody until build power first reaches it (schema.ts BF_STARTED);
 // resources drain while each tile is built. Runs are always tier 1 (upgrades are the paid path).
-// `stop` on the builders leaves the remaining reserved tiles; `cancelRun` removes them.
+// `cancelRun` removes the remaining reserved tiles. W25b: so does `stop` on the run's last builders
+// (queue.ts dropOrphans, as when their run orders are replaced).
 
 import { B, buildingInfo } from './kinds.ts';
 import { BF_COMPLETE, constructionState, isReserved } from './schema.ts';

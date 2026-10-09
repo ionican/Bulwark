@@ -13,6 +13,8 @@ import { Orbit, applyRig, clampRig, pitchFor, worldPerPixel, type Rig } from './
 import { Gestures } from './input.ts';
 import { Ghost } from './render/ghost.ts';
 import { DASH_NAMES, QueueOverlay, canvasLabel, inspectQueue } from './render/queueView.ts';
+import { WaitOverlay, canvasWaitLabel, inspectWaiting } from './render/waitView.ts';
+import { waitingCounts, waitingState } from './render/waiting.ts';
 import { DragPreview, inspectDrag } from './render/dragPreview.ts';
 import { beltLineTiles, dragLabel, planDrag, type DragPlan, type DragView } from './dragPlan.ts';
 import { groundHeight } from './render/ground.ts';
@@ -133,6 +135,8 @@ const scene = view.scene;
 const entities = view.entities;
 const ghost = new Ghost(scene, terrain);
 const queueView = new QueueOverlay(scene, terrain, canvasLabel());
+// W25b: hourglass markers on sites (and labels on builders) waiting for a short resource.
+const waitView = new WaitOverlay(scene, terrain, canvasWaitLabel());
 const dragPreview = new DragPreview(scene, terrain);
 const hud = new Hud();
 
@@ -877,6 +881,7 @@ function frame(now: number) {
     );
   }
   if (snap) queueView.update({ camera, viewportHeight: vh, snapshot: snap, units: interp.units, selection });
+  if (snap) waitView.update({ camera, viewportHeight: vh, snapshot: snap, units: interp.units });
   updateDragPreview();
   updateGhost();
   updateMs = performance.now() - tUpdate;
@@ -906,6 +911,7 @@ function frame(now: number) {
       income: [g[G_INCOME]!, g[G_INCOME + 1]!, g[G_INCOME + 2]!],
       spend: [g[G_SPEND]!, g[G_SPEND + 1]!, g[G_SPEND + 2]!],
       short: [0, 1, 2].map((k) => (g[G_SHORT]! & (1 << k)) !== 0),
+      waiting: waitingCounts(waitView.state),
       parts: g[G_PARTS]!,
       commanderHp: g[G_COMMANDER_HP]!,
       // Sandbox tuning scales the commander's maximum (unit table, commander row, hp field).
@@ -1455,6 +1461,16 @@ const game = {
       refused: dragPlan.refused,
       drawn: inspectDrag(scene),
     };
+  },
+  /** W25b: sites and builders waiting for a short resource, from the snapshot (render/waiting.ts). */
+  get waiting() {
+    return interp.curr ? waitingState(interp.curr) : null;
+  },
+  /** W25b: the waiting markers read back from the scene graph (render/waitView.ts inspectWaiting). */
+  inspectWaiting: () => inspectWaiting(scene),
+  /** The resource readout as drawn (text). */
+  get resourceReadout() {
+    return document.querySelector('.hud.res')?.textContent ?? '';
   },
   /** The queue drawing read back from the scene graph (render/queueView.ts inspectQueue). */
   inspectQueue: () => inspectQueue(scene),

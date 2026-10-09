@@ -18,7 +18,7 @@
 // The bytes depend on simulation state only (no timings), so equal state gives byte-identical
 // snapshots — the determinism tests compare them.
 
-import { ALIEN_FIELDS, BUILDING_FIELDS, PROJECTILE_FIELDS, UNIT_FIELDS, WRECK_FIELDS } from './schema.ts';
+import { ALIEN_FIELDS, BUILDING_FIELDS, G_SHORT, PROJECTILE_FIELDS, UNIT_FIELDS, WRECK_FIELDS } from './schema.ts';
 import { BYTES, makeArray, type AnyTypedArray, type ArrayFor, type FieldSpec, type Table } from './table.ts';
 import { SCENARIO_NAMES, type World } from './world.ts';
 import { STAT_COUNT } from './stats.ts';
@@ -67,7 +67,7 @@ export const G_PARTS = 9;
 export const G_COMMANDER_HP = 10;
 export const G_UPKEEP = 11;
 export const G_BUILD_EFF = 12;
-export const G_SHORT = 13;
+export { G_SHORT }; // 13, defined in schema.ts (render code reads it)
 export const G_KILLS = 14;
 export const G_SALVAGE_KILLS = 15;
 export const G_RECLAIMED = 16;

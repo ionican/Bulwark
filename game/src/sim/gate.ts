@@ -12,10 +12,9 @@
 // stops them cutting diagonally past a gate's corners. Each footprint tile's flow cost uses the
 // gate's hit points ÷ depth, so breaking the gate is charged once along a route (flowfield.ts).
 
-import { B, BUILDING_INFO, buildingInfo } from './kinds.ts';
+import { B, buildingInfo } from './kinds.ts';
 import { constructionState } from './schema.ts';
 import { gateStats } from './balance.ts';
-import type { Cost } from './kinds.ts';
 import type { World } from './world.ts';
 
 export const GATE_WIDTH = 3;
@@ -162,14 +161,5 @@ export function inGateCorridor(tx: number, ty: number, dir: number, x: number, z
 /** Tier-1 maximum hit points of a gate with `tiles` footprint tiles (wall hp × tiles), before tuning. */
 export const gateBaseHp = (tiles: number): number => gateStats(tiles).hp;
 
-/** Cost and build-power-seconds to build a gate with `tiles` footprint tiles. */
-export function gateBuildWork(tiles: number): { cost: Cost; time: number } {
-  const g = gateStats(tiles);
-  return { cost: g.cost, time: g.time };
-}
-
-/** Cost and time of upgrading a gate from `tier`: the wall's tier upgrade × footprint tiles. */
-export function gateUpgradeWork(tiles: number, tier: number): { cost: Cost; time: number } {
-  const t = BUILDING_INFO.wall.tiers![tier - 1]!;
-  return { cost: [t.cost[0] * tiles, t.cost[1] * tiles, t.cost[2] * tiles], time: t.time * tiles };
-}
+// Gate build and upgrade work: kinds.ts (pure, so the render thread can read it; W25b).
+export { gateBuildWork, gateUpgradeWork } from './kinds.ts';

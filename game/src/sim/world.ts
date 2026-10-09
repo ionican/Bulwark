@@ -62,13 +62,13 @@ import { dequeueIndex, dropOrphans } from './queue.ts';
 import { validateCommand, upgradeProblem } from './validate.ts';
 import { COMMANDER_WRECK_SALVAGE, RESEARCH, RESEARCH_INDEX, SANDBOX_RESPAWN_TICKS, callEarlyBonus, EXTRACTOR_BOOST, FIELD_ENG_TURRET_COOLDOWN } from './balance.ts';
 import { map1 } from '../../../model/data/map1.ts';
-import { START_ENGINEERS, TICK_HZ } from './kinds.ts';
+import { START_ENGINEERS, TICK_HZ, siteWork } from './kinds.ts';
 import { TB_HP, Tuning, alienMaxHp, resetTune, setTune, tuneFieldIndex, unitMaxHp } from './tuning.ts';
 import { visitRings } from './grid.ts';
 import { createWorld } from './scenarios.ts';
 import { STAT_COUNT, recordKilled, recordSpawned } from './stats.ts';
 import { RUN_CAPACITY, cancelRun, createRun, planRun, stepRuns, type WallRun } from './runs.ts';
-import { gateBaseHp, gateBuildWork, gateDepth, gateFootprint, gateUpgradeWork, inGateCorridor, planGate } from './gate.ts';
+import { gateBaseHp, gateDepth, gateFootprint, inGateCorridor, planGate } from './gate.ts';
 import { WRECK_COMMANDER, applySpawnAt, clearAliens, clearWrecks, originRoutes, spawnPlaces, type SpawnOrigin } from './sandbox.ts';
 
 /** Orders a unit can hold queued; more are refused (validate.ts) rather than dropped. */
@@ -421,7 +421,7 @@ export class World {
 
   /**
    * Orders replaced or removed by the command being applied (giveOrder without `queue`, dequeue,
-   * clearQueue). Not saved: filled and drained within apply().
+   * clearQueue, stop). Not saved: filled and drained within apply().
    */
   private readonly dropped: Order[] = [];
 
@@ -469,9 +469,12 @@ export class World {
         break;
       }
       case 'stop':
+        // W25b (Richard: "stop should clear them"): the cleared orders go to `dropped`, so reserved
+        // sites no unit still has queued are removed, as for an unshifted replace (queue.ts).
         for (const id of cmd.ids) {
           const slot = this.units.slotForId(id);
           if (slot >= 0) {
+            this.dropped.push(...(this.orders[slot] ?? []));
             this.orders[slot] = [];
             this.paths[slot] = null;
             this.units.cols.state[slot] = US_IDLE;
@@ -780,16 +783,7 @@ export class World {
   /** Cost and BP·s of the work outstanding on a site: construction or an upgrade. */
   workOf(slot: number): { cost: Cost; time: number } {
     const c = this.buildings.cols;
-    const info = buildingInfo(c.kind[slot]!);
-    if (c.kind[slot] === B.gate) {
-      const tiles = c.fw[slot]! * c.fh[slot]!;
-      return c.flags[slot]! & BF_UPGRADING ? gateUpgradeWork(tiles, c.tier[slot]!) : gateBuildWork(tiles);
-    }
-    if (c.flags[slot]! & BF_UPGRADING) {
-      const t = info.tiers![c.tier[slot]! - 1]!;
-      return { cost: t.cost, time: t.time };
-    }
-    return { cost: info.cost, time: info.buildTime };
+    return siteWork(c.kind[slot]!, (c.flags[slot]! & BF_UPGRADING) !== 0, c.tier[slot]!, c.fw[slot]!, c.fh[slot]!);
   }
 
   private dropTempTurret(unitId: number): void {

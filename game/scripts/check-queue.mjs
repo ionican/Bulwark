@@ -21,6 +21,13 @@
 //     before release — 11 outlines, 2 skipped tiles with crosses, the label "11 tiles · 2 skipped ·
 //     1,100 mass · 1,650 energy"; after release it is gone and the reserved wall sites stand on
 //     exactly the previewed tiles; Esc mid-drag queues nothing
+//   - W25b, waiting for resources: free spending off, a real wall drag (no Shift) for both engineers at
+//     speed 3; once the mass runs out, every site being built carries an hourglass marker labelled
+//     "waiting for mass" and each of its builders the same label (read from the scene), and the
+//     resource readout says "▲SHORT · N sites waiting" on the MASS row; free spending back on
+//     clears the markers
+//   - W25b, Stop: the X key on the two engineers removes the run's reserved tiles and the run;
+//     its started tiles stay
 //   - 0 console errors
 // With --shots <dir> it also saves w25-queue-drag.png (mid-drag), gives the two engineers
 // different queues and saves w25-queue-lines.png (the two selected engineers' queue lines) and
@@ -365,6 +372,69 @@ async function run() {
     }
     errorsNow('screenshots');
   }
+
+  // ---- W25b: starved sites show that they wait, and Stop (X) clears the unstarted tiles
+  if (js('__game.paused')) js('(__game.control.pause(), true)'); // the screenshots pause the game
+  await until('running', '__game.paused === false', 10);
+  await selectEngineer(e1, false);
+  await selectEngineer(e2, true);
+  await until('free spending off', '__game.setUnlimited(false).then((r) => r.ok)', 10);
+  js('(__game.control.speed(3), true)');
+  const runsW = js('__game.runs.map((r) => r.id)');
+  press('1');
+  await frames(3);
+  // no Shift: the run replaces their queues, so it is what they build (and what Stop clears)
+  {
+    const a = tileScreen(52, 48);
+    const b = tileScreen(70, 48);
+    ab('mouse', 'move', String(Math.round(a.x)), String(Math.round(a.y)));
+    ab('mouse', 'down', 'left');
+    for (let k = 1; k <= 6; k++) {
+      ab('mouse', 'move', String(Math.round(a.x + ((b.x - a.x) * k) / 6)), String(Math.round(a.y + ((b.y - a.y) * k) / 6)));
+      await frames(2);
+    }
+    ab('mouse', 'up', 'left');
+  }
+  const waitRun = await until('the wall run', `__game.runs.find((r) => !${JSON.stringify(runsW)}.includes(r.id))?.id ?? null`, 10);
+  await until('mass short and a site waiting', `__game.pool.short.includes('mass') && (__game.waiting?.sites.length ?? 0) > 0`, 120);
+  await frames(10);
+  const ws = js('__game.waiting');
+  const drawn = js('__game.inspectWaiting()');
+  const markOk =
+    drawn.sites.length === ws.sites.length &&
+    drawn.sites.every((m) => m.text === 'waiting for mass' && m.icon === 'hourglass' && ws.sites.some((s) => s.id === m.site && Math.abs(s.x - m.x) < 1e-3 && Math.abs(s.z - m.z) < 1e-3)) &&
+    drawn.builders.length > 0 &&
+    drawn.builders.every((l) => l.text === 'waiting for mass' && l.icon === 'hourglass' && [e1, e2].includes(l.unit));
+  check(markOk, `mass ran out: ${drawn.sites.length} site(s) carry an hourglass marker "waiting for mass", ${drawn.builders.length} builder label(s) (scene)`, `waiting markers: state ${JSON.stringify(ws)}, scene ${JSON.stringify(drawn)}`);
+  await frames(20); // the readout refreshes every 250 ms
+  const massRow = js('__game.resourceReadout').split('\n')[0];
+  check(/^MASS .*▲SHORT · \d+ sites? waiting$/.test(massRow), `the readout marks mass: "${massRow.trim()}"`, `resource readout MASS row: "${massRow}"`);
+  if (shotsDir) {
+    const sites = ws.sites;
+    js(`(__game.camera.set({ x: ${sites[0].x}, z: ${sites[0].z + 3}, distance: 22, yaw: 0, pitch: ${(55 * Math.PI) / 180} }), true)`);
+    await frames(15);
+    await shot('waiting');
+  }
+  await until('free spending on', '__game.setUnlimited(true).then((r) => r.ok)', 10);
+  await frames(10);
+  const cleared = js('__game.inspectWaiting()');
+  check(cleared.sites.length === 0 && cleared.builders.length === 0, 'free spending back on: the waiting markers are gone', `markers after free spending on: ${JSON.stringify(cleared)}`);
+  // Stop (the X key) on both engineers: the run's reserved tiles and the run go, started tiles stay
+  const wallsBefore = js(`__game.list('building').filter((b) => b.kindName === 'wall' && b.ty === 48).map((b) => ({ id: b.id, state: b.state }))`);
+  press('x');
+  await until('the run gone', `!__game.runs.some((r) => r.id === ${waitRun})`, 10).catch(() => null);
+  await frames(5);
+  const wallsAfter = js(`__game.list('building').filter((b) => b.kindName === 'wall' && b.ty === 48).map((b) => ({ id: b.id, state: b.state }))`);
+  const startedBefore = wallsBefore.filter((b) => b.state !== 'reserved').map((b) => b.id);
+  const reservedBefore = wallsBefore.filter((b) => b.state === 'reserved').map((b) => b.id);
+  check(
+    reservedBefore.length > 0 && startedBefore.length > 0 && !js('__game.runs').some((r) => r.id === waitRun) && startedBefore.every((id) => wallsAfter.some((b) => b.id === id)) && wallsAfter.every((b) => b.state !== 'reserved'),
+    `X (Stop): ${reservedBefore.length} reserved tiles and the run removed, ${startedBefore.length} started tile(s) stay`,
+    `after X: before ${JSON.stringify(wallsBefore)}, after ${JSON.stringify(wallsAfter)}, runs ${JSON.stringify(js('__game.runs'))}`,
+  );
+  js('(__game.control.speed(1), true)');
+
+  errorsNow('W25b checks');
 }
 
 async function main() {

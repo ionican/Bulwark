@@ -73,30 +73,8 @@ export class Hud {
   }
 
   /** Resource pool, rates and shortages; text only ("SHORT" is a word, not a colour). */
-  updateEconomy(e: {
-    pool: number[];
-    income: number[];
-    spend: number[];
-    short: boolean[];
-    parts: number;
-    commanderHp: number;
-    commanderMax: number;
-    aliens: number;
-    kills: number;
-    upkeep: number;
-    lost: boolean;
-    won: boolean;
-  }): void {
-    const names = ['MASS  ', 'ENERGY', 'RARE  '];
-    const row = (k: number) =>
-      `${names[k]} ${e.pool[k]!.toFixed(k === 2 ? 1 : 0).padStart(7)} +${e.income[k]!.toFixed(1).padStart(5)}/s -${e.spend[k]!.toFixed(1).padStart(5)}/s${e.short[k] ? ' ▲SHORT' : ''}`;
-    this.res.textContent =
-      `${row(0)}\n${row(1)}\n${row(2)}\n` +
-      `PARTS ${e.parts.toFixed(0)}   COMMANDER ${Math.max(0, e.commanderHp).toFixed(0)}/${e.commanderMax}\n` +
-      `ALIENS ${e.aliens}   KILLS ${e.kills}` +
-      (e.upkeep < 0.999 ? `   ENERGY UPKEEP ${(e.upkeep * 100).toFixed(0)}%` : '') +
-      (e.lost ? '\n*** COMMANDER DESTROYED — MAP LOST ***' : '') +
-      (e.won ? '\n*** ALL WAVES DESTROYED — MAP WON ***' : '');
+  updateEconomy(e: EconomyReadout): void {
+    this.res.textContent = economyText(e);
   }
 
   showSelection(lines: string[]): void {
@@ -112,4 +90,43 @@ export class Hud {
   aboveSelection(): number {
     return this.sel.style.display === 'none' ? 8 : 8 + this.sel.offsetHeight + 6;
   }
+}
+
+export interface EconomyReadout {
+  pool: number[];
+  income: number[];
+  spend: number[];
+  short: boolean[];
+  /** W25b: sites waiting for each resource (render/waiting.ts); absent or 0: none. */
+  waiting?: number[];
+  parts: number;
+  commanderHp: number;
+  commanderMax: number;
+  aliens: number;
+  kills: number;
+  upkeep: number;
+  lost: boolean;
+  won: boolean;
+}
+
+/**
+ * The resource readout's text. A short resource is marked "▲SHORT" (a shape and a word, never
+ * colour) and, W25b, with how many sites are waiting for it: "▲SHORT · 3 sites waiting".
+ */
+export function economyText(e: EconomyReadout): string {
+  const names = ['MASS  ', 'ENERGY', 'RARE  '];
+  const waitNote = (k: number) => {
+    const n = e.waiting?.[k] ?? 0;
+    return n > 0 ? ` · ${n} site${n === 1 ? '' : 's'} waiting` : '';
+  };
+  const row = (k: number) =>
+    `${names[k]} ${e.pool[k]!.toFixed(k === 2 ? 1 : 0).padStart(7)} +${e.income[k]!.toFixed(1).padStart(5)}/s -${e.spend[k]!.toFixed(1).padStart(5)}/s${e.short[k] ? ` ▲SHORT${waitNote(k)}` : ''}`;
+  return (
+    `${row(0)}\n${row(1)}\n${row(2)}\n` +
+    `PARTS ${e.parts.toFixed(0)}   COMMANDER ${Math.max(0, e.commanderHp).toFixed(0)}/${e.commanderMax}\n` +
+    `ALIENS ${e.aliens}   KILLS ${e.kills}` +
+    (e.upkeep < 0.999 ? `   ENERGY UPKEEP ${(e.upkeep * 100).toFixed(0)}%` : '') +
+    (e.lost ? '\n*** COMMANDER DESTROYED — MAP LOST ***' : '') +
+    (e.won ? '\n*** ALL WAVES DESTROYED — MAP WON ***' : '')
+  );
 }

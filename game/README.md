@@ -65,12 +65,21 @@ Headless check (`test/fullmap.test.ts`, `test/plans.ts`): W12's balanced plan, p
 ## W25: build queue (Supreme Commander style)
 
 - **Per-unit queues** (`src/sim/queue.ts`): an order goes onto the queue of every unit selected when it was given; units that share an item build it together, each when it reaches that item in its own queue; a unit never works on an item it has not queued (except by an assist order).
-- **Shift appends, no Shift replaces**, for every order kind (build, wall run, gate, upgrade, move, assist, reclaim). When orders are replaced or removed, a reserved site no unit holds any more is removed (it cost nothing: no refund); a started site stays part-built; a wall run with no run order left loses its reserved tiles and its run-table slot. Exceptions: a gate site stays (its walls were converted when it was ordered); `stop`, a unit's death and an unreachable site leave sites as in W24.
+- **Shift appends, no Shift replaces**, for every order kind (build, wall run, gate, upgrade, move, assist, reclaim). When orders are replaced or removed, a reserved site no unit holds any more is removed (it cost nothing: no refund); a started site stays part-built; a wall run with no run order left loses its reserved tiles and its run-table slot. W25b: `stop` (X, or the Stop button) clears by the same rule (Richard, 9 Oct: "stop should clear them"). Exceptions: a gate site stays (its walls were converted when it was ordered); a unit's death and an unreachable site leave sites as in W24.
 - **Commands** `dequeue { id, index, expect? }` (`expect` names the item as the snapshot showed it, so a queue that moved on before the command's tick still loses the right item) and `clearQueue { ids }`; refusals come back through the final-result path.
 - **Snapshot** version 5: a queue section per unit (order kind, target id, run id, position; `queueOf`). Nothing on the render thread changes queues.
 - **Drawn** for the selected units only (`render/queueView.ts`): a line from the unit through each target in order, an arrowhead per target, a numbered label per target (one label listing the positions where selected units share an item); units are told apart by dash pattern (long, short, dash-dot), never colour. The **queue panel** (bottom left) lists each selected unit's queue with a remove control per item and Clear per unit, and names each unit's line style.
 - **Build tool**: stays open while Shift is held; releasing Shift after a Shift placement closes it (belts stay open, as before); Esc always closes it.
 - **Drag preview** (`dragPlan.ts`, `render/dragPreview.ts`): while a wall run or belt line is dragged, the planned tiles are drawn every frame from the simulation's own run planner (`runs.ts planRunOn`) on the latest snapshot: a solid outline on tiles that will be built, a dashed outline and a cross on tiles that will be skipped, and a label at the cursor (tiles, skipped, cost). Esc during the drag queues nothing.
+
+## W25b: waiting for resources
+
+Richard's "build seems to freeze here" (9 Oct) was the mass running out: the sandbox starts with about 600 mass and 1 mass/s income, a wall costs 100 mass, and once the pool is empty every site in progress shares that 1 mass/s, so three builders take about 300 s per three wall tiles while their beams stay on. The simulation was correct; the wait is now shown, by shape and words, never colour:
+
+- **Site marker** (`render/waiting.ts`, `render/waitView.ts`): every site with builders on it that got less than its full supply this tick (snapshot `builders` > 0, `eff` < 255) carries an hourglass and "waiting for mass" (or energy, rare, or several: the short resources the site's work draws, `kinds.ts siteWork` ∩ the snapshot's short mask). It appears in the first snapshot of the shortage and goes in the first snapshot after supply resumes. Reserved and unattended sites never carry it.
+- **Builder label**: each unit building a waiting site carries the same label over its head. Labels that would overlap on screen are lifted clear of each other.
+- **Resource readout**: the short resource's row ends "▲SHORT · N sites waiting".
+- `__game.waiting` (the derived state), `__game.inspectWaiting()` (the markers read from the scene), `__game.resourceReadout` (the readout text). Browser check: `scripts/check-queue.mjs` (real wall drag with free spending off, then X).
 
 ## Controls
 

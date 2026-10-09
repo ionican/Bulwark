@@ -296,3 +296,30 @@ export const UNIT_INFO: Record<UnitKind, UnitInfo> = {
 
 export const alienInfo = (kind: number): AlienInfo => ALIEN_INFO[ALIEN_KINDS[kind]!];
 export const unitInfo = (kind: number): UnitInfo => UNIT_INFO[UNIT_KINDS[kind]!];
+
+/** Cost and build-power-seconds to build a gate with `tiles` footprint tiles. */
+export function gateBuildWork(tiles: number): { cost: Cost; time: number } {
+  const g = gateStats(tiles);
+  return { cost: g.cost, time: g.time };
+}
+
+/** Cost and time of upgrading a gate from `tier`: the wall's tier upgrade × footprint tiles. */
+export function gateUpgradeWork(tiles: number, tier: number): { cost: Cost; time: number } {
+  const t = BUILDING_INFO.wall.tiers![tier - 1]!;
+  return { cost: [t.cost[0] * tiles, t.cost[1] * tiles, t.cost[2] * tiles], time: t.time * tiles };
+}
+
+/**
+ * Cost and BP·s of the work outstanding on a site, from columns both threads have: construction,
+ * or the upgrade from `tier` when `upgrading`. World.workOf drains by it; W25b, the render thread's
+ * waiting markers (render/waiting.ts) read from it which resources a site draws.
+ */
+export function siteWork(kind: number, upgrading: boolean, tier: number, fw: number, fh: number): { cost: Cost; time: number } {
+  if (kind === B.gate) return upgrading ? gateUpgradeWork(fw * fh, tier) : gateBuildWork(fw * fh);
+  const info = buildingInfo(kind);
+  if (upgrading) {
+    const t = info.tiers![tier - 1]!;
+    return { cost: t.cost, time: t.time };
+  }
+  return { cost: info.cost, time: info.buildTime };
+}

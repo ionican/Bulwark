@@ -124,6 +124,13 @@ export const UNIT_MOVING = US_MOVING;
  * W25: order kinds in the snapshot's queue section (snapshot.ts), one per units.ts Order type.
  * Here, not in snapshot.ts, because render code may import only the pure data modules.
  */
+/**
+ * Snapshot globals index of the short-resource mask (bit k: resource k got less than it asked for
+ * this tick). Here rather than with the other G_* in snapshot.ts so render code may read it
+ * (W25b waiting markers; render code imports only the pure simulation modules).
+ */
+export const G_SHORT = 13;
+
 export const Q_MOVE = 0;
 export const Q_BUILD = 1;
 export const Q_RUN = 2;
