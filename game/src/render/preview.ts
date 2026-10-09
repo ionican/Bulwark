@@ -96,3 +96,31 @@ export class WireframePool {
     return m;
   }
 }
+
+/**
+ * The wireframe previews as drawn (scripts read them back from the scene graph): per mesh name
+ * (`overlay/preview/wire`, `overlay/drag/wire`), the visible instances, the distinct geometries,
+ * the opacity, and the ground centre (x, z) of the instances' positions.
+ */
+export function inspectPreview(root: Object3D): Record<string, { instances: number; geometries: number; opacity: number; centre: [number, number] }> {
+  const out: Record<string, { instances: number; geometries: number; opacity: number; centre: [number, number] }> = {};
+  const geos = new Map<string, Set<string>>();
+  root.traverseVisible((o) => {
+    if (!(o instanceof InstancedMesh) || o.count <= 0 || (o.name !== 'overlay/preview/wire' && o.name !== 'overlay/drag/wire')) return;
+    const e = (out[o.name] ??= { instances: 0, geometries: 0, opacity: (o.material as MeshBasicMaterial).opacity, centre: [0, 0] });
+    const a = o.instanceMatrix.array as Float32Array;
+    for (let i = 0; i < o.count; i++) {
+      e.centre[0] += a[i * 16 + 12]!;
+      e.centre[1] += a[i * 16 + 14]!;
+    }
+    e.instances += o.count;
+    const set = geos.get(o.name) ?? new Set<string>();
+    set.add(o.geometry.uuid);
+    geos.set(o.name, set);
+  });
+  for (const [name, e] of Object.entries(out)) {
+    e.centre = [e.centre[0] / e.instances, e.centre[1] / e.instances];
+    e.geometries = geos.get(name)!.size;
+  }
+  return out;
+}

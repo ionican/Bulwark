@@ -458,7 +458,7 @@ export class Effects {
   }
 
   /** Every effect mesh drawn once at `p` (the warm-up frame compiles their programs), or back to none. */
-  prime(on: boolean, x = 0, y = 0, z = 0): void {
+  prime(on: boolean, x = 0, y = 0, z = 0, camera: Camera | null = null): void {
     if (!on) {
       for (const p of [this.buildPulses, this.reclaimPulses, this.tracers, this.alienShots, this.flashes]) {
         p.n = 0;
@@ -486,5 +486,6 @@ export class Effects {
     }
     this.particles.spawn({ type: PType.Smoke, x, y: y + 1, z, life: 1, s0: 0.5, s1: 1, r: 0.5, g: 0.5, b: 0.5, a: 0.5 });
     this.particles.spawn({ type: PType.Flash, x, y: y + 1, z, life: 1, s0: 0.5, s1: 1, r: 2, g: 2, b: 2, a: 1 });
+    if (camera) this.particles.update(0, camera);
   }
 }

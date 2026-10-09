@@ -23,7 +23,11 @@ import { LOD_THRESHOLDS } from './render/lod.ts';
 import { Interpolator, type MobileView } from './render/interp.ts';
 import { maxStepPerTick } from './mobileStep.ts';
 import { boxSelect, buildOccupancy, pickScreen, screenToGround, type GroundHit, type Pick, type PickView } from './render/picking.ts';
-import { createView } from './render/view.ts';
+import { createView, type WarmupReport } from './render/view.ts';
+import { inspectPreview } from './render/preview.ts';
+import { EffectClock } from './render/anim.ts';
+import { idleUnits, nextIdle, type IdleUnits } from './render/idle.ts';
+import { IdleColumn, type IdleType } from './ui/idleColumn.ts';
 import {
   ALIEN_INFO,
   ALIEN_KINDS,
@@ -131,14 +135,14 @@ loading.style.cssText = 'position:fixed;inset:0;display:grid;place-items:center;
 loading.textContent = 'Loading…';
 document.body.appendChild(loading);
 const view = await createView(adapter, terrain, camera, CAPACITY, (t) => (loading.textContent = t));
-loading.remove();
 const scene = view.scene;
 const entities = view.entities;
-const ghost = new Ghost(scene, terrain);
+// W27: with the model renderer, the placement previews are wireframes of the real models
+const ghost = new Ghost(scene, terrain, view.models);
 const queueView = new QueueOverlay(scene, terrain, canvasLabel());
 // W25b: hourglass markers on sites (and labels on builders) waiting for a short resource.
 const waitView = new WaitOverlay(scene, terrain, canvasWaitLabel());
-const dragPreview = new DragPreview(scene, terrain);
+const dragPreview = new DragPreview(scene, terrain, view.models);
 const hud = new Hud();
 
 let vw = window.innerWidth;
@@ -156,6 +160,20 @@ function applyCamera() {
 }
 window.addEventListener('resize', resize);
 resize();
+
+// W24 run 2b: one complete frame through the full composer behind the loading screen, so the first
+// visible frames do not stall compiling programs (render/view.ts warmUp). `?warmup=0` turns it off.
+const warmupOn = params.get('warmup') !== '0';
+let warmup: WarmupReport = { ran: false, meshes: 0, compileMs: 0, frameMs: 0, passes: [] };
+if (warmupOn) {
+  loading.textContent = 'Preparing the renderer…';
+  warmup = await view.warmUp();
+}
+loading.remove();
+/** Startup: ms from navigation start to the first visible frame, and the longest frame in the 10 s after it. */
+const startup = { loadingMs: -1, longestFrameMs: 0, windowDone: false, frames: 0 };
+/** The effect clock (render/anim.ts): frame time × speed, 0 while paused, reset on a new world. */
+const effectClock = new EffectClock();
 
 // ---- worker --------------------------------------------------------------------------------
 
@@ -221,6 +239,9 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
   runnerInfo = msg.runner;
   const snap = decodeSnapshot(msg.buffer);
   const dropped = interp.push(snap, performance.now(), msg.runner.world);
+  // W26: the idle units column follows each snapshot
+  idleNow = idleUnits(snap);
+  idleColumn.update(idleNow);
   if (dropped) send({ type: 'recycle', buffer: dropped.buffer }, [dropped.buffer]);
   buildOccupancy(buildingRows(snap), terrain.w, terrain.h, occupancy);
   // Sandbox: the commander fell; say when the next one comes (the simulation carries on).
@@ -389,6 +410,36 @@ function selectedEngineers(): number[] {
   return selection.filter((p) => p.type === 'unit' && p.kind === U.engineer).map((p) => p.id);
 }
 
+// ---- W26: idle units column ----------------------------------------------------------------
+
+let idleNow: IdleUnits = { commander: [], engineer: [] };
+/** The unit each type's last click went to (the click cycles in id order from it). */
+const idleLast: Record<IdleType, number | null> = { commander: null, engineer: null };
+// Shift from the click or from the keyboard (agent-browser's mouse events carry no modifiers; as W25)
+const idleColumn = new IdleColumn({ pick: (type, all) => pickIdle(type, all || shiftHeld) });
+
+/** Click: the next idle unit of `type`, selected, the camera centred on it (zoom and elevation kept). Shift: all of them. */
+function pickIdle(type: IdleType, all: boolean): number[] {
+  const ids = idleNow[type];
+  if (ids.length === 0) return [];
+  const kind = type === 'commander' ? U.commander : U.engineer;
+  if (all) {
+    setSelection(ids.map((id) => ({ type: 'unit' as const, id, kind })));
+    return [...ids];
+  }
+  const id = nextIdle(ids, idleLast[type])!;
+  idleLast[type] = id;
+  setSelection([{ type: 'unit', id, kind }]);
+  const r = Array.prototype.indexOf.call(interp.units.id.subarray(0, interp.units.count), id) as number;
+  if (r >= 0) {
+    orbit.stop();
+    rig.x = interp.units.x[r]!;
+    rig.z = interp.units.z[r]!;
+    applyCamera();
+  }
+  return [id];
+}
+
 // ---- build tools ---------------------------------------------------------------------------
 
 let buildMode: { kind: number; dir: number } | null = null;
@@ -483,7 +534,7 @@ function currentDragPlan(): DragPlan | null {
 
 function updateDragPreview() {
   const plan = currentDragPlan();
-  dragPreview.update(plan);
+  dragPreview.update(plan, performance.now() / 1000);
   if (!plan || !drag) {
     dragLabelEl.style.display = 'none';
     return;
@@ -890,7 +941,7 @@ function updateGhost() {
   }
   const [tx, ty] = footprintAt(buildMode.kind, g.x, g.z);
   const ok = canPlaceOn(terrain, occupancy, buildMode.kind, tx, ty);
-  ghost.show(buildMode.kind, tx, ty, buildMode.dir, ok, worldPerPixel(camera, g.dist, vh), rig.yaw);
+  ghost.show(buildMode.kind, tx, ty, buildMode.dir, ok, worldPerPixel(camera, g.dist, vh), rig.yaw, performance.now() / 1000);
 }
 
 // ---- frame loop ----------------------------------------------------------------------------
@@ -903,6 +954,21 @@ let drawCalls = 0;
 let frames = 0;
 /** CPU ms of the last frame's scene update (interpolation, instance filling, lighting fit). */
 let updateMs = 0;
+
+/** Startup metrics (run 2b warm-up): the first visible frame, then the longest frame interval for 10 s. */
+let startupLast = 0;
+function startupFrame(now: number) {
+  if (startup.loadingMs < 0) {
+    startup.loadingMs = now;
+    startupLast = now;
+    return;
+  }
+  if (startup.windowDone) return;
+  startup.longestFrameMs = Math.max(startup.longestFrameMs, now - startupLast);
+  startupLast = now;
+  startup.frames++;
+  if (now - startup.loadingMs >= 10000) startup.windowDone = true;
+}
 
 let costRunning = false;
 function frame(now: number) {
@@ -919,6 +985,7 @@ function frame(now: number) {
   const tUpdate = performance.now();
   if (snap) {
     interp.update(now);
+    effectClock.advance(dt, runnerInfo.speed, runnerInfo.paused, snap.tick, runnerInfo.world);
     view.update(
       {
         camera,
@@ -931,6 +998,8 @@ function frame(now: number) {
         selection,
         // walking advances by distance; paused, nothing moves and the feet do not settle
         dt: runnerInfo.paused ? 0 : dt,
+        time: effectClock,
+        world: runnerInfo.world,
       },
       rig.distance,
       (x, y, z) => worldPerPixel(camera, Math.hypot(x - camera.position.x, y - camera.position.y, z - camera.position.z), vh),
@@ -952,6 +1021,7 @@ function frame(now: number) {
   adapter.render(dt);
   drawCalls = adapter.drawCalls();
   frames++;
+  if (snap) startupFrame(now);
   frameCpu.push(performance.now() - cpu0);
   if (queueBench) queueBench.cpu.push(performance.now() - cpu0);
   if (frameCpu.length > 120) frameCpu.shift();
@@ -1484,6 +1554,36 @@ const game = {
    * rounds, medians. Pauses the frame loop while it runs (about 10 s).
    */
   renderCost: (frames = 15) => measureRenderCost(adapter, view, camera, frames, (on) => (costRunning = on)),
+  /**
+   * W24 run 2b warm-up: whether it was on (`?warmup=0` turns it off) and ran, the meshes primed, ms
+   * compiling and rendering the warm-up frame and its composer passes; then the startup figures:
+   * ms from navigation start to the first visible frame, and the longest frame interval in the
+   * 10 s after it (`windowDone` once the 10 s are over).
+   */
+  get warmup() {
+    return { enabled: warmupOn, ...warmup, passes: [...warmup.passes], ...startup };
+  },
+  /**
+   * W24 run 2b: what is moving on screen. Running totals of frames with a visible builder beaming,
+   * a visible turret firing (flash or beam), a visible shot, a visible alien attacking, and a visible
+   * gate's doors opening and closing; `now` is the last frame's flags; `effects` the effect clock.
+   */
+  get activity() {
+    const m = view.models;
+    if (!m) return null;
+    return { ...m.activity, now: { ...m.activityNow }, clock: { t: effectClock.t, dt: effectClock.dt } };
+  },
+  /** W27: the wireframe previews read back from the scene (render/preview.ts inspectPreview). */
+  inspectPreview: () => inspectPreview(scene),
+  /** W26: the idle units by type (id order), as the column shows them. */
+  get idle() {
+    return { commander: [...idleNow.commander], engineer: [...idleNow.engineer] };
+  },
+  /** W26: the column as drawn: per type, shown or hidden and the count on the button. */
+  get idleColumn() {
+    return Array.from(document.querySelectorAll<HTMLButtonElement>('.idle button')).map((b) => ({ type: b.dataset.idle, shown: b.style.display !== 'none', count: Number(b.dataset.count ?? 0) }));
+  },
+
   camera: {
     get: (): Rig => ({ ...rig }),
     set: (r: Partial<Rig>) => {

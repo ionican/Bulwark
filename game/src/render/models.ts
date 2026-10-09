@@ -37,7 +37,7 @@
 
 import { BoxGeometry, Frustum, Group, InstancedBufferAttribute, InstancedMesh, Matrix4, MeshStandardMaterial, Quaternion, Sphere, Vector3, DynamicDrawUsage, type BufferGeometry, type Material, type PerspectiveCamera, type Texture } from 'three';
 import { B, U, buildingFootprint, isBelt } from '../sim/kinds.ts';
-import { BF_COMPLETE, BF_FIRING, BF_STARTED, T_ALIEN, T_BUILDING, T_UNIT, isReserved } from '../sim/schema.ts';
+import { AS_ATTACKING, BF_COMPLETE, BF_FIRING, BF_STARTED, T_ALIEN, T_BUILDING, T_UNIT, isReserved } from '../sim/schema.ts';
 import { slotOf } from '../sim/table.ts';
 import type { Terrain } from '../sim/terrain.ts';
 import type { Snapshot } from '../sim/snapshot.ts';
@@ -171,6 +171,8 @@ export interface Captured {
 /** This frame's pose of the building being drawn (anim.ts state, read by drawBuilding). */
 interface BuildingPose {
   door: number;
+  /** Change of the door opening this frame (+ opening, − closing). */
+  doorDelta: number;
   yaw: number;
   pitch: number;
   recoil: number;
@@ -371,17 +373,25 @@ export class ModelRenderer {
   /** Frustum culling (off in tests that must see every object). */
   cull = true;
   readonly counts: ModelCounts = { full: 0, middle: 0, simple: 0, icon: 0, culled: 0 };
+  /**
+   * Run 2b activity of what is on screen (scripts/check-render.mjs): running totals of frames in
+   * which a visible builder beams, a visible turret fires (flash or beam), a visible shot flies, a
+   * visible alien attacks, and a visible gate's doors open or close. `now` is this frame's flags.
+   */
+  readonly activity = { frames: 0, beaming: 0, firing: 0, shots: 0, attacking: 0, doorOpening: 0, doorClosing: 0 };
+  readonly activityNow = { beaming: false, firing: false, flash: false, shots: false, attacking: false, doorOpening: false, doorClosing: false };
 
   private readonly lv: { b: Uint8Array; bId: Uint32Array; a: Uint8Array; aId: Uint32Array; u: Uint8Array; uId: Uint32Array; w: Uint8Array; wId: Uint32Array; d: Uint8Array };
   /** Run 2b: effect state per building slot (anim.ts) and the effects drawn from it (effects.ts). */
   readonly anim: Animator;
   readonly effects: Effects;
-  private readonly bp: BuildingPose = { door: 0, yaw: REST_YAW, pitch: 0, recoil: 0, run: 0, working: false, flash: false, beam: false, mx: 0, my: 0, mz: 0, dx: 1, dy: 0, dz: 0, ax: 0, ay: 0, az: 0 };
+  private readonly bp: BuildingPose = { door: 0, doorDelta: 0, yaw: REST_YAW, pitch: 0, recoil: 0, run: 0, working: false, flash: false, beam: false, mx: 0, my: 0, mz: 0, dx: 1, dy: 0, dz: 0, ax: 0, ay: 0, az: 0 };
   /** Snapshot row by slot this frame (−1: none), and each building's top. */
   private readonly bRow: Int32Array;
   private readonly wRow: Int32Array;
   private readonly uRow: Int32Array;
   private readonly pRow: Int32Array;
+  private readonly aSnapRow: Int32Array;
   private readonly bTop: Float32Array;
   /** Each turret's muzzle this frame, by slot, and the id it was written for (shots leave from it). */
   private readonly muzzle: Float32Array;
@@ -528,6 +538,7 @@ export class ModelRenderer {
     this.wRow = new Int32Array(C.wrecks);
     this.uRow = new Int32Array(C.units);
     this.pRow = new Int32Array(C.projectiles ?? C.buildings);
+    this.aSnapRow = new Int32Array(C.aliens);
     this.bTop = new Float32Array(C.buildings);
     this.muzzle = new Float32Array(C.buildings * 3);
     this.muzzleId = new Uint32Array(C.buildings).fill(0xffffffff);
@@ -545,6 +556,34 @@ export class ModelRenderer {
     this.unitTracks = new Tracks(C.units);
     this.alienTracks = new Tracks(C.aliens);
     this.rigFrame = new Uint32Array(C.units);
+  }
+
+  /**
+   * Warm-up (run 2b): every instanced mesh of the renderer (every part, model, icon, plinth and
+   * effect batch) drawn with one instance at (x, y, z), and the particle meshes with one each, so
+   * one full frame compiles every program; `prime(false)` empties them again. The next update
+   * refills every batch from zero either way.
+   */
+  prime(on: boolean, x = 0, y = 0, z = 0, camera: PerspectiveCamera | null = null): number {
+    let n = 0;
+    this.group.traverse((o) => {
+      if (!(o instanceof InstancedMesh)) return;
+      n++;
+      if (on) {
+        const a = o.instanceMatrix.array as Float32Array;
+        a.fill(0, 0, 16);
+        a[0] = a[5] = a[10] = a[15] = 1;
+        a[12] = x;
+        a[13] = y;
+        a[14] = z;
+        o.instanceMatrix.clearUpdateRanges();
+        o.instanceMatrix.needsUpdate = true;
+      }
+      o.count = on ? 1 : 0;
+      o.visible = on;
+    });
+    this.effects.prime(on, x, y, z, camera);
+    return n;
   }
 
   /** Kit icon spec of each game turret kind, for the atlas. */
@@ -667,6 +706,9 @@ export class ModelRenderer {
     rows(this.wRow, snap.wrecks);
     rows(this.uRow, snap.units);
     rows(this.pRow, snap.projectiles);
+    rows(this.aSnapRow, snap.aliens);
+    const N = this.activityNow;
+    N.beaming = N.firing = N.flash = N.shots = N.attacking = N.doorOpening = N.doorClosing = false;
     this.walls.update(rowsOf(snap));
     this.frameNo++;
     this.unitTracks.tick(snap.tick);
@@ -683,6 +725,16 @@ export class ModelRenderer {
     this.drawWrecks(snap);
     if (f.projectiles) this.effects.shots(f.projectiles, this.ground, this.shotOrigin, this.visibleAt);
     this.effects.commit();
+    const A = this.activity;
+    A.frames++;
+    N.beaming = this.effects.activity.beams > 0;
+    N.shots = this.effects.activity.shots > 0;
+    if (N.beaming) A.beaming++;
+    if (N.firing) A.firing++;
+    if (N.shots) A.shots++;
+    if (N.attacking) A.attacking++;
+    if (N.doorOpening) A.doorOpening++;
+    if (N.doorClosing) A.doorClosing++;
     this.batches.commit();
     this.w17.commit();
     this.icons.commit();
@@ -723,6 +775,10 @@ export class ModelRenderer {
         this.counts.culled++;
         continue;
       }
+      const N = this.activityNow;
+      if (P.beam) N.firing = true;
+      if (P.doorDelta > 1e-6) N.doorOpening = true;
+      else if (P.doorDelta < -1e-6) N.doorClosing = true;
       const d = this.dist(cx, top, cz);
       const th = kind === B.wall ? THRESHOLDS.wall : kind === B.gate ? THRESHOLDS.gate : W17_BUILDING_MODEL.has(kind) ? W17_THRESHOLDS : THRESHOLDS.turret;
       const lv = this.level(this.lv.b, this.lv.bId, slot, id, d, th);
@@ -739,7 +795,10 @@ export class ModelRenderer {
         this.buildingIcon(kind, r, snap, cx, top, cz, fw, fh);
         continue;
       }
-      if (P.flash) this.effects.flash(P.mx, P.my, P.mz, P.dx, P.dy, P.dz, kind === B.heavy, lv <= 1, true);
+      if (P.flash) {
+        this.effects.flash(P.mx, P.my, P.mz, P.dx, P.dy, P.dz, kind === B.heavy, lv <= 1, true);
+        this.activityNow.firing = this.activityNow.flash = true;
+      }
       if (kind === B.smelter && P.working) {
         const k = this.chimneys;
         k[0]![0] = k[1]![0] = cx - 0.35;
@@ -763,6 +822,7 @@ export class ModelRenderer {
     const P = this.bp;
     A.building(slot, id, col.work[r]!);
     P.door = 0;
+    P.doorDelta = 0;
     P.yaw = REST_YAW;
     P.pitch = 0;
     P.recoil = 0;
@@ -771,7 +831,9 @@ export class ModelRenderer {
     P.flash = false;
     P.beam = false;
     if (kind === B.gate) {
+      const before = A.door[slot]!;
       P.door = A.gate(slot, gateWanted(f.units, tx, ty, fw, fh));
+      P.doorDelta = P.door - before;
       return;
     }
     if (runsWhenComplete(kind) || isMachine(kind)) {
@@ -1116,6 +1178,10 @@ export class ModelRenderer {
       if (!this.visible(x, y + 0.6, z, ak.radius + 1)) {
         this.counts.culled++;
         continue;
+      }
+      if (!this.activityNow.attacking && this.snap) {
+        const sr = slot < this.aSnapRow.length ? this.aSnapRow[slot]! : -1;
+        if (sr >= 0 && this.snap.aliens.id[sr] === id && this.snap.aliens.cols.state[sr] === AS_ATTACKING) this.activityNow.attacking = true;
       }
       const lv = this.level(this.lv.a, this.lv.aId, slot, id, this.dist(x, y, z), W17_THRESHOLDS);
       this.tally(lv);
