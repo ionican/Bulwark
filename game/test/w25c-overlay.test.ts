@@ -99,6 +99,7 @@ describe('W25c finding 2: the queue overlay is bounded, clipped and cached', () 
     expect(CAP!).toBeLessThanOrEqual(65_536);
     expect(got.allocated).toBeLessThanOrEqual(CAP!);
     expect(got.drawn).toBeGreaterThan(0);
+    expect((o as unknown as { dropped: number }).dropped, 'marks left out by the caps at the target load').toBe(0);
     expect(offScreen(scene, cam)).toBe(0);
     const q = inspectQueue(scene);
     expect(q.labels.length).toBeLessThanOrEqual(200);

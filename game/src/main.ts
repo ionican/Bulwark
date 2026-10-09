@@ -12,7 +12,7 @@ import { measureRenderCost } from './render/cost.ts';
 import { Orbit, applyRig, clampRig, pitchFor, worldPerPixel, type Rig } from './render/cameraRig.ts';
 import { Gestures } from './input.ts';
 import { Ghost } from './render/ghost.ts';
-import { DASH_NAMES, QueueOverlay, canvasLabel, inspectQueue } from './render/queueView.ts';
+import { DASH_NAMES, QUEUE_MAX_INSTANCES, QueueOverlay, canvasLabel, inspectQueue } from './render/queueView.ts';
 import { WaitOverlay, canvasWaitLabel, inspectWaiting } from './render/waitView.ts';
 import { waitingCounts, waitingState } from './render/waiting.ts';
 import { DragPreview, inspectDrag } from './render/dragPreview.ts';
@@ -20,7 +20,7 @@ import { beltLineTiles, dragLabel, planDrag, type DragPlan, type DragView } from
 import { groundHeight } from './render/ground.ts';
 import { drawnMeshes, entitiesOf, inspectScene } from './render/inspect.ts';
 import { LOD_THRESHOLDS } from './render/lod.ts';
-import { Interpolator } from './render/interp.ts';
+import { Interpolator, type MobileView } from './render/interp.ts';
 import { maxStepPerTick } from './mobileStep.ts';
 import { boxSelect, buildOccupancy, pickScreen, screenToGround, type GroundHit, type Pick, type PickView } from './render/picking.ts';
 import { createView } from './render/view.ts';
@@ -751,6 +751,62 @@ function queueItemText(s: Snapshot, it: QueueItem): string {
   return isReserved(f) ? `Build ${label} (reserved)` : `Build ${label} ${(c.progress[r]! * 100).toFixed(0)}%`;
 }
 
+/** W25c queue overlay benchmark under way (runQueueBench), drawn by the frame loop in place of the selection's queues. */
+let queueBench: { snap: Snapshot; units: MobileView; all: Pick[]; fewer: Pick[]; change: boolean; times: number[]; stamps: number[]; cpu: number[] } | null = null;
+
+/**
+ * W25c benchmark of the queue overlay (scripts/check-queue.mjs). `units` engineers round the base,
+ * each with `orders` queued moves spread over the whole map (the seeded spread test/w25c-overlay
+ * uses), are made in a world on this thread and drawn by the live overlay in place of the
+ * selection's queues: `frames` frames unchanged, then `frames` frames with the selection changing
+ * every frame (all of them, then all but one). Per phase: the overlay's update CPU per frame
+ * (median, 95th percentile, max), the frame CPU (median) and the frame rate; and what was drawn.
+ */
+async function runQueueBench(nUnits: number, orders: number, frames: number, hold: boolean) {
+  const [{ World }, { encodeSnapshot }] = await Promise.all([import('./sim/world.ts'), import('./sim/snapshot.ts')]);
+  const w = new World(1, terrain, { waves: false });
+  const ids: number[] = [];
+  for (let i = 0; i < nUnits; i++) ids.push(w.spawnUnit(U.engineer, 50.5 + (i % 16) * 2, 50.5 + Math.floor(i / 16) * 2));
+  let seed = 2654435761;
+  const rnd = () => ((seed = (Math.imul(seed ^ (seed >>> 15), 2246822519) + 0x9e3779b9) >>> 0) / 2 ** 32);
+  for (const id of ids) for (let k = 0; k < orders; k++) w.enqueue({ t: 'move', ids: [id], x: 2.5 + rnd() * 123, z: 2.5 + rnd() * 123, queue: true });
+  w.step();
+  const snap = decodeSnapshot(encodeSnapshot(w));
+  const u = snap.units;
+  const units: MobileView = { count: u.count, id: u.id, kind: u.cols.kind, x: Float32Array.from(u.cols.x), z: Float32Array.from(u.cols.z), fx: Float32Array.from(u.cols.fx), fz: Float32Array.from(u.cols.fz) };
+  const all: Pick[] = ids.map((id) => ({ type: 'unit', id, kind: U.engineer }));
+  const b = { snap, units, all, fewer: all.slice(0, -1), change: false, times: [] as number[], stamps: [] as number[], cpu: [] as number[] };
+  const nextFrame = () => new Promise<number>((res) => requestAnimationFrame(res));
+  const stats = (a: number[]) => {
+    const s = [...a].sort((x, y) => x - y);
+    return { median: s[Math.floor(s.length / 2)] ?? 0, p95: s[Math.floor(s.length * 0.95)] ?? 0, max: s[s.length - 1] ?? 0 };
+  };
+  const phase = async (change: boolean) => {
+    b.change = change;
+    for (let i = 0; i < 5; i++) await nextFrame(); // settle (the first frame of a phase builds)
+    b.times = [];
+    b.stamps = [];
+    b.cpu = [];
+    for (let i = 0; i < frames; i++) await nextFrame();
+    const span = (b.stamps[b.stamps.length - 1]! - b.stamps[0]!) / 1000;
+    return { updateMs: stats(b.times), frameCpuMs: stats(b.cpu).median, fps: span > 0 ? (b.stamps.length - 1) / span : 0, frames: b.times.length };
+  };
+  queueBench = b;
+  try {
+    const still = await phase(false);
+    const changing = await phase(true);
+    b.change = false;
+    await nextFrame();
+    await nextFrame();
+    const q = inspectQueue(scene);
+    return { units: nUnits, orders, still, changing, drawn: { instances: q.instances, labels: q.labels.length, more: q.more, paths: q.paths.length, arrows: q.arrows }, maxInstances: QUEUE_MAX_INSTANCES };
+  } finally {
+    // `hold`: the synthetic queues stay drawn (unchanged) until queueBenchEnd (a screenshot)
+    if (hold) b.change = false;
+    else queueBench = null;
+  }
+}
+
 /** The selected units' queues for the panel, in selection order (the order that picks each line's dashes). */
 function selectedQueues(): QueuePanelUnit[] {
   const s = interp.curr;
@@ -881,7 +937,14 @@ function frame(now: number) {
       rig.distance > LOD_THRESHOLDS[1]!,
     );
   }
-  if (snap) queueView.update({ camera, viewportHeight: vh, snapshot: snap, units: interp.units, selection });
+  if (queueBench) {
+    // W25c benchmark (runQueueBench): the synthetic queues in place of the selection's
+    const b = queueBench;
+    const t0 = performance.now();
+    queueView.update({ camera, viewportHeight: vh, snapshot: b.snap, units: b.units, selection: b.change && b.stamps.length % 2 ? b.fewer : b.all });
+    b.times.push(performance.now() - t0);
+    b.stamps.push(now);
+  } else if (snap) queueView.update({ camera, viewportHeight: vh, snapshot: snap, units: interp.units, selection });
   if (snap) waitView.update({ camera, viewportHeight: vh, snapshot: snap, units: interp.units });
   updateDragPreview();
   updateGhost();
@@ -890,6 +953,7 @@ function frame(now: number) {
   drawCalls = adapter.drawCalls();
   frames++;
   frameCpu.push(performance.now() - cpu0);
+  if (queueBench) queueBench.cpu.push(performance.now() - cpu0);
   if (frameCpu.length > 120) frameCpu.shift();
   if (now - hudAt > 250 && snap) {
     hudAt = now;
@@ -1473,6 +1537,10 @@ const game = {
   get resourceReadout() {
     return document.querySelector('.hud.res')?.textContent ?? '';
   },
+  /** W25c: the queue overlay benchmark (runQueueBench). */
+  queueBench: (units = 40, orders = 64, frames = 120, hold = false) => runQueueBench(units, orders, frames, hold),
+  /** Ends a queueBench run with `hold`: the overlay draws the selection's queues again. */
+  queueBenchEnd: () => void (queueBench = null),
   /** The queue drawing read back from the scene graph (render/queueView.ts inspectQueue). */
   inspectQueue: () => inspectQueue(scene),
   /** Ground positions (x, z) of the reserved-site outlines (the ghosts) drawn last frame, read from the scene. */

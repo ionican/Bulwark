@@ -28,10 +28,15 @@
 //     clears the markers
 //   - W25b, Stop: the X key on the two engineers removes the run's reserved tiles and the run;
 //     its started tiles stay
-//   - 0 console errors
+//   - W25c, the queue overlay benchmark (__game.queueBench: synthetic queues drawn by the live
+//     overlay at the game camera, x 64, z 62, distance 50, medium, 1440 × 900): 40 engineers × 64
+//     orders must update in ≤ 1 ms CPU per frame unchanged and ≤ 5 ms on a change (medians) and hold
+//     60 fps (display-capped; ≥ 58 measured); 256 × 64 must stay within the instance cap and 200
+//     labels and never take 100 ms for an update. Both are reported in full.
+//   - 0 console errors (a dash shader that fails to compile is one)
 // With --shots <dir> it also saves w25-queue-drag.png (mid-drag), gives the two engineers
 // different queues and saves w25-queue-lines.png (the two selected engineers' queue lines) and
-// w25-queue-panel.png (the panel, cropped).
+// w25-queue-panel.png (the panel, cropped), and w25c-queue-bench.png (the 40 × 64 benchmark drawn).
 // It always stops the preview server and closes the agent-browser session. Exit 1 on any failure.
 
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
@@ -435,6 +440,38 @@ async function run() {
   js('(__game.control.speed(1), true)');
 
   errorsNow('W25b checks');
+
+  // ---- W25c: queue overlay benchmark
+  js(`(__game.camera.set({ x: 64, z: 62, distance: 50, yaw: 0 }), true)`);
+  await frames(20);
+  const fmt = (r) =>
+    `unchanged ${r.still.updateMs.median.toFixed(3)} ms median / ${r.still.updateMs.p95.toFixed(3)} p95 / ${r.still.updateMs.max.toFixed(3)} max, ${r.still.fps.toFixed(1)} fps, frame CPU ${r.still.frameCpuMs.toFixed(2)} ms; ` +
+    `changing every frame ${r.changing.updateMs.median.toFixed(3)} ms median / ${r.changing.updateMs.p95.toFixed(3)} p95 / ${r.changing.updateMs.max.toFixed(3)} max, ${r.changing.fps.toFixed(1)} fps, frame CPU ${r.changing.frameCpuMs.toFixed(2)} ms; ` +
+    `drawn: ${r.drawn.instances} instances (cap ${r.maxInstances}), ${r.drawn.paths} paths, ${r.drawn.arrows} arrowheads, ${r.drawn.labels} labels, note ${JSON.stringify(r.drawn.more)}`;
+  const b40 = js('__game.queueBench(40, 64, 180, true)');
+  note(`queue overlay 40 × 64 (game camera, ${js('__game.quality')}): ${fmt(b40)}`);
+  if (shotsDir) {
+    const path = join(shotsDir, 'w25c-queue-bench.png');
+    ab('screenshot', path);
+    note(`screenshot ${path}`);
+  }
+  js('(__game.queueBenchEnd(), true)');
+  check(b40.still.updateMs.median <= 1, `40 × 64: unchanged update ${b40.still.updateMs.median.toFixed(3)} ms ≤ 1 ms`, `40 × 64: unchanged update ${b40.still.updateMs.median.toFixed(3)} ms > 1 ms`);
+  check(b40.changing.updateMs.median <= 5, `40 × 64: update on a change ${b40.changing.updateMs.median.toFixed(3)} ms ≤ 5 ms`, `40 × 64: update on a change ${b40.changing.updateMs.median.toFixed(3)} ms > 5 ms`);
+  check(b40.still.fps >= 58 && b40.changing.fps >= 58, `40 × 64: holds 60 fps (${b40.still.fps.toFixed(1)} unchanged, ${b40.changing.fps.toFixed(1)} changing)`, `40 × 64: ${b40.still.fps.toFixed(1)} fps unchanged, ${b40.changing.fps.toFixed(1)} changing (< 58)`);
+  check(
+    b40.drawn.instances > 0 && b40.drawn.instances <= b40.maxInstances && b40.drawn.labels <= 200 && /^\+\d+ more$/.test(b40.drawn.more ?? '') && b40.drawn.paths === 40,
+    `40 × 64: 40 paths drawn, ${b40.drawn.labels} labels and the note "${b40.drawn.more}", ${b40.drawn.instances} instances within the cap`,
+    `40 × 64 drawing: ${JSON.stringify(b40.drawn)}`,
+  );
+  const b256 = js('__game.queueBench(256, 64, 60)');
+  note(`queue overlay 256 × 64 (worst case): ${fmt(b256)}`);
+  check(
+    b256.drawn.instances <= b256.maxInstances && b256.drawn.labels <= 200 && b256.changing.updateMs.max < 100 && b256.still.updateMs.max < 100,
+    `256 × 64: within the caps (${b256.drawn.instances} instances, ${b256.drawn.labels} labels), slowest update ${Math.max(b256.changing.updateMs.max, b256.still.updateMs.max).toFixed(1)} ms`,
+    `256 × 64: ${JSON.stringify(b256)}`,
+  );
+  errorsNow('W25c queue overlay benchmark');
 }
 
 async function main() {
