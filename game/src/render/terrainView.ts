@@ -136,7 +136,11 @@ const DEPOSIT_ICON_PX = 8;
 export function buildTerrainView(t: Terrain, opts: { ground: boolean } = { ground: true }): TerrainView {
   const group = new Group();
   group.name = opts.ground ? 'greybox/terrain' : 'entries';
-  if (opts.ground) group.add(new Mesh(groundGeometry(t), new MeshLambertMaterial({ map: groundTexture(t) })));
+  if (opts.ground) {
+    const ground = new Mesh(groundGeometry(t), new MeshLambertMaterial({ map: groundTexture(t) }));
+    ground.name = 'terrain/greybox-ground';
+    group.add(ground);
+  }
 
   const m = new Matrix4();
   const q = new Quaternion();
@@ -165,6 +169,8 @@ export function buildTerrainView(t: Terrain, opts: { ground: boolean } = { groun
     rocks.setMatrixAt(n, m);
   });
   rocks.count = rockTiles.length;
+  // map features, not entities: `terrain/…` names keep them out of the scene inspection (inspect.ts)
+  rocks.name = 'terrain/rocks';
   rocks.computeBoundingSphere();
   group.add(rocks);
 
@@ -181,8 +187,10 @@ export function buildTerrainView(t: Terrain, opts: { ground: boolean } = { groun
       at.push([cx, heightAt(t, cx, cz) + 0.2, cz]);
     });
     mesh.computeBoundingSphere();
+    mesh.name = `terrain/deposit-${kind}`;
     group.add(mesh);
     const icons = new InstancedMesh(depositIconGeometry(kind), iconMat, ds.length);
+    icons.name = `terrain/deposit-icon-${kind}`;
     icons.frustumCulled = false;
     icons.renderOrder = 9; // under entity icons
     icons.visible = false;
@@ -194,6 +202,7 @@ export function buildTerrainView(t: Terrain, opts: { ground: boolean } = { groun
 
   // Entry markers: chevrons pointing into the map, plus a label.
   const entries = new InstancedMesh(entryGeometry(), new MeshBasicMaterial({ vertexColors: true }), t.entries.length);
+  entries.name = 'terrain/entries';
   const labels: Array<{ sp: Sprite; x: number; y: number; z: number }> = [];
   t.entries.forEach((en, n) => {
     const cx = en.x + en.dirX * 6;

@@ -52,6 +52,9 @@ export interface WarmupReport {
   passes: string[];
 }
 
+/** The report when no warm-up ran (the greybox view, ?warmup=0, or before the first frame). */
+export const NO_WARMUP: Readonly<WarmupReport> = Object.freeze({ ran: false, meshes: 0, compileMs: 0, frameMs: 0, passes: [] });
+
 export async function createView(
   adapter: RenderAdapter,
   terrain: Terrain,
@@ -83,7 +86,7 @@ export async function createView(
         entities.update(f);
         terrainView.update(wppAt, overview, f.yaw);
       },
-      warmUp: async () => ({ ran: false, meshes: 0, compileMs: 0, frameMs: 0, passes: [] }),
+      warmUp: async () => NO_WARMUP,
     };
   }
 

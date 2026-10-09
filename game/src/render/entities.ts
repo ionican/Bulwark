@@ -206,9 +206,8 @@ export interface FrameInput {
   selection: readonly Pick[];
   /** Seconds since the last frame, 0 while paused (models.ts walking). */
   dt?: number;
-  /** W24 run 2b: the effect clock (anim.ts EffectClock) and the worker's world epoch (resets). */
+  /** W24 run 2b: the effect clock (anim.ts EffectClock; its `reset` marks a global reset). */
   time?: EffectTime;
-  world?: number;
 }
 
 export class EntityRenderer {

@@ -2,18 +2,19 @@
 // every visible mesh, and every instanced batch with count > 0, with its material names and the
 // world transform of each instance — and attributes each instance to the entity under it, by
 // position. Nothing here asks the renderer what it drew; it reads the buffers that are submitted.
-// Used by the tests (Node) and by `__game.inspect()` in the browser (scripts/check-render.mjs).
+// Used by the tests (Node) and by `__game.inspect()` / `inspectNextFrame()` in the browser (scripts/check-render.mjs).
 //
 // Attribution: an instance belongs to the entity whose footprint (buildings) or radius (units,
 // aliens, wrecks) contains its world translation (x, z), expanded by a margin; if several do, the
-// nearest centre wins. W24 run 2b: a mesh whose name says what it draws only matches entities of
-// that group — unit rigs (`eng/…`, `cmd/…`) and unit icons units, alien models and icons aliens,
-// wreck debris and icons wrecks, every other model mesh buildings — so an engineer standing on the
-// temporary turret it dropped, or on a wall tile it builds, is not counted as that building. Of
-// two entities at the same distance, one the mesh has not yet been attributed to wins.
-// Meshes named `terrain/…` and the sky are ground, not entities, and are left out. Mesh names
-// tell the families apart: `greybox/…` is W13's renderer, `overlay/…` W13's overlays (bars,
-// beams, shots, routes, markers), anything else a model batch or an icon.
+// nearest centre wins. W24 run 2b: each model and icon mesh carries the entity group it draws in
+// `userData.group` (set where the batch is created, models.ts: `tagGroup`), and matches only
+// entities of that group, so an engineer standing on the temporary turret it dropped, or on a wall
+// tile it builds, is not counted as that building. A drawn mesh that is neither greybox nor an
+// overlay and carries no group is attributed to nothing and listed under `ungrouped` in the
+// report (scripts fail on it). Of two entities at the same distance, one the mesh has not yet been
+// attributed to wins. Meshes named `terrain/…` and the sky are ground, not entities, and are left
+// out. `greybox/…` is W13's renderer and `overlay/…` (or group 'overlay') the overlays (bars,
+// beams, shots, routes, markers, effects); both match any entity.
 
 import { InstancedMesh, Matrix4, Mesh, type Material, type Object3D } from 'three';
 import { ALIEN_KINDS, BUILDING_KINDS, U, UNIT_KINDS, alienInfo } from '../sim/kinds.ts';
@@ -29,7 +30,22 @@ export interface DrawnMesh {
   worlds: Float32Array;
   greybox: boolean;
   overlay: boolean;
+  /** The entity group the mesh draws (`userData.group`); null when untagged. */
+  group: EntityRef['group'] | null;
 }
+
+/** What a mesh draws: one entity group, or overlays drawn over any entity. */
+export type MeshGroup = EntityRef['group'] | 'overlay';
+
+/** Tags every mesh under `root` with the group it draws (`userData.group`, read by `drawnMeshes`). */
+export function tagGroup(root: Object3D, group: MeshGroup | ((mesh: Mesh) => MeshGroup)): void {
+  root.traverse((o) => {
+    if (o instanceof Mesh) o.userData.group = typeof group === 'function' ? group(o) : group;
+  });
+}
+
+/** The report key that lists drawn model meshes with no group (they are attributed to nothing). */
+export const UNGROUPED = 'ungrouped';
 
 export interface EntityRef {
   group: 'building' | 'unit' | 'alien' | 'wreck';
@@ -71,8 +87,12 @@ export function drawnMeshes(root: Object3D): DrawnMesh[] {
   root.traverseVisible((o) => {
     if (!(o instanceof Mesh)) return;
     if (o.name.startsWith('terrain/') || o.name === 'sky') return;
+    // an unnamed mesh is reported by its type and parent, so an `ungrouped` entry can be traced
+    const name = o.name || `(${o.type} in ${o.parent?.name || 'an unnamed group'})`;
     const greybox = o.name.startsWith('greybox/');
-    const overlay = o.name.startsWith('overlay/');
+    const tag = o.userData.group as MeshGroup | undefined;
+    const overlay = o.name.startsWith('overlay/') || tag === 'overlay';
+    const group = tag && tag !== 'overlay' ? tag : null;
     if (o instanceof InstancedMesh) {
       const n = o.count;
       if (n <= 0) return;
@@ -83,24 +103,12 @@ export function drawnMeshes(root: Object3D): DrawnMesh[] {
         _w.multiplyMatrices(o.matrixWorld, _m);
         _w.toArray(worlds, i * 16);
       }
-      out.push({ name: o.name, materials: materialNames(o.material), count: n, worlds, greybox, overlay });
+      out.push({ name, materials: materialNames(o.material), count: n, worlds, greybox, overlay, group });
     } else {
-      out.push({ name: o.name || o.type, materials: materialNames(o.material), count: 1, worlds: new Float32Array(o.matrixWorld.elements), greybox, overlay });
+      out.push({ name, materials: materialNames(o.material), count: 1, worlds: new Float32Array(o.matrixWorld.elements), greybox, overlay, group });
     }
   });
   return out;
-}
-
-const UNIT_ICONS = new Set(['icon/engineer', 'icon/commander', 'icon/commanderRing']);
-const ALIEN_PREFIXES = ALIEN_KINDS.flatMap((k) => [`w17/${k}/`, `icon/${k}`]);
-
-/** The entity group a mesh draws, from its name; null for overlays (any entity). */
-export function meshGroup(name: string): EntityRef['group'] | null {
-  if (name.startsWith('overlay/') || name.startsWith('greybox/')) return null;
-  if (name.startsWith('eng/') || name.startsWith('cmd/') || UNIT_ICONS.has(name)) return 'unit';
-  if (ALIEN_PREFIXES.some((p) => name.startsWith(p))) return 'alien';
-  if (name.startsWith('w17/wreck/') || name === 'icon/wreck') return 'wreck';
-  return 'building';
 }
 
 /** Per kind name: what was drawn on the entities of that kind. */
@@ -128,7 +136,14 @@ export function inspectScene(root: Object3D, entities: EntityRef[], margin = 0.6
     (reports[kind] ??= { instances: 0, models: 0, icons: 0, greybox: 0, meshes: [], materials: [], entities: 0, covered: 0, _covered: new Set(), _meshes: new Set(), _mats: new Set() });
   for (const e of entities) rep(e.kindName).entities++;
   for (const d of drawn) {
-    const group = meshGroup(d.name);
+    if (!d.greybox && !d.overlay && d.group === null) {
+      const u = rep(UNGROUPED);
+      u.instances += d.count;
+      u._meshes.add(d.name);
+      continue;
+    }
+    // greybox and overlays: any entity
+    const group = d.greybox || d.overlay ? null : d.group;
     // entities this mesh has already been attributed to: of two entities at the same distance (two
     // engineers on one spot, each drawn as one icon at its centre), the one not yet taken wins
     const taken = new Set<number>();

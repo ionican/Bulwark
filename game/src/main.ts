@@ -23,7 +23,7 @@ import { LOD_THRESHOLDS } from './render/lod.ts';
 import { Interpolator, type MobileView } from './render/interp.ts';
 import { maxStepPerTick } from './mobileStep.ts';
 import { boxSelect, buildOccupancy, pickScreen, screenToGround, type GroundHit, type Pick, type PickView } from './render/picking.ts';
-import { createView, type WarmupReport } from './render/view.ts';
+import { createView, NO_WARMUP, type WarmupReport } from './render/view.ts';
 import { inspectPreview } from './render/preview.ts';
 import { EffectClock } from './render/anim.ts';
 import { idleUnits, nextIdle, type IdleUnits } from './render/idle.ts';
@@ -164,7 +164,7 @@ resize();
 // W24 run 2b: one complete frame through the full composer behind the loading screen, so the first
 // visible frames do not stall compiling programs (render/view.ts warmUp). `?warmup=0` turns it off.
 const warmupOn = params.get('warmup') !== '0';
-let warmup: WarmupReport = { ran: false, meshes: 0, compileMs: 0, frameMs: 0, passes: [] };
+let warmup: Readonly<WarmupReport> = NO_WARMUP;
 if (warmupOn) {
   loading.textContent = 'Preparing the renderer…';
   warmup = await view.warmUp();
@@ -172,8 +172,8 @@ if (warmupOn) {
 loading.remove();
 /** Startup: ms from navigation start to the first visible frame, and the longest frame in the 10 s after it. */
 const startup = { loadingMs: -1, longestFrameMs: 0, windowDone: false, frames: 0 };
-/** The snapshot the scene was last updated from (a snapshot arriving after it re-points the interpolated views). */
-let drawnSnap: unknown = null;
+/** `__game.inspectNextFrame()` callers, answered inside the next frame straight after the scene update. */
+let inspectWaiters: Array<(r: ReturnType<typeof inspectScene>) => void> = [];
 /** The effect clock (render/anim.ts): frame time × speed, 0 while paused, reset on a new world. */
 const effectClock = new EffectClock();
 
@@ -1001,13 +1001,18 @@ function frame(now: number) {
         // walking advances by distance; paused, nothing moves and the feet do not settle
         dt: runnerInfo.paused ? 0 : dt,
         time: effectClock,
-        world: runnerInfo.world,
       },
       rig.distance,
       (x, y, z) => worldPerPixel(camera, Math.hypot(x - camera.position.x, y - camera.position.y, z - camera.position.z), vh),
       rig.distance > LOD_THRESHOLDS[1]!,
     );
-    drawnSnap = snap;
+    if (inspectWaiters.length) {
+      // the views and the scene are the ones just drawn: no snapshot can arrive in between
+      const rep = inspectScene(scene, entitiesOf(snap, interp.aliens, interp.units));
+      const ws = inspectWaiters;
+      inspectWaiters = [];
+      for (const w of ws) w(rep);
+    }
   }
   if (queueBench) {
     // W25c benchmark (runQueueBench): the synthetic queues in place of the selection's
@@ -1552,13 +1557,11 @@ const game = {
     return inspectScene(scene, entitiesOf(s, interp.aliens, interp.units));
   },
   /**
-   * True while the interpolated views are the ones the scene was last drawn from: no snapshot has
-   * arrived since the last frame's update, so `inspect()` compares the drawing with the entities it
-   * was drawn from (a newer snapshot can hold aliens spawned since, not yet drawn).
+   * `inspect()` taken inside the next frame, straight after the scene update, so the drawing and the
+   * entities it was drawn from match (between frames a new snapshot can re-point the interpolated
+   * views to aliens spawned since, not yet drawn).
    */
-  get drawnCurrent() {
-    return interp.curr !== null && interp.curr === drawnSnap;
-  },
+  inspectNextFrame: () => new Promise<ReturnType<typeof inspectScene>>((res) => inspectWaiters.push(res)),
   /**
    * GPU+CPU cost by forced-completion timing (render/cost.ts): blocks of `frames` renders of each
    * configuration (the ground, the post stack and each post pass on and off), in 7 interleaved

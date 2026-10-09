@@ -203,6 +203,8 @@ class Marks {
     if (this.dash) geometry.setAttribute('iDash', this.dash);
     const m = new InstancedMesh(geometry, material, capacity);
     m.name = name;
+    // drawn over the map, not an entity's model (inspect.ts)
+    m.userData.group = 'overlay';
     m.frustumCulled = false;
     m.renderOrder = order;
     m.count = 0;

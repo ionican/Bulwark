@@ -13,7 +13,7 @@ import { routeMarkerGeometries } from '../src/render/geometry.ts';
 import { createWorld } from '../src/sim/scenarios.ts';
 import { footprintRange } from '../src/render/ground.ts';
 import { ICONS } from '../src/render/icons.ts';
-import { entitiesOf, inspectScene } from '../src/render/inspect.ts';
+import { UNGROUPED, entitiesOf, inspectScene } from '../src/render/inspect.ts';
 import { TURRET_KINDS, TURRET_SCALE } from '../src/render/models.ts';
 import { GUN, PINION, PINION0, PITCH, STATIC, YAW } from '../src/render/workshop/kit/kit.ts';
 import { BUILT } from '../src/render/workshop/w23/mats.ts';
@@ -90,6 +90,13 @@ describe('criterion 2: every kind is drawn with its model, read from the scene g
         seen.set(n, k);
       }
     expect(new Set(ICONS).size).toBe(ICONS.length);
+  });
+
+  it('every drawn model and icon mesh says which entity group it draws (none ungrouped)', () => {
+    for (const level of [0, 1, 2, 3]) {
+      draw(r, fx.snap, { level });
+      expect(inspect()[UNGROUPED]?.meshes ?? [], `level ${level}`).toEqual([]);
+    }
   });
 
   it('the inspection sees greybox when it is there (W13 renderer on the same snapshot)', () => {
