@@ -24,7 +24,7 @@ export function renderer(): { r: ModelRenderer; scene: Scene } {
   return { r: shared, scene };
 }
 
-export function mobile(sec: Snapshot['aliens'] | Snapshot['units']): MobileView {
+export function mobile(sec: Snapshot['aliens'] | Snapshot['units'] | Snapshot['projectiles']): MobileView {
   return { count: sec.count, id: sec.id, kind: sec.cols.kind, x: sec.cols.x, z: sec.cols.z, fx: sec.cols.fx, fz: sec.cols.fz };
 }
 
@@ -99,6 +99,11 @@ export function everyKind(): Fixture {
 
 /** Snapshot row of a building id. */
 export function rowOf(s: Snapshot, id: number): number {
-  for (let r = 0; r < s.buildings.count; r++) if (s.buildings.id[r] === id) return r;
-  throw new Error(`no building ${id}`);
+  return rowIn(s.buildings, id);
+}
+
+/** Row of `id` in a snapshot section (throws when absent). */
+export function rowIn(sec: { count: number; id: Uint32Array }, id: number): number {
+  for (let r = 0; r < sec.count; r++) if (sec.id[r] === id) return r;
+  throw new Error(`no row for id ${id}`);
 }

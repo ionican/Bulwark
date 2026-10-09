@@ -11,7 +11,7 @@ import { BF_ACTIVE, BF_COMPLETE, BF_FIRING, BF_STARTED, BF_STARVED, T_BUILDING, 
 import { World } from '../src/sim/world.ts';
 import { Interpolator } from '../src/render/interp.ts';
 import { CAPACITY } from '../src/sim/world.ts';
-import { diff, drawAt, fx, mobile, mobileP, modelInstances, near, nextEpoch, partInstances, particles, renderer, rowIn, slot, snapAt, terrain } from './w24r2b-fixtures.ts';
+import { diff, drawAt, fx, mobile, modelInstances, near, nextEpoch, partInstances, particles, renderer, rowIn, slot, snapAt, terrain } from './w24r2b-fixtures.ts';
 
 const { r, scene } = renderer();
 
@@ -432,7 +432,7 @@ describe('shots: every observed projectile row, interpolated; impact when the ro
     const g = shotWorld();
     const E = nextEpoch();
     const s = snapAt(g.w, 10);
-    drawAt(r, s, { t: 0, dt: 0, world: E, projectiles: mobileP(s.projectiles) });
+    drawAt(r, s, { t: 0, dt: 0, world: E, projectiles: mobile(s.projectiles) });
     expect(fx(scene, 'overlay/fx/tracer').length).toBe(0);
     expect(fx(scene, 'overlay/fx/alien-shot').length).toBe(0);
     void mobile;

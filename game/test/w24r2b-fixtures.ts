@@ -11,17 +11,13 @@ import { InstancedBufferGeometry, InstancedMesh, Mesh, type InstancedBufferAttri
 import { slotOf } from '../src/sim/table.ts';
 import type { Snapshot } from '../src/sim/snapshot.ts';
 import type { World } from '../src/sim/world.ts';
+import { ResetWatch } from '../src/render/anim.ts';
 import { drawnMeshes } from '../src/render/inspect.ts';
 import type { MobileView } from '../src/render/interp.ts';
 import type { ModelRenderer } from '../src/render/models.ts';
 import { camera, mobile, snapshotOf } from './w24r2a-fixtures.ts';
 
-export { camera, everyKind, mobile, renderer, rowOf, snapshotOf, terrain } from './w24r2a-fixtures.ts';
-
-/** A projectile section as a mobile view (the interpolator's layout, not interpolated). */
-export function mobileP(sec: Snapshot['projectiles']): MobileView {
-  return { count: sec.count, id: sec.id, kind: sec.cols.kind, x: sec.cols.x, z: sec.cols.z, fx: sec.cols.fx, fz: sec.cols.fz };
-}
+export { camera, everyKind, mobile, renderer, rowIn, rowOf, snapshotOf, terrain } from './w24r2a-fixtures.ts';
 
 export interface Step {
   /** Effect clock: seconds since start, and this frame's advance. */
@@ -36,8 +32,16 @@ export interface Step {
   projectiles?: MobileView;
 }
 
-/** Draws one frame of snapshot `s` at effect-clock time `o.t` (culling off unless a camera is given). */
+/** One reset detector per renderer, as main.ts's EffectClock: a new world epoch or a tick going backwards. */
+const watches = new WeakMap<ModelRenderer, ResetWatch>();
+
+/**
+ * Draws one frame of snapshot `s` at effect-clock time `o.t` (culling off unless a camera is given).
+ * The frame is a global reset when `o.world` or the tick says so (render/anim.ts ResetWatch).
+ */
 export function drawAt(r: ModelRenderer, s: Snapshot, o: Step): void {
+  let watch = watches.get(r);
+  if (!watch) watches.set(r, (watch = new ResetWatch()));
   r.forcedLevel = o.level === undefined ? 0 : o.level;
   r.cull = !!o.cam;
   r.update({
@@ -47,10 +51,9 @@ export function drawAt(r: ModelRenderer, s: Snapshot, o: Step): void {
     snapshot: s,
     aliens: o.aliens ?? mobile(s.aliens),
     units: o.units ?? mobile(s.units),
-    projectiles: o.projectiles ?? mobileP(s.projectiles),
+    projectiles: o.projectiles ?? mobile(s.projectiles),
     dt: o.dt,
-    time: { t: o.t, dt: o.dt },
-    world: o.world ?? 0,
+    time: { t: o.t, dt: o.dt, reset: watch.check(s.tick, o.world ?? 0) },
   });
 }
 
@@ -68,13 +71,12 @@ export function everything(root: Object3D): Float32Array[] {
   return out;
 }
 
-/** Instances of the batch of W23/kit part `part` (userData.part) at level `level`, world matrices. */
-export function partInstances(root: Object3D, part: string, level = 0): Float32Array[] {
+/** World matrices of the instances of the first drawn instanced mesh whose userData matches `want`. */
+function batchInstances(root: Object3D, want: (u: Record<string, unknown>) => boolean): Float32Array[] {
   root.updateMatrixWorld(true);
   let found: InstancedMesh | null = null;
   root.traverseVisible((o) => {
-    if (found || !(o instanceof InstancedMesh) || o.count <= 0) return;
-    if (o.userData.part === part && o.userData.level === level) found = o;
+    if (!found && o instanceof InstancedMesh && o.count > 0 && want(o.userData)) found = o;
   });
   if (!found) return [];
   const m = found as InstancedMesh;
@@ -82,18 +84,14 @@ export function partInstances(root: Object3D, part: string, level = 0): Float32A
   return Array.from({ length: m.count }, (_, i) => a.slice(i * 16, i * 16 + 16));
 }
 
+/** Instances of the batch of W23/kit part `part` (userData.part) at level `level`, world matrices. */
+export function partInstances(root: Object3D, part: string, level = 0): Float32Array[] {
+  return batchInstances(root, (u) => u.part === part && u.level === level);
+}
+
 /** Instances of the W17 batch of model `model` (userData.model), world matrices. */
 export function modelInstances(root: Object3D, model: string): Float32Array[] {
-  root.updateMatrixWorld(true);
-  let found: InstancedMesh | null = null;
-  root.traverseVisible((o) => {
-    if (found || !(o instanceof InstancedMesh) || o.count <= 0) return;
-    if (o.userData.model === model) found = o;
-  });
-  if (!found) return [];
-  const m = found as InstancedMesh;
-  const a = m.instanceMatrix.array as Float32Array;
-  return Array.from({ length: m.count }, (_, i) => a.slice(i * 16, i * 16 + 16));
+  return batchInstances(root, (u) => u.model === model);
 }
 
 /** Instances in the overlay mesh named exactly `name` (effects), world matrices. */
@@ -143,8 +141,3 @@ export function snapAt(w: World, tick: number): Snapshot {
   return s;
 }
 
-/** Row of an id in a snapshot section. */
-export function rowIn(sec: { count: number; id: Uint32Array }, id: number): number {
-  for (let r = 0; r < sec.count; r++) if (sec.id[r] === id) return r;
-  throw new Error(`no row for id ${id}`);
-}
