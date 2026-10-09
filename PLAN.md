@@ -282,6 +282,26 @@ Fails on the current tree: vitest finds no `w24r2b-` or `w26-` test files and ex
 
 The run 2b Verify covers W26: vitest's `test/w26-` filter, and `check-queue.mjs` carries criterion 2.
 
+### W27 — pulsing wireframe placement preview (Richard, 2026-10-09)
+
+Richard: "when placing a building we should see a wireframe pulsing version of it to get a sense of size etc." Built in the same author run as 2b and W26.
+
+- Today `render/ghost.ts` shows the building's old simple model, see-through. Replace that with the **real model the renderer draws at full detail** (the same W17/W22/W23 geometry and assembly `render/models.ts` uses for that kind; turrets in their rest pose), drawn as a **wireframe**, at true scale, with the placement direction (`buildMode.dir`), standing on the sampled ground at the same base height and plinth rule as a placed building, so its size reads exactly as the built one will.
+- The wireframe **pulses**: its opacity (and optionally line brightness) cycles smoothly, about 1 s per cycle, driven by real time (the preview is UI, so it keeps pulsing while the game is paused).
+- Validity stays as today, by shape, never colour alone: solid footprint outline and a tick when placement is allowed; dashed outline and a cross when it is not. The wireframe itself may also change (for example a slower or stopped pulse when invalid) but never by colour alone.
+- The wall/belt drag preview (`render/dragPreview.ts`, W25 item 7): each tile that will be built also shows the wireframe of the piece that will stand there, pulsing in step; skipped tiles keep the dashed outline and cross only. Preview geometry is pooled/instanced; nothing allocated per frame.
+- Every building kind has a wireframe preview; none falls back to the old simple model.
+
+#### W27 acceptance criteria
+
+1. Scene-graph test: for every building kind, the preview's geometry is the full-detail model's geometry for that kind (same part/geometry identities or vertex counts as models.ts uses), rendered as wireframe, with world bounds equal to a placed complete building of that kind at the same tile and direction (within 0.01 tiles).
+2. Pulse: the preview's opacity differs between two times 0.5 s apart, including while the game is paused.
+3. Validity: an allowed tile shows the solid outline + tick; a blocked tile shows the dashed outline + cross.
+4. Drag preview: a 10-tile wall drag across one blocked tile draws 9 wall wireframes and 1 cross; no per-frame allocation (pool sizes stable across 100 frames).
+5. Browser (in `check-queue.mjs` or `check-render.mjs`, real mouse): pick a gun turret in build mode, hover a valid tile — the wireframe preview of the turret is in the scene at the hovered tile; screenshot `Resources/Bulwark Art Reference/w27-wireframe-preview.png` (and one mid wall drag).
+
+Tests in `game/test/w27-*.test.ts`. The frozen Verify's vitest line gains the `"test/w27-"` filter alongside `"test/w24r2b-" "test/w26-"`; nothing else in Verify changes.
+
 ### Run 2 decisions made here (Richard can overturn)
 
 - **Terrain:** the playable map keeps the game's own gently rolling ground (the simulation does not use height, and buildings can go anywhere); the red-canyon look comes from W17 textures, lighting, haze, terraced outcrops on rock tiles and canyon scenery beyond the map edge. Making map 1 itself a canyon would change the playable map and needs a design decision first.
