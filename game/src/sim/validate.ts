@@ -10,7 +10,7 @@ import { MAX_ORDERS, type World } from './world.ts';
 import { MAX_RUN_DEPTH, newSites, planRun, runById, runCapacityProblem } from './runs.ts';
 import { planGate } from './gate.ts';
 import { SPAWN_AT_MAX, spawnPlaces } from './sandbox.ts';
-import { dequeueIndex } from './queue.ts';
+import { dequeueIndex, ownReservedSite, replacementProblem, worldSiteSource } from './queue.ts';
 import { TUNE_TARGETS, tuneFieldProblem, tuneProblem, type TuneTarget } from './tuning.ts';
 import { map1 } from '../../../model/data/map1.ts';
 
@@ -52,7 +52,9 @@ function check(w: World, cmd: Command): string | null {
         if (!idList(cmd.ids)) return 'build needs unit ids';
         const req = BUILD_REQUIRES[BUILDING_KINDS[cmd.kind]!];
         if (req && !w.researched(req)) return `${buildingInfo(cmd.kind).label} needs research "${RESEARCH[RESEARCH_INDEX[req]!]!.label}"`;
-        if (!w.canPlace(cmd.kind, cmd.tx, cmd.ty)) return `${buildingInfo(cmd.kind).label} cannot stand at ${cmd.tx},${cmd.ty}`;
+        // run 3 C2: an unshifted build on the issuers' own reserved site of exactly this kind, anchor and direction
+        if (!w.canPlace(cmd.kind, cmd.tx, cmd.ty) && ownReservedSite(worldSiteSource(w), cmd.ids, cmd.kind, cmd.tx, cmd.ty, cmd.dir ?? 0, cmd.queue ?? false) < 0)
+          return `${buildingInfo(cmd.kind).label} cannot stand at ${cmd.tx},${cmd.ty}`;
       }
       return null;
     }
@@ -105,7 +107,9 @@ function check(w: World, cmd: Command): string | null {
       w.validated = { cmd, result: plan }; // the apply step and the worker reuse it
       if (typeof plan === 'string') return plan;
       if (plan.tiles.length === 0) return `nothing to build: all ${plan.skipped.total} tiles skipped (rock ${plan.skipped.rock}, wall ${plan.skipped.wall}, blocked ${plan.skipped.blocked})`;
-      return runCapacityProblem(w, newSites(plan));
+      const full = runCapacityProblem(w, newSites(plan));
+      // run 3 C3: without Shift, what the replaced orders release counts (queue.ts replacementProblem)
+      return full && !cmd.queue ? replacementProblem(w, cmd, plan) : full;
     }
     case 'cancelRun':
       if (!isInt(cmd.run)) return 'cancelRun needs a run id';

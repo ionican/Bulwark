@@ -26,9 +26,19 @@
 //
 // Also here: the queue as the snapshot carries it (order kind, target, run id, position, order id),
 // and `dequeue`'s lookup by order id (W25c).
+//
+// Run 3 C2 (Codex R1-2, R2-1): an unshifted single build on a reserved site of exactly that kind,
+// anchor and direction gives the issuers that site, when at least one live issuing unit holds it
+// and no live unit outside the issuers does (ownReservedSite). A site nobody holds (its owner died)
+// is not "own". The same function runs on the simulation's state (validation and application) and
+// on the snapshot (dragPlan.ts snapshotSiteSource: the placement preview and the build-bar click).
+// Run 3 C3 (Codex R1-1, R2-2): orphansOf is dropOrphans' rule without the removal, so an unshifted
+// wall run with a full run table can be planned first (replacementProblem): the runs and sites the
+// replacement releases, by the same rule (a gate site is never released), less the sites the new
+// run keeps in place. Capacity is credited only for what will actually be removed.
 
-import { B } from './kinds.ts';
-import { runById } from './runs.ts';
+import { B, buildingFootprint } from './kinds.ts';
+import { RUN_CAPACITY, newSites, runById, type RunCommand, type RunPlan } from './runs.ts';
 import { BF_COMPLETE, Q_BUILD, Q_MOVE, Q_PRODUCE, Q_RECLAIM, Q_RUN, isReserved } from './schema.ts';
 import type { Order } from './units.ts';
 import type { World } from './world.ts';
@@ -60,29 +70,40 @@ export function dequeueIndex(w: World, slot: number, oid: number): number {
   return orders.findIndex((o) => o.oid === oid);
 }
 
-/** Removes building `id` if it is a reserved site (never a gate site; see the header). */
-function removeIfReserved(w: World, id: number): void {
+/** True if building `id` is a site dropOrphans may remove: reserved, and never a gate (see the header). */
+export function removableSite(w: World, id: number): boolean {
   const s = w.buildings.slotForId(id);
-  if (s < 0 || !isReserved(w.buildings.cols.flags[s]!) || w.buildings.cols.kind[s] === B.gate) return;
-  w.removeBuilding(s);
+  return s >= 0 && isReserved(w.buildings.cols.flags[s]!) && w.buildings.cols.kind[s] !== B.gate;
 }
 
+/** The runs freed and the sites removed (in removal order) by dropOrphans; see orphansOf. */
+export interface Orphans {
+  runs: number[];
+  sites: number[];
+}
+
+const NO_SLOTS: ReadonlySet<number> = new Set();
+
 /**
- * After `removed` left the queues (replaced or dequeued): removes the reserved sites they referred
- * to that no live unit's queue holds any more, and frees runs left with no run order.
+ * What dropOrphans removes after `removed` left the queues, worked out without changing anything:
+ * the reserved sites they referred to that no live unit's queue holds, and the runs left with no
+ * run order (with their reserved tiles nobody holds). Run 3 C3: `skip` are unit slots whose queues
+ * count as already replaced (planning before the replacement), `keep` sites that count as held
+ * (the new run's reused sites).
  */
-export function dropOrphans(w: World, removed: readonly Order[]): void {
+export function orphansOf(w: World, removed: readonly Order[], skip: ReadonlySet<number> = NO_SLOTS, keep: readonly number[] = []): Orphans {
+  const out: Orphans = { runs: [], sites: [] };
   const sites = new Set<number>();
   const runs = new Set<number>();
   for (const o of removed) {
     if (o.t === 'build') sites.add(o.id);
     else if (o.t === 'run') runs.add(o.run);
   }
-  if (!sites.size && !runs.size) return;
-  const heldSites = new Set<number>();
+  if (!sites.size && !runs.size) return out;
+  const heldSites = new Set<number>(keep);
   const heldRuns = new Set<number>();
   for (let s = 0; s < w.units.highWater; s++) {
-    if (!w.units.alive[s]) continue;
+    if (!w.units.alive[s] || skip.has(s)) continue;
     for (const o of w.orders[s] ?? []) {
       if (o.t === 'build') heldSites.add(o.id);
       else if (o.t === 'run') heldRuns.add(o.run);
@@ -91,14 +112,119 @@ export function dropOrphans(w: World, removed: readonly Order[]): void {
   // Tiles of runs still being worked on are held by those run orders.
   for (const r of w.runs) if (r && heldRuns.has(r.id)) for (const site of r.sites) heldSites.add(site);
   // Sets iterate in insertion order (queue order), so removal order is deterministic.
+  const gone = new Set<number>();
+  const drop = (id: number) => {
+    if (heldSites.has(id) || gone.has(id) || !removableSite(w, id)) return;
+    gone.add(id);
+    out.sites.push(id);
+  };
   for (const id of runs) {
     if (heldRuns.has(id)) continue;
-    const i = w.runs.findIndex((r) => r !== null && r.id === id);
-    if (i < 0) continue;
-    for (const site of w.runs[i]!.sites) if (!heldSites.has(site)) removeIfReserved(w, site);
-    w.runs[i] = null;
+    const run = runById(w, id);
+    if (!run) continue;
+    out.runs.push(id);
+    for (const site of run.sites) drop(site);
   }
-  for (const id of sites) if (!heldSites.has(id)) removeIfReserved(w, id);
+  for (const id of sites) drop(id);
+  return out;
+}
+
+/**
+ * After `removed` left the queues (replaced or dequeued): removes the reserved sites they referred
+ * to that no live unit's queue holds any more, and frees runs left with no run order. `keep`: sites
+ * held regardless (run 3 C3: the new run's reused sites, before it is laid).
+ */
+export function dropOrphans(w: World, removed: readonly Order[], keep: readonly number[] = []): void {
+  const o = orphansOf(w, removed, NO_SLOTS, keep);
+  for (const id of o.runs) {
+    const i = w.runs.findIndex((r) => r !== null && r.id === id);
+    if (i >= 0) w.runs[i] = null;
+  }
+  for (const id of o.sites) w.removeBuilding(w.buildings.slotForId(id));
+}
+
+/**
+ * Run 3 C3: null if an unshifted wall run with plan `plan` fits the run table and the building
+ * table once the builders' replaced orders have released what they hold (orphansOf, with the new
+ * run's reused sites kept); otherwise why not. Pure.
+ */
+export function replacementProblem(w: World, cmd: RunCommand, plan: RunPlan): string | null {
+  const slots = new Set<number>();
+  const removed: Order[] = [];
+  for (const id of cmd.ids) {
+    const s = w.units.slotForId(id);
+    if (s < 0 || slots.has(s)) continue;
+    slots.add(s);
+    removed.push(...(w.orders[s] ?? []));
+  }
+  const freed = orphansOf(w, removed, slots, plan.reuse.filter((id) => id >= 0));
+  if (w.runs.filter((r) => r === null).length + freed.runs.length < 1) return `the run table is full (${RUN_CAPACITY} runs): finish or cancel one first`;
+  const n = newSites(plan);
+  if (w.buildings.count - freed.sites.length + n > w.buildings.capacity) return `not enough room in the building table for ${n} wall sites`;
+  return null;
+}
+
+/** What the own-reserved-site rule reads (run 3 C2): the queues, the runs' sites and the reserved sites. */
+export interface SiteSource {
+  /** Unit rows (or slots) to look at. */
+  units: number;
+  /** Id of unit `u`, or -1 when it is not live. */
+  liveId(u: number): number;
+  /** Calls `hold` for each build order (its site, run -1) and run order (site -1, its run) of unit `u`. */
+  holds(u: number, hold: (site: number, run: number) => void): void;
+  /** Sites of run `run` (at least its unfinished ones; none when the run is gone). */
+  runSites(run: number): ArrayLike<number>;
+  /** Id of the reserved site of exactly `kind` (its own footprint) anchored at (tx, ty) facing `dir`, or -1. */
+  reservedSiteAt(kind: number, tx: number, ty: number, dir: number): number;
+}
+
+/**
+ * Run 3 C2: the reserved site an unshifted build of `kind` at (tx, ty) facing `dir` by units `ids`
+ * takes over, or -1. Only without `queue`; the site must be held (a build order on it, or a run
+ * order on a run it belongs to) by at least one live unit in `ids` and by no live unit outside them.
+ */
+export function ownReservedSite(src: SiteSource, ids: readonly number[], kind: number, tx: number, ty: number, dir: number, queue: boolean): number {
+  if (queue) return -1;
+  const site = src.reservedSiteAt(kind, tx, ty, dir);
+  if (site < 0) return -1;
+  let mine = false;
+  for (let u = 0; u < src.units; u++) {
+    const id = src.liveId(u);
+    if (id < 0) continue;
+    let held = false;
+    src.holds(u, (s, run) => {
+      if (held) return;
+      if (s === site) held = true;
+      else if (run >= 0) held = Array.prototype.includes.call(src.runSites(run), site);
+    });
+    if (!held) continue;
+    if (!ids.includes(id)) return -1;
+    mine = true;
+  }
+  return mine ? site : -1;
+}
+
+/** SiteSource over the simulation's state. */
+export function worldSiteSource(w: World): SiteSource {
+  const c = w.buildings.cols;
+  return {
+    units: w.units.highWater,
+    liveId: (u) => (w.units.alive[u] ? w.units.id(u) : -1),
+    holds: (u, hold) => {
+      for (const o of w.orders[u] ?? []) {
+        if (o.t === 'build') hold(o.id, -1);
+        else if (o.t === 'run') hold(-1, o.run);
+      }
+    },
+    runSites: (run) => runById(w, run)?.sites ?? [],
+    reservedSiteAt: (kind, tx, ty, dir) => {
+      if (tx < 0 || ty < 0 || tx >= w.terrain.w || ty >= w.terrain.h) return -1;
+      const s = w.occupancy[ty * w.terrain.w + tx]! - 1;
+      if (s < 0 || c.kind[s] !== kind || c.tx[s] !== tx || c.ty[s] !== ty || c.dir[s] !== (dir & 3) || !isReserved(c.flags[s]!)) return -1;
+      const [fw, fh] = buildingFootprint(kind);
+      return c.fw[s] === fw && c.fh[s] === fh ? w.buildings.id(s) : -1;
+    },
+  };
 }
 
 /** What the replacement rule reads (W25c): the units' queues, the runs' sites, and the wall sites. */

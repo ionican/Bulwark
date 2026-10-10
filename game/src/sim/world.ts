@@ -58,7 +58,7 @@ import { stepConveyors } from './conveyor.ts';
 import { acquireTargets, fireTurrets, stepProjectiles, stepShieldsAndTimers, AlienGrid } from './combat.ts';
 import { stepAliens } from './aliens.ts';
 import { stepUnits, type Order, type OrderSpec } from './units.ts';
-import { dequeueIndex, dropOrphans } from './queue.ts';
+import { dequeueIndex, dropOrphans, ownReservedSite, replacementProblem, worldSiteSource } from './queue.ts';
 import { validateCommand, upgradeProblem } from './validate.ts';
 import { COMMANDER_WRECK_SALVAGE, RESEARCH, RESEARCH_INDEX, SANDBOX_RESPAWN_TICKS, callEarlyBonus, EXTRACTOR_BOOST, FIELD_ENG_TURRET_COOLDOWN } from './balance.ts';
 import { map1 } from '../../../model/data/map1.ts';
@@ -455,7 +455,11 @@ export class World {
         break;
       }
       case 'build': {
-        const site = this.placeBuilding(cmd.kind, cmd.tx, cmd.ty, false, cmd.dir ?? 0);
+        // Run 3 C2 (queue.ts ownReservedSite): unshifted, on the issuers' own reserved site of exactly
+        // this kind, anchor and direction, the order goes to that site (same id); the replaced
+        // orders' other sites go as for any replacement (dropOrphans, after this command).
+        const own = this.canPlace(cmd.kind, cmd.tx, cmd.ty) ? -1 : ownReservedSite(worldSiteSource(this), cmd.ids, cmd.kind, cmd.tx, cmd.ty, cmd.dir ?? 0, cmd.queue ?? false);
+        const site = own >= 0 ? own : this.placeBuilding(cmd.kind, cmd.tx, cmd.ty, false, cmd.dir ?? 0);
         if (site >= 0) this.orderAll(cmd.ids, () => ({ t: 'build', id: site }), cmd.queue);
         break;
       }
@@ -509,7 +513,11 @@ export class World {
       case 'buildRun': {
         // The plan validation made a moment ago, on this state (validate.ts).
         const plan = this.validatedResult<ReturnType<typeof planRun>>(cmd) ?? planRun(this, cmd);
-        if (typeof plan === 'string' || plan.tiles.length === 0 || runCapacityProblem(this, newSites(plan))) break;
+        if (typeof plan === 'string' || plan.tiles.length === 0) break;
+        // Run 3 C3: a full table (runs or buildings) takes an unshifted run only if the replacement
+        // releases enough (queue.ts replacementProblem, planned without changing anything).
+        const full = runCapacityProblem(this, newSites(plan)) !== null;
+        if (full && (cmd.queue || replacementProblem(this, cmd, plan))) break;
         // W25c (queue.ts header): without Shift the builders' queues are replaced before the run is
         // laid, so the own sites the plan keeps join the new run and dropOrphans (after this
         // command) finds them held again; the rest of the replaced orders' sites go as before.
@@ -521,6 +529,12 @@ export class World {
             this.orders[slot] = [];
             this.paths[slot] = null;
           }
+        }
+        if (full) {
+          // C3: release first, keeping the sites the new run reuses, so the run and its sites fit;
+          // the rest of the replaced orders' sites and runs go by the same rule as always
+          dropOrphans(this, this.dropped, plan.reuse.filter((id) => id >= 0));
+          this.dropped.length = 0;
         }
         const run = createRun(this, plan);
         if (run >= 0) this.orderAll(cmd.ids, () => ({ t: 'run', run, site: -1 }), cmd.queue);
