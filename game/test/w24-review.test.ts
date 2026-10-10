@@ -2,21 +2,17 @@
 //   1 startWave at alien capacity stopped the simulation ('entity table full').
 //   2 speed tuning let a saboteur cross a complete gate in one tick.
 //   3 refusals at apply time never reached the caller.
-//   4 the renderer drew at most 1,024 reserved sites although valid runs make more.
+//   4 the renderer drew at most 1,024 reserved sites although valid runs make more (its test went
+//     with W13's greybox renderer in W24 run 3; models.ts draws the outlines).
 
 import { describe, expect, it } from 'vitest';
-import { PerspectiveCamera, Scene } from 'three';
-import { CAPACITY, World } from '../src/sim/world.ts';
+import { World } from '../src/sim/world.ts';
 import { createWorld } from '../src/sim/scenarios.ts';
 import { A, B, U } from '../src/sim/kinds.ts';
 import { flatTerrain } from '../src/sim/terrain.ts';
 import { serializeWorld } from '../src/sim/save.ts';
-import { decodeSnapshot, encodeSnapshot } from '../src/sim/snapshot.ts';
 import { SimRunner, type CommandResult } from '../src/sim/runner.ts';
 import { setTune, TA_SPEED, TU_SPEED } from '../src/sim/tuning.ts';
-import { EntityRenderer } from '../src/render/entities.ts';
-import { Interpolator } from '../src/render/interp.ts';
-import { applyRig } from '../src/render/cameraRig.ts';
 import { flatWorld } from './fixtures.ts';
 
 // ---- 1: capacity ---------------------------------------------------------------------------------
@@ -221,29 +217,5 @@ describe('review 3: the result of each command is reported when it runs', () => 
     r.paused = true;
     r.load(serializeWorld(createWorld(2, 'sandbox')));
     expect(results.map(({ ref, ok, reason }) => ({ ref, ok, reason }))).toEqual([{ ref: 8, ok: false, reason: expect.stringMatching(/load/) }]);
-  });
-});
-
-// ---- 4: renderer capacity ----------------------------------------------------------------------
-
-describe('review 4: the renderer draws every reserved site', () => {
-  it('three maximum runs (1,536 reserved tiles) are all drawn, with no overflow', () => {
-    const terrain = flatTerrain(128, 128);
-    const w = new World(1, terrain, { waves: false });
-    for (const y of [10, 40, 70]) w.enqueue({ t: 'buildRun', ids: [], from: [0, y], to: [127, y], depth: 4 });
-    w.step();
-    expect(w.buildings.count).toBe(1536);
-    const snap = decodeSnapshot(encodeSnapshot(w));
-    const scene = new Scene();
-    const renderer = new EntityRenderer(scene, terrain, CAPACITY, { models: true });
-    const interp = new Interpolator(CAPACITY);
-    interp.push(snap, 0);
-    const camera = new PerspectiveCamera(60, 1, 0.5, 2000);
-    applyRig(camera, { x: 64, z: 64, distance: 400, yaw: 0 }, 0);
-    camera.updateMatrixWorld();
-    renderer.update({ camera, viewportHeight: 900, yaw: 0, snapshot: snap, aliens: interp.aliens, units: interp.units, projectiles: interp.projectiles, selection: [] });
-    expect(renderer.counts.culled).toBe(0);
-    expect(renderer.reservedDrawn).toBe(1536);
-    expect(renderer.overflowed).toBe(false);
   });
 });

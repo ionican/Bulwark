@@ -1382,9 +1382,9 @@ function frame(now: number) {
 }
 requestAnimationFrame(frame);
 
-/** Objects per detail level last frame (model view: full, middle, simple, icon; greybox: W13's three). */
+/** Objects per detail level last frame (full, middle, simple, icon). */
 function lodCounts(): { full: number; middle?: number; simple: number; icon: number; culled: number } {
-  return view.models ? { ...view.models.counts } : { ...entities.counts };
+  return { ...view.models.counts };
 }
 
 function entityCounts(s: Snapshot | null) {
@@ -1813,17 +1813,17 @@ const game = {
   get viewport() {
     return { css: [vw, vh], buffer: [adapter.canvas.width, adapter.canvas.height], pixelRatio: adapter.renderer.getPixelRatio() };
   },
-  /** CPU ms of the last frame: scene update, then each render pass (composer passes, or 'scene'). */
+  /** CPU ms of the last frame: scene update, then each composer pass. */
   get timing() {
     return { updateMs, renderMs: adapter.timing.renderMs, passes: { ...adapter.timing.passes } };
   },
-  /** Wall topology rebuilds so far (layout key changes); null in the greybox view. */
+  /** Wall topology rebuilds so far (layout key changes). */
   get wallRebuilds() {
-    return view.models?.walls.rebuilds ?? null;
+    return view.models.walls.rebuilds;
   },
   /** A batch dropped an instance past its capacity (model view and overlays). */
   get overflowed() {
-    return (view.models?.overflowed ?? false) || entities.overflowed;
+    return view.models.overflowed || entities.overflowed;
   },
   /**
    * Scene inspection (render/inspect.ts): per kind, what the scene graph actually holds on that
@@ -1881,7 +1881,6 @@ const game = {
    */
   get activity() {
     const m = view.models;
-    if (!m) return null;
     return { ...m.activity, now: { ...m.activityNow }, clock: { t: effectClock.t, dt: effectClock.dt } };
   },
   /** W27: the wireframe previews read back from the scene (render/preview.ts inspectPreview). */

@@ -63,7 +63,7 @@ export async function measureRenderCost(adapter: RenderAdapter, view: GameView, 
     r.info.reset();
     r.render(scene, camera);
   };
-  const ground = view.ground ? [view.ground.ground, view.ground.outcrops] : [];
+  const ground = [view.ground.ground, view.ground.outcrops];
   const setGround = (on: boolean) => ground.forEach((m) => (m.visible = on));
   const others = scene.children.filter((o) => !ground.includes(o as never) && o.name !== 'sky' && !o.type.endsWith('Light'));
   let saved: boolean[] = [];

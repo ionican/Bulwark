@@ -7,7 +7,8 @@
 import { Mesh, type Material, type Object3D } from 'three';
 
 export const OVERLAY_NAMES = ['construction-frame', 'reserved-outline'] as const;
-export type OverlayName = (typeof OVERLAY_NAMES)[number];
+/** The construction frames' material name (entities.ts) and the reserved outlines' (materials.ts). */
+export const [FRAME_MATERIAL, OUTLINE_MATERIAL] = OVERLAY_NAMES;
 
 /** Meshes under `root` drawn with the material called `name`, in scene order. */
 export function overlayMeshes(root: Object3D, name: string): Mesh[] {

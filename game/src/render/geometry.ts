@@ -550,31 +550,6 @@ export function unitGeometries(): KindGeometry[] {
   return UNIT_KINDS.map((k) => ({ full: unitFull(k), simple: unitSimple(k), icon: iconGeometry(UNIT_ICONS[k], PALETTE.iconFriend) }));
 }
 
-export function rockGeometry(): BufferGeometry {
-  return merge([part(new DodecahedronGeometry(0.7, 0), '#5a4636')]);
-}
-
-/** Deposit pads: mass = hexagonal pad with three amber shards; rare = four-point star pad with a tall crystal. */
-export function depositGeometry(kind: 'mass' | 'rare'): BufferGeometry {
-  const P = PALETTE;
-  if (kind === 'mass') {
-    return merge([
-      part(cyl(1.15, 1.25, 0.12, 6), '#4d3d2a', { y: 0.06 }),
-      part(cone(0.12, 0.5, 4), P.crystal, { x: 0.5, y: 0.25, z: 0.2, rz: 0.3 }),
-      part(cone(0.12, 0.6, 4), P.crystal, { x: -0.4, y: 0.3, z: 0.4, rz: -0.2 }),
-      part(cone(0.1, 0.45, 4), P.crystal, { x: 0.0, y: 0.22, z: -0.5, rx: 0.3 }),
-    ]);
-  }
-  const starPad = new ShapeGeometry(shapeFrom(star(1.4, 0.6, 4))).rotateX(-Math.PI / 2).translate(0, 0.08, 0);
-  return merge([paint(starPad, '#6e6290'), part(new OctahedronGeometry(0.35), P.rare, { y: 0.9, sy: 2.2 })]);
-}
-
-/** Map-overview icons for deposits: hollow hexagon (mass), hollow four-point star (rare). */
-export function depositIconGeometry(kind: 'mass' | 'rare'): BufferGeometry {
-  if (kind === 'mass') return iconGeometry({ outer: regular(1, 6, 0), holes: [rev(regular(0.55, 6, 0))] }, PALETTE.crystal);
-  return iconGeometry({ outer: star(1.2, 0.5, 4), holes: [rev(star(0.6, 0.25, 4))] }, PALETTE.rare);
-}
-
 /** Entry marker: a broad chevron on the ground pointing along +X (into the map once rotated). */
 export function entryGeometry(): BufferGeometry {
   const chev: Pt[] = [[1.5, 0], [-0.5, 2], [-1.5, 2], [0.5, 0], [-1.5, -2], [-0.5, -2]];

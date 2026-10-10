@@ -47,7 +47,7 @@ function drawAll() {
   const cam = new PerspectiveCamera(45, 1440 / 900, 0.5, 1000);
   applyRig(cam, { x: 50, z: 82, distance: 14, yaw: 0 }, 0);
   draw(r, s, { cam });
-  const overlays = new EntityRenderer(scene, terrain, CAPACITY, { models: false });
+  const overlays = new EntityRenderer(scene, terrain, CAPACITY);
   const interp = new Interpolator(CAPACITY);
   interp.push(s, 0);
   overlays.update({ camera: cam, viewportHeight: 900, yaw: 0, snapshot: s, aliens: interp.aliens, units: interp.units, projectiles: interp.projectiles, selection: [] });

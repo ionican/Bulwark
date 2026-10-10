@@ -46,7 +46,7 @@ export class DragPreview {
   private readonly skipOutline: SimpleBatch;
   private readonly skipCross: SimpleBatch;
   private readonly terrain: Terrain;
-  private readonly wire: WireframePool | null;
+  private readonly wire: WireframePool;
   private readonly captured: Captured[] = [];
   /** Kind and build tiles the wireframes were made for (kind, then x, z, dir per tile). */
   private planned = new Int32Array(64);
@@ -57,10 +57,10 @@ export class DragPreview {
   constructor(
     parent: Object3D,
     terrain: Terrain,
-    private readonly models: ModelRenderer | null = null,
+    private readonly models: ModelRenderer,
   ) {
     this.terrain = terrain;
-    this.wire = models ? new WireframePool(parent, 'overlay/drag/wire') : null;
+    this.wire = new WireframePool(parent, 'overlay/drag/wire');
     const flat = new MeshBasicMaterial({ vertexColors: true, depthTest: false, depthWrite: false, toneMapped: false });
     this.build = marks(parent, ghostOutlineGeometry(true), flat, 'overlay/drag/build');
     this.skipOutline = marks(parent, ghostOutlineGeometry(false), flat, 'overlay/drag/skip');
@@ -99,7 +99,6 @@ export class DragPreview {
   private wires(tiles: DragTiles | null, time: number): void {
     const W = this.wire;
     const M = this.models;
-    if (!W || !M) return;
     if (!tiles || tiles.build.length === 0) {
       if (this.plannedN !== 0) W.clear();
       this.plannedN = 0;

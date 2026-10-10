@@ -18,6 +18,7 @@
 
 import { Color, MeshBasicMaterial, MeshDepthMaterial, MeshStandardMaterial, Texture, type Material, type WebGLProgramParametersWithUniforms, type WebGLRenderer } from 'three';
 import type { TextureBank } from './workshop/assets/textures.ts';
+import { OUTLINE_MATERIAL } from './debugRender.ts';
 import { createMaterials, type MatKey as W17Key, type Mats } from './workshop/models/materials.ts';
 import { BUILT, createAssetMats, type AssetMats, type MatKey } from './workshop/w23/mats.ts';
 
@@ -97,7 +98,7 @@ function cutMats(src: Mats): Mats {
  */
 function outlineMaterial(): MeshBasicMaterial {
   return new MeshBasicMaterial({
-    name: 'reserved-outline',
+    name: OUTLINE_MATERIAL,
     vertexColors: true,
     depthTest: true,
     depthWrite: false,

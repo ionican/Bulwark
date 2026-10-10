@@ -27,9 +27,9 @@ export interface GameView {
   readonly entities: EntityRenderer;
   readonly models: ModelRenderer;
   readonly terrainView: TerrainView;
-  readonly ground: GroundMeshes | null;
-  readonly pave: PaveMap | null;
-  readonly lighting: Lighting | null;
+  readonly ground: GroundMeshes;
+  readonly pave: PaveMap;
+  readonly lighting: Lighting;
   /** Per-frame updates before the adapter renders. `distance` is the camera rig's distance. */
   update(f: FrameInput, distance: number, wppAt: (x: number, y: number, z: number) => number, overview: boolean): void;
   /**
@@ -78,8 +78,8 @@ export async function createView(
     return atlas;
   });
   scene.add(models.group);
-  const entities = new EntityRenderer(scene, terrain, capacity, { models: false });
-  const terrainView = buildTerrainView(terrain, { ground: false });
+  const entities = new EntityRenderer(scene, terrain, capacity);
+  const terrainView = buildTerrainView(terrain);
   scene.add(terrainView.group);
   adapter.attach(scene, camera);
   adapter.onQuality((_q, spec) => {
@@ -108,7 +108,7 @@ export async function createView(
       }
       models.update(f);
       entities.update(f);
-      terrainView.update(wppAt, overview, f.yaw);
+      terrainView.update(wppAt);
     },
     async warmUp() {
       const t0 = performance.now();

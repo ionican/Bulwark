@@ -12,7 +12,7 @@
 //
 // W24 run 3 removed the second render mode: there is one view, the models view, always composed.
 
-import { NoToneMapping, SRGBColorSpace, WebGLRenderer, type Camera, type PerspectiveCamera, type Scene } from 'three';
+import { NoToneMapping, SRGBColorSpace, WebGLRenderer, type PerspectiveCamera, type Scene } from 'three';
 import { QUALITY, StressPost, type QualitySpec } from './workshop/stress/post.ts';
 
 export type Quality = 'medium' | 'high';
@@ -63,8 +63,6 @@ export function createRenderer(quality: Quality = 'medium'): RenderAdapter {
   if (dbg) gpu = String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL));
   const backend = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext ? 'WebGL2' : 'WebGL1';
 
-  let scene: Scene | null = null;
-  let camera: Camera | null = null;
   let post: StressPost | null = null;
   let q: Quality = quality;
   let cssW = 1;
@@ -98,28 +96,24 @@ export function createRenderer(quality: Quality = 'medium'): RenderAdapter {
       return post;
     },
     attach(s, c) {
-      scene = s;
-      camera = c;
-      {
-        post = new StressPost(r, s, c, Math.max(1, cssW), Math.max(1, cssH));
-        // W21's order (stress/post.ts): scene, ambient occlusion, bloom + tone map, tone map only
-        // (when bloom is off), SMAA. Named, and each pass's own render call timed (CPU).
-        const names = ['scene', 'ambient-occlusion', 'bloom+tonemap', 'tonemap-only', 'smaa'];
-        post.composer.passes.forEach((p, i) => (p.name = names[i] ?? p.name));
-        for (const pass of post.composer.passes) {
-          const name = pass.name;
-          const inner = pass.render.bind(pass);
-          pass.render = (...args: Parameters<typeof pass.render>) => {
-            const t0 = performance.now();
-            const c0 = r.info.render.calls;
-            const tr0 = r.info.render.triangles;
-            inner(...args);
-            timing.passes[name] = (timing.passes[name] ?? 0) + performance.now() - t0;
-            timing.submitted[name] = { calls: r.info.render.calls - c0, triangles: r.info.render.triangles - tr0 };
-          };
-        }
-        applyQuality();
+      post = new StressPost(r, s, c, Math.max(1, cssW), Math.max(1, cssH));
+      // W21's order (stress/post.ts): scene, ambient occlusion, bloom + tone map, tone map only
+      // (when bloom is off), SMAA. Named, and each pass's own render call timed (CPU).
+      const names = ['scene', 'ambient-occlusion', 'bloom+tonemap', 'tonemap-only', 'smaa'];
+      post.composer.passes.forEach((p, i) => (p.name = names[i] ?? p.name));
+      for (const pass of post.composer.passes) {
+        const name = pass.name;
+        const inner = pass.render.bind(pass);
+        pass.render = (...args: Parameters<typeof pass.render>) => {
+          const t0 = performance.now();
+          const c0 = r.info.render.calls;
+          const tr0 = r.info.render.triangles;
+          inner(...args);
+          timing.passes[name] = (timing.passes[name] ?? 0) + performance.now() - t0;
+          timing.submitted[name] = { calls: r.info.render.calls - c0, triangles: r.info.render.triangles - tr0 };
+        };
       }
+      applyQuality();
     },
     setSize(w, h) {
       cssW = w;
@@ -135,17 +129,13 @@ export function createRenderer(quality: Quality = 'medium'): RenderAdapter {
       fn(q, QUALITY[q]);
     },
     render(dt) {
-      if (!scene || !camera) return;
+      // the composer (scene, camera and passes) is built by attach
+      if (!post) return;
       r.info.reset();
       for (const k of Object.keys(timing.passes)) timing.passes[k] = 0;
       timing.submitted = {};
       const t0 = performance.now();
-      if (post) post.render(dt);
-      else {
-        r.render(scene, camera);
-        timing.passes.scene = performance.now() - t0;
-        timing.submitted.scene = { calls: r.info.render.calls, triangles: r.info.render.triangles };
-      }
+      post.render(dt);
       timing.renderMs = performance.now() - t0;
     },
     drawCalls: () => r.info.render.calls,
