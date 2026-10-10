@@ -44,8 +44,13 @@
 //      site), each partly behind a gun turret: the overlay's own pixel contribution (the frame
 //      drawn with and without it) is zero inside the occluding turret and non-zero on its
 //      unobstructed part; with the overlays' depth test off it is non-zero inside (the negative)
-//   13 screenshots: w24r3-panel-build.png, -spawn.png, -tune.png, -economy.png, -stats.png,
-//      w24r3-overlays-occluded.png (to --shots <dir>, else the vault's Bulwark Art Reference)
+//   13 paint a row (Richard, 10 Oct): the energy generator from the build bar, one real mouse
+//      drag over 8 tiles of clear ground: before release the preview shows 4 placed positions
+//      (solid outlines) and its label; after release 4 generator sites stand edge to edge and the
+//      engineers build them
+//   14 screenshots: w24r3-panel-build.png, -spawn.png, -tune.png, -economy.png, -stats.png,
+//      w24r3-overlays-occluded.png, w24r3-paint-row.png (to --shots <dir>, else the vault's
+//      Bulwark Art Reference)
 // 0 console errors throughout. It always stops its server and closes only its own session.
 
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
@@ -816,6 +821,65 @@ async function overlays(f) {
   await pause(false);
 }
 
+// ---- 13: paint a row --------------------------------------------------------------------------------
+
+/** A clear ground strip for 4 generators (8 × 2 tiles) with a 2-tile free ring, near the base. */
+function pickRowStrip() {
+  return js(`(() => {
+    const t = __game.terrainInfo;
+    const used = new Set();
+    for (const b of __game.list('building')) for (let j = 0; j < b.fh; j++) for (let i = 0; i < b.fw; i++) used.add((b.ty + j) * t.w + b.tx + i);
+    for (let r = 10; r < 50; r++)
+      for (let a = 0; a < 48; a++) {
+        const x0 = Math.round(t.base.x + r * Math.cos((a / 48) * 2 * Math.PI)) - 4;
+        const z0 = Math.round(t.base.z + r * Math.sin((a / 48) * 2 * Math.PI)) - 1;
+        let ok = true;
+        for (let z = z0 - 2; z <= z0 + 3 && ok; z++)
+          for (let x = x0 - 2; x <= x0 + 9 && ok; x++)
+            if (x < 1 || z < 1 || x >= t.w - 1 || z >= t.h - 1 || __game.tileInfo(x, z).type !== 'ground' || used.has(z * t.w + x)) ok = false;
+        if (ok) return { x0, z0 };
+      }
+    return null;
+  })()`);
+}
+
+async function paintRow(f) {
+  const strip = pickRowStrip();
+  if (!strip) throw new Error('no clear 8 × 2 strip for the generator row');
+  const { x0, z0 } = strip;
+  const want = [0, 2, 4, 6].map((i) => [x0 + i, z0]);
+  note(`paint-row strip: anchors ${JSON.stringify(want)}`);
+  await selectUnit(f.e1);
+  await selectUnit(f.e2, true);
+  camera({ x: x0 + 4, z: z0 + 1, distance: 30, yaw: 0, pitch: (60 * Math.PI) / 180 });
+  await frames(10);
+  await clickEl('.bar button[data-kind="generator"]');
+  check(tool().name === 'build' && tool().kind === 'generator', 'the build bar picks the energy generator', `tool: ${JSON.stringify(tool())}`);
+  // a real press, moves and (later) release: the cursor on the first and last footprints' centres
+  const a = toScreen(x0 + 1, z0 + 1);
+  const b = toScreen(x0 + 7, z0 + 1);
+  ab('mouse', 'move', R(a.x), R(a.y));
+  ab('mouse', 'down', 'left');
+  for (let k = 1; k <= 10; k++) ab('mouse', 'move', R(a.x + ((b.x - a.x) * k) / 10), R(a.y + ((b.y - a.y) * k) / 10));
+  await frames(10);
+  const pv = js('__game.dragPreview');
+  const builds = pv ? pv.build.map(([x, z]) => [x, z]) : null;
+  check(
+    !!pv && pv.kind === 'generator' && JSON.stringify(builds) === JSON.stringify(want) && pv.skipped.length === 0 && pv.drawn.build.length === 4 && /× 4/.test(pv.label ?? ''),
+    `before release the preview shows 4 generator ghosts edge to edge (label "${pv?.label}")`,
+    `preview ${JSON.stringify(pv)}; wanted ${JSON.stringify(want)}`,
+  );
+  await shot('w24r3-paint-row.png');
+  ab('mouse', 'up', 'left');
+  await frames(3);
+  await until('4 generator sites', `${JSON.stringify(want)}.every(([x, z]) => __game.list('building').some((b) => b.kindName === 'generator' && b.tx === x && b.ty === z))`, 10);
+  check(js('__game.dragPreview') === null && tool().name === 'select', 'after release: 4 generator sites, no preview left, the tool closed (no Shift)', `tool ${JSON.stringify(tool())}`);
+  await speed(3);
+  await until('the 4 generators built', `${JSON.stringify(want)}.every(([x, z]) => __game.list('building').some((b) => b.kindName === 'generator' && b.tx === x && b.ty === z && b.complete))`, 240);
+  check(true, 'the engineers built all 4 generators of the row', '');
+  await speed(1);
+}
+
 async function run() {
   await visibility();
   await tabs();
@@ -829,6 +893,7 @@ async function run() {
   await picking(f, g);
   await reservedAndC2(f);
   await overlays(f);
+  await paintRow(f);
   errorsNow('check-panel');
 }
 
