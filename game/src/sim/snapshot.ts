@@ -22,7 +22,7 @@
 // The bytes depend on simulation state only (no timings), so equal state gives byte-identical
 // snapshots — the determinism tests compare them.
 
-import { ALIEN_FIELDS, BF_COMPLETE, BUILDING_FIELDS, G_SHORT, PROJECTILE_FIELDS, UNIT_FIELDS, WRECK_FIELDS } from './schema.ts';
+import { ALIEN_FIELDS, BF_COMPLETE, BUILDING_FIELDS, G_RESEARCH_DONE, G_SHORT, PROJECTILE_FIELDS, UNIT_FIELDS, WRECK_FIELDS } from './schema.ts';
 import { BYTES, makeArray, type AnyTypedArray, type ArrayFor, type FieldSpec, type Table } from './table.ts';
 import { SCENARIO_NAMES, type World } from './world.ts';
 import { STAT_COUNT } from './stats.ts';
@@ -88,7 +88,7 @@ export const G_NEXT_WAVE = 24; // index of the next wave to arrive (0..20)
 export const G_NEXT_WAVE_TICK = 25; // its start tick (-1 when none left)
 export const G_LAST_WAVE_TICK = 26;
 export const G_END_TICK = 27;
-export const G_RESEARCH_DONE = 28; // bit mask over RESEARCH
+export { G_RESEARCH_DONE }; // 28, bit mask over RESEARCH; defined in schema.ts (snapshotRules.ts reads it)
 export const G_RESEARCH_CURRENT = 29; // node index or -1
 export const G_RESEARCH_PROGRESS = 30; // 0..1
 export const G_RESEARCH_RATE = 31; // RP per second

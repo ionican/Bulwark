@@ -130,6 +130,8 @@ export const UNIT_MOVING = US_MOVING;
  * (W25b waiting markers; render code imports only the pure simulation modules).
  */
 export const G_SHORT = 13;
+/** Snapshot globals index of the research-done bit mask over RESEARCH (here for the same reason: snapshotRules.ts). */
+export const G_RESEARCH_DONE = 28;
 
 export const Q_MOVE = 0;
 export const Q_BUILD = 1;

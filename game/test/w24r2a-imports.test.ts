@@ -15,8 +15,9 @@ import { GATE_AXIS_Z, gateDepthOf } from '../src/render/wallLayout.ts';
 const SRC = fileURLToPath(new URL('../src/', import.meta.url));
 // W24 run 3: tuning.ts joins the list. Its value imports are kinds.ts and balance.ts only; the D2
 // readout (render/siteReadout.ts) reads build power through its unitBuildRate, as the plan requires,
-// rather than re-deriving the multipliers.
-const PURE_SIM = new Set(['sim/kinds.ts', 'sim/balance.ts', 'sim/schema.ts', 'sim/table.ts', 'sim/terrain.ts', 'sim/rng.ts', 'sim/tuning.ts']);
+// rather than re-deriving the multipliers. gate.ts joins too (value imports kinds.ts, schema.ts and
+// balance.ts): picking reads a gate's corridor column through its inGateCorridor.
+const PURE_SIM = new Set(['sim/kinds.ts', 'sim/balance.ts', 'sim/schema.ts', 'sim/table.ts', 'sim/terrain.ts', 'sim/rng.ts', 'sim/tuning.ts', 'sim/gate.ts']);
 
 function filesUnder(dir: string): string[] {
   const out: string[] = [];
@@ -76,7 +77,7 @@ describe('criterion 1: render code imports nothing from the simulation that muta
     const sim = reached.filter((f) => f.startsWith('sim/'));
     const bad = sim.filter((f) => !PURE_SIM.has(f)).map((f) => `${f} (from ${relative(SRC, reachedFrom.get(join(SRC, f))!)})`);
     expect(bad).toEqual([]);
-    for (const f of ['sim/world.ts', 'sim/snapshot.ts', 'sim/worker.ts', 'sim/runner.ts', 'sim/save.ts', 'sim/gate.ts', 'sim/sandbox.ts']) expect(reached).not.toContain(f);
+    for (const f of ['sim/world.ts', 'sim/snapshot.ts', 'sim/worker.ts', 'sim/runner.ts', 'sim/save.ts', 'sim/sandbox.ts']) expect(reached).not.toContain(f);
   });
 
   it('nothing in the render graph is outside game/ except the W12 model data', () => {

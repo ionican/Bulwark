@@ -21,9 +21,8 @@
 // Pure: no DOM, no three.js (ui/siteHover.ts draws the panel; main.ts picks the site under the cursor).
 
 import type { Snapshot } from '../sim/snapshot.ts';
-import { BF_COMPLETE, BF_UPGRADING, isReserved } from '../sim/schema.ts';
+import { BF_COMPLETE, BF_UPGRADING, US_BUILDING, isReserved } from '../sim/schema.ts';
 import { TICK_HZ, buildingInfo, siteWork } from '../sim/kinds.ts';
-import { US_BUILDING } from '../sim/schema.ts';
 import { unitBuildRate } from '../sim/tuning.ts';
 import { sameRules, snapshotRules } from '../snapshotRules.ts';
 import { RESOURCE_NAMES, type ResourceName } from './waiting.ts';
@@ -63,21 +62,20 @@ function rowOf(snap: Snapshot, id: number): number {
   return -1;
 }
 
-/** Ids of the units building `id` in `s`, ascending (unit rows are in slot order, not id order). */
-function workingUnits(s: Snapshot, id: number): number[] {
+/**
+ * The units building `id` in `s`: their ids, ascending (unit rows are in slot order, not id order),
+ * and their summed build power with the simulation's multipliers. One pass over the units.
+ */
+function workers(s: Snapshot, id: number): { ids: number[]; power: number } {
   const u = s.units;
-  const out: number[] = [];
-  for (let r = 0; r < u.count; r++) if (u.cols.state[r] === US_BUILDING && u.cols.work[r]! - 1 === id) out.push(u.id[r]!);
-  return out.sort((a, b) => a - b);
-}
-
-/** Summed build power of the units building `id` in `s`, with the simulation's multipliers. */
-function buildPower(s: Snapshot, id: number): number {
-  const rules = snapshotRules(s);
-  const u = s.units;
-  let bp = 0;
-  for (let r = 0; r < u.count; r++) if (u.cols.state[r] === US_BUILDING && u.cols.work[r]! - 1 === id) bp += unitBuildRate(rules, u.cols.kind[r]!);
-  return bp;
+  const ids: number[] = [];
+  let power = 0;
+  for (let r = 0; r < u.count; r++)
+    if (u.cols.state[r] === US_BUILDING && u.cols.work[r]! - 1 === id) {
+      ids.push(u.id[r]!);
+      power += unitBuildRate(snapshotRules(s), u.cols.kind[r]!);
+    }
+  return { ids: ids.sort((a, b) => a - b), power };
 }
 
 /** "20", "2.5", "0.33", "0". */
@@ -111,9 +109,8 @@ export function siteReadout(prev: Snapshot | null, curr: Snapshot, id: number): 
   const dt = same ? (curr.tick - prev!.tick) / TICK_HZ : 0;
   const intakeNote: SiteReadout['intakeNote'] = !same ? 'measuring' : dt === 0 ? 'paused' : '';
   const done = intakeNote ? 0 : Math.max(0, progress - pc!.progress[pr]!);
-  const working = workingUnits(curr, id);
-  const bp = working.length ? buildPower(curr, id) : 0;
-  const before = prev ? workingUnits(prev, id) : null;
+  const { ids: working, power: bp } = workers(curr, id);
+  const before = prev ? workers(prev, id).ids : null;
   const stable = !!prev && before!.length === working.length && before!.every((v, i) => v === working[i]) && sameRules(prev, curr);
   const intake: SiteIntake[] = [];
   RESOURCE_NAMES.forEach((resource, k) => {

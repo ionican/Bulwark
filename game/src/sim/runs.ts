@@ -162,10 +162,13 @@ export function planRunOn(src: RunPlanSource, cmd: { from: [number, number]; to:
   return { tiles, skipped, skippedAt, reuse, axis, start };
 }
 
-/** Null if a run with `tiles` new sites fits the run table and the building table. */
-export function runCapacityProblem(w: World, tiles: number): string | null {
-  if (!w.runs.some((r) => r === null)) return `the run table is full (${RUN_CAPACITY} runs): finish or cancel one first`;
-  if (w.buildings.count + tiles > w.buildings.capacity) return `not enough room in the building table for ${tiles} wall sites`;
+/**
+ * Null if a run with `tiles` new sites fits the run table and the building table, counting
+ * `freedRuns` runs and `freedSites` sites as released first (run 3 C3: queue.ts replacementProblem).
+ */
+export function runCapacityProblem(w: World, tiles: number, freedRuns = 0, freedSites = 0): string | null {
+  if (freedRuns < 1 && !w.runs.some((r) => r === null)) return `the run table is full (${RUN_CAPACITY} runs): finish or cancel one first`;
+  if (w.buildings.count - freedSites + tiles > w.buildings.capacity) return `not enough room in the building table for ${tiles} wall sites`;
   return null;
 }
 

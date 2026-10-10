@@ -203,7 +203,7 @@ async function clickEl(sel) {
 }
 const text = (sel) => js(`document.querySelector(${JSON.stringify(sel)})?.textContent ?? null`);
 const toScreen = (x, z) => js(`__game.worldToScreen(${x}, ${z})`);
-const toScreenY = (x, y, z) => js(`__game.worldToScreenY(${x}, ${y}, ${z})`);
+const toScreenY = (x, y, z) => js(`__game.worldToScreen(${x}, ${z}, ${y})`);
 async function clickTile(x, z) {
   const p = toScreen(x, z);
   await click(p.x, p.y);

@@ -15,6 +15,9 @@ import { ALIEN_KINDS, BUILDING_KINDS, U, UNIT_KINDS, alienInfo, buildingInfo, un
 import { FIELD_ENG_BUILD_MULT, TUNE_MAX, TUNE_MIN } from './balance.ts';
 import type { World } from './world.ts';
 
+/** What the rule accessors below read of a world: its tuning and its research (snapshotRules.ts builds one from a snapshot). */
+export type Rules = Pick<World, 'tuning' | 'researched'>;
+
 export type TuneTarget = 'building' | 'alien' | 'unit';
 export const TUNE_TARGETS: readonly TuneTarget[] = ['building', 'alien', 'unit'];
 
@@ -144,30 +147,30 @@ export function resetTune(w: World, target?: TuneTarget, kind?: number): void {
 // move). Run 3's panel shows them.
 
 /** Maximum hit points of a unit kind. */
-export const unitMaxHp = (w: World, kind: number): number => unitInfo(kind).hp * w.tuning.u(kind, TU_HP);
+export const unitMaxHp = (w: Rules, kind: number): number => unitInfo(kind).hp * w.tuning.u(kind, TU_HP);
 /** Unit speed, tiles per tick. */
-export const unitSpeed = (w: World, kind: number): number => unitInfo(kind).speed * w.tuning.u(kind, TU_SPEED);
+export const unitSpeed = (w: Rules, kind: number): number => unitInfo(kind).speed * w.tuning.u(kind, TU_SPEED);
 /** Build power: W12 rate, × Field engineering for engineers once researched, × tune. */
-export function unitBuildRate(w: World, kind: number): number {
+export function unitBuildRate(w: Rules, kind: number): number {
   const info = unitInfo(kind);
   const base = kind === U.engineer && w.researched('fieldEng') ? info.buildRate * FIELD_ENG_BUILD_MULT : info.buildRate;
   return base * w.tuning.u(kind, TU_BUILD_RATE);
 }
 
 /** Maximum hit points of an alien kind. */
-export const alienMaxHp = (w: World, kind: number): number => alienInfo(kind).hp * w.tuning.a(kind, TA_HP);
+export const alienMaxHp = (w: Rules, kind: number): number => alienInfo(kind).hp * w.tuning.a(kind, TA_HP);
 /** Alien damage per second. */
-export const alienDps = (w: World, kind: number): number => alienInfo(kind).dps * w.tuning.a(kind, TA_DPS);
+export const alienDps = (w: Rules, kind: number): number => alienInfo(kind).dps * w.tuning.a(kind, TA_DPS);
 /** Alien speed, tiles per tick. */
-export const alienSpeed = (w: World, kind: number): number => alienInfo(kind).speed * w.tuning.a(kind, TA_SPEED);
+export const alienSpeed = (w: Rules, kind: number): number => alienInfo(kind).speed * w.tuning.a(kind, TA_SPEED);
 
 /** Raw damage per shot of a turret kind at `tier` (tier 2 multiplies by W12's damageMult). */
-export function turretDamage(w: World, kind: number, tier: number): number {
+export function turretDamage(w: Rules, kind: number, tier: number): number {
   const info = buildingInfo(kind);
   const tierMult = tier > 1 ? (info.tiers?.[tier - 2]?.damageMult ?? 1) : 1;
   return info.weapon!.damage * tierMult * w.tuning.b(kind, TB_DAMAGE);
 }
 /** Turret range in tiles. */
-export const turretRange = (w: World, kind: number): number => buildingInfo(kind).weapon!.range * w.tuning.b(kind, TB_RANGE);
+export const turretRange = (w: Rules, kind: number): number => buildingInfo(kind).weapon!.range * w.tuning.b(kind, TB_RANGE);
 /** Seconds between a turret's shots. */
-export const turretInterval = (w: World, kind: number): number => buildingInfo(kind).weapon!.interval * w.tuning.b(kind, TB_INTERVAL);
+export const turretInterval = (w: Rules, kind: number): number => buildingInfo(kind).weapon!.interval * w.tuning.b(kind, TB_INTERVAL);

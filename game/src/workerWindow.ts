@@ -5,18 +5,10 @@
 // repeating or overlapping the last one kept; every other batch is counted by the reason it was
 // dropped. The rolling sample buffer behind the HUD is not used: it holds only the last few seconds.
 
-/** One batch's timing, on the page clock (ms). */
-export interface BatchTiming {
-  /** Wall ms stepping the batch's ticks (encoding not included). */
-  stepMs: number;
-  ticksRun: number;
-  encodeMs: number;
-  firstTick: number;
-  lastTick: number;
-  epoch: number;
-  startedAt: number;
-  endedAt: number;
-}
+import type { WorkerBatchTiming } from './sim/protocol.ts';
+
+/** One batch's timing, its startedAt and endedAt on the page clock (ms). */
+export type BatchTiming = WorkerBatchTiming;
 
 export interface WorkerWindowReport {
   /** Batches kept. */
@@ -41,10 +33,6 @@ export class WorkerWindow {
   private batches: BatchTiming[] = [];
   private dropped = { beforeStart: 0, afterStop: 0, epoch: 0, repeated: 0 };
   private last: WorkerWindowReport | null = null;
-
-  get recording(): boolean {
-    return this.running;
-  }
 
   start(now: number, epoch: number): void {
     this.running = true;

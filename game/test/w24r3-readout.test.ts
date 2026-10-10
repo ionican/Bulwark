@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 import { B, BUILDING_INFO, U, UNIT_INFO } from '../src/sim/kinds.ts';
 import { RESEARCH_INDEX } from '../src/sim/balance.ts';
 import { TU_BUILD_RATE, setTune } from '../src/sim/tuning.ts';
-import { siteReadout } from '../src/render/siteReadout.ts';
+import { formatRate, siteReadout } from '../src/render/siteReadout.ts';
 import type { World } from '../src/sim/world.ts';
 import { flatWorld } from './fixtures.ts';
 import { snapshotOf } from './w24r2a-fixtures.ts';
@@ -107,11 +107,3 @@ describe('run 3 criterion 9: received / wanted per s', () => {
     for (const o of stable) for (const i of o.intake) expect(i.perSecond!, `${i.resource} received`).toBeLessThanOrEqual(i.wanted! * 1.01 + 1e-9);
   });
 });
-
-/** siteReadout's own number format ("20", "2.5", "0.33", "0"). */
-function formatRate(v: number): string {
-  if (v === 0) return '0';
-  if (v >= 10) return v.toFixed(0);
-  if (v >= 1) return v.toFixed(1);
-  return v.toFixed(2);
-}

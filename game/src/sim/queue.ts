@@ -38,7 +38,7 @@
 // run keeps in place. Capacity is credited only for what will actually be removed.
 
 import { B, buildingFootprint } from './kinds.ts';
-import { RUN_CAPACITY, newSites, runById, type RunCommand, type RunPlan } from './runs.ts';
+import { newSites, runById, runCapacityProblem, type RunCommand, type RunPlan } from './runs.ts';
 import { BF_COMPLETE, Q_BUILD, Q_MOVE, Q_PRODUCE, Q_RECLAIM, Q_RUN, isReserved } from './schema.ts';
 import type { Order } from './units.ts';
 import type { World } from './world.ts';
@@ -158,10 +158,7 @@ export function replacementProblem(w: World, cmd: RunCommand, plan: RunPlan): st
     removed.push(...(w.orders[s] ?? []));
   }
   const freed = orphansOf(w, removed, slots, plan.reuse.filter((id) => id >= 0));
-  if (w.runs.filter((r) => r === null).length + freed.runs.length < 1) return `the run table is full (${RUN_CAPACITY} runs): finish or cancel one first`;
-  const n = newSites(plan);
-  if (w.buildings.count - freed.sites.length + n > w.buildings.capacity) return `not enough room in the building table for ${n} wall sites`;
-  return null;
+  return runCapacityProblem(w, newSites(plan), freed.runs.length, freed.sites.length);
 }
 
 /** What the C2 and W25c rules read of the units' queues: the orders that hold sites, and the runs' sites. */

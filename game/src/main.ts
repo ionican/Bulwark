@@ -979,8 +979,7 @@ function screenRect(corners: (v: Vector3, k: number) => boolean): { x0: number; 
   for (let k = 0; corners(_corner, k); k++) {
     _corner.project(camera);
     if (_corner.z > 1) continue;
-    const x = ((_corner.x + 1) / 2) * vw;
-    const y = ((1 - _corner.y) / 2) * vh;
+    const { x, y } = ndcToCss(_corner);
     x0 = Math.min(x0, x);
     y0 = Math.min(y0, y);
     x1 = Math.max(x1, x);
@@ -1426,9 +1425,14 @@ function screenOf(type: EntityType, id: number): { x: number; y: number } | null
   return worldToScreen(x, z);
 }
 
-function worldToScreen(x: number, z: number) {
-  const p = camera.position.clone().set(x, groundHeight(terrain, x, z), z).project(camera);
+/** CSS-pixel position of a point already projected to normalised device coordinates. */
+function ndcToCss(p: Vector3) {
   return { x: ((p.x + 1) / 2) * vw, y: ((1 - p.y) / 2) * vh };
+}
+
+/** Screen point (CSS px) of world point (x, z), at height `y` (default: the ground there). */
+function worldToScreen(x: number, z: number, y = groundHeight(terrain, x, z)) {
+  return ndcToCss(new Vector3(x, y, z).project(camera));
 }
 
 function list(type: EntityType) {
@@ -2002,11 +2006,6 @@ const game = {
     if (tx < 0 || tz < 0 || tx >= terrain.w || tz >= terrain.h) return { type: 'outside', height: 0 };
     const t = terrain.tiles[tz * terrain.w + tx]!;
     return { type: ['ground', 'rock', 'mass', 'rare'][t] ?? String(t), height: groundHeight(terrain, tx + 0.5, tz + 0.5) };
-  },
-  /** Screen point (CSS px) of world point (x, y, z). */
-  worldToScreenY: (x: number, y: number, z: number) => {
-    const p = new Vector3(x, y, z).project(camera);
-    return { x: ((p.x + 1) / 2) * vw, y: ((1 - p.y) / 2) * vh };
   },
   /**
    * The benchmark's worker timing window (workerWindow.ts): start() at the start of a measured

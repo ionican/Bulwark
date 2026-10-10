@@ -14,15 +14,7 @@ export function judgeSamples(
   opts: { zoomOut: boolean; aliens: string[]; turrets: string[]; buildingKinds: string[]; minAlive?: number; doors?: boolean },
 ): string[];
 
-export interface WorkerWindowReport {
-  kept: number;
-  ticks: number;
-  seconds: number;
-  medianTickMs: number;
-  maxTickMs: number;
-  encodeMedianMs: number;
-  encodeMaxMs: number;
-  dropped: { beforeStart: number; afterStop: number; epoch: number; repeated: number };
-}
+import type { WorkerWindowReport } from '../src/workerWindow.ts';
+export type { WorkerWindowReport };
 
 export function judgeWorkerWindow(report: WorkerWindowReport | null): string[];
