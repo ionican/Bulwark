@@ -19,7 +19,7 @@ import { SiteHover } from './ui/siteHover.ts';
 import { waitingCounts, waitingState } from './render/waiting.ts';
 import { DragPreview, inspectDrag } from './render/dragPreview.ts';
 import { DragPlanCache, beltLineTiles, dragLabel, snapshotSiteSource, type DragPlan, type DragView } from './dragPlan.ts';
-import { Tools, gateCommand, runCommand, spawnAtCommand, toolLabel, type ToolName } from './tools.ts';
+import { Tools, gateCommand, runCommand, spawnAtCommand, toolLabel } from './tools.ts';
 import { SandboxPanel, debugSpawnVisible, multToSlider } from './ui/sandboxPanel.ts';
 import { OVERLAY_NAMES, hideOverlay, overlayMeshes, setOverlayDepthTest } from './render/debugRender.ts';
 import { RouteView } from './render/routeView.ts';
@@ -524,17 +524,9 @@ function setBuildMode(kind: BuildingKind | null) {
   if (kind === null || !selectedBuilders().length) {
     // as before run 3: the build and upgrade tools close (an armed gate or spawn tool stays)
     if (buildTool() || tools.name === 'upgrade') tools.choose('select');
-    ghost.hide();
     return;
   }
   tools.choose('build', B[kind]);
-}
-
-/** Arms the gate or spawn tool (the sandbox panel's buttons); false outside the sandbox. */
-function armTool(name: ToolName): boolean {
-  const ok = tools.choose(name);
-  if (ok) ghost.hide();
-  return ok;
 }
 
 /** Footprint origin under a ground point, centred on the cursor. */
@@ -663,7 +655,7 @@ const gestures = new Gestures(orbit, {
           placeBuild(buildMode.kind, tx, ty, buildMode.dir, shift);
         }
         // Belts stay selected for laying more; other buildings only while Shift is held.
-        toolActed(shift);
+        tools.acted(shift);
         return;
       }
       if (tools.name === 'upgrade') {
@@ -671,7 +663,7 @@ const gestures = new Gestures(orbit, {
         const p = view ? pickScreen(camera, x, y, vw, vh, terrain, view) : null;
         const ids = selectedEngineers();
         if (p && p.type === 'building' && buildingInfo(p.kind).tiers && ids.length) command({ t: 'upgrade', ids, target: p.id, queue: shift });
-        toolActed(shift);
+        tools.acted(shift);
         return;
       }
       if (tools.name === 'gate') {
@@ -679,23 +671,20 @@ const gestures = new Gestures(orbit, {
         const t = tileAtScreen(x, y);
         const ids = selectedBuilders();
         if (t) void commandResult(gateCommand(ids.length ? ids : allUnitIds(), t.tx, t.ty, shift));
-        toolActed(shift);
+        tools.acted(shift);
         return;
       }
       if (tools.name === 'spawn') {
         const t = tileAtScreen(x, y);
         const m = sandboxPanel.model;
         if (t) void commandResult(spawnAtCommand(m.spawnKind, t.tx + 0.5, t.ty + 0.5, m.count));
-        toolActed(shift);
+        tools.acted(shift);
         return;
       }
       selectAt(x, y, shift);
     } else if (button === 2) {
       // any tool but select: right click cancels it (select: an order, as before)
-      if (tools.rightClick()) {
-        ghost.hide();
-        return;
-      }
+      if (tools.rightClick()) return;
       rightClick(x, y, shift);
     }
   },
@@ -738,7 +727,7 @@ const gestures = new Gestures(orbit, {
         placeBuild(buildMode.kind, tx, ty, buildMode.dir, shift);
       }
     }
-    toolActed(shift);
+    tools.acted(shift);
   },
 });
 const ptr = (e: PointerEvent) => ({ button: e.button, x: e.clientX, y: e.clientY, shift: e.shiftKey || shiftHeld });
@@ -829,18 +818,13 @@ const KEY_TO_KIND = new Map<string, BuildingKind>();
 for (const k of BUILDING_KINDS) if (BUILDING_INFO[k].key) KEY_TO_KIND.set(BUILDING_INFO[k].key, k);
 
 /** After a left action with the tool: without Shift it returns to select (belts stay), with Shift it stays. */
-function toolActed(shift: boolean) {
-  tools.acted(shift);
-  if (!buildTool()) ghost.hide();
-}
-
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Shift') shiftHeld = true;
   // Escape first, before the editable-control filter: it cancels the tool even from the count field
   if (e.key === 'Escape') {
     // a drag under way ends with nothing queued (its release is ignored), then the tool closes
     if (gestures.buildDragging) gestures.cancel();
-    if (tools.escape()) ghost.hide();
+    tools.escape();
     return;
   }
   // letters and digits typed into a field or a list go to it, not to shortcuts
@@ -884,7 +868,6 @@ window.addEventListener('keyup', (e) => {
     shiftHeld = false;
     // Shift released after acting with it: the tool closes (belts stay, as before).
     tools.shiftReleased();
-    if (!buildTool()) ghost.hide();
   }
 });
 window.addEventListener('blur', () => {
@@ -893,7 +876,6 @@ window.addEventListener('blur', () => {
 });
 
 function startUpgrade() {
-  ghost.hide();
   tools.choose(selectedEngineers().length > 0 ? 'upgrade' : 'select');
 }
 function dropTurret() {
@@ -927,7 +909,7 @@ const sandboxPanel = new SandboxPanel({
   // the panel shows a refusal itself: no second toast from the worker message
   send: (cmd) => commandResult(cmd, true),
   toast: (text, bad) => toasts.show(text, bad),
-  armTool,
+  armTool: (name) => tools.choose(name),
 });
 
 /** The active tool in words, for the panel ("Tool: spawn rusher × 8 — click the map"). */
