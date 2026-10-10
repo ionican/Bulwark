@@ -849,8 +849,16 @@ async function paintRow(f) {
   const { x0, z0 } = strip;
   const want = [0, 2, 4, 6].map((i) => [x0 + i, z0]);
   note(`paint-row strip: anchors ${JSON.stringify(want)}`);
-  await selectUnit(f.e1);
-  await selectUnit(f.e2, true);
+  // the engineers alive now (the fixture's pair may have been lost to the rushers), each selected
+  // by a click with the camera over it
+  const engs = units().filter((u) => u.kindName === 'engineer').slice(0, 2);
+  if (!engs.length) throw new Error('no engineer left to build the row');
+  for (const [i, u] of engs.entries()) {
+    camera({ x: u.x, z: u.z, distance: 22, yaw: 0, pitch: (70 * Math.PI) / 180 });
+    await frames(5);
+    await selectUnit(u.id, i > 0);
+  }
+  note(`paint-row builders: ${engs.map((u) => u.id).join(', ')} (fixture engineers ${f.e1}, ${f.e2})`);
   camera({ x: x0 + 4, z: z0 + 1, distance: 30, yaw: 0, pitch: (60 * Math.PI) / 180 });
   await frames(10);
   await clickEl('.bar button[data-kind="generator"]');

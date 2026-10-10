@@ -9,7 +9,6 @@
 import { describe, expect, it } from 'vitest';
 import { B, U, buildingInfo } from '../src/sim/kinds.ts';
 import { decodeSnapshot, encodeSnapshot } from '../src/sim/snapshot.ts';
-import { flatTerrain } from '../src/sim/terrain.ts';
 import type { World } from '../src/sim/world.ts';
 import { buildOccupancy } from '../src/render/picking.ts';
 import { ROW_MAX, buildingRowTiles, dragLabel, paintsRow, planDrag, rowBuildCommands, type DragView } from '../src/dragPlan.ts';
