@@ -1,6 +1,25 @@
+import { execSync } from 'node:child_process';
 import { defineConfig } from 'vitest/config';
 
+// The build stamp the game shows in its corner (src/version.ts), read from git when Vite starts:
+// the build number is the count of commits on the branch, then the commit and its date, and
+// whether the tree had uncommitted changes. Outside a git checkout every field falls back.
+function git(args: string): string {
+  try {
+    return execSync(`git ${args}`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch {
+    return '';
+  }
+}
+const BUILD = {
+  number: Number(git('rev-list --count HEAD')) || 0,
+  commit: git('rev-parse --short HEAD') || 'unknown',
+  date: git('log -1 --format=%cs'),
+  local: git('status --porcelain') !== '',
+};
+
 export default defineConfig({
+  define: { __BUILD__: JSON.stringify(BUILD) },
   server: {
     host: '127.0.0.1',
     port: 8822, // W24 branch: 8821 is taken on codepanda

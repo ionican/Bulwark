@@ -110,6 +110,7 @@ import { alienKindIndex, buildingKindIndex, entryIndex as entryIndexOf, research
 import { EndScreen, ResearchPanel, Ticker, TimeControls, Toasts } from './ui/panels.ts';
 import type { ScenarioName } from './sim/scenarios.ts';
 import { Hud } from './ui/hud.ts';
+import { BUILD, versionLabel } from './version.ts';
 import { BuildBar, TEST_GROUP } from './ui/buildbar.ts';
 import { QueuePanel, type QueuePanelUnit } from './ui/queuePanel.ts';
 
@@ -160,6 +161,7 @@ const dragPreview = new DragPreview(scene, terrain, view.models);
 // W24 run 3: the sandbox panel's "Show routes" (off by default)
 const routeView = new RouteView(scene, terrain);
 const hud = new Hud();
+document.title = `Bulwark — ${versionLabel()}`;
 
 let vw = window.innerWidth;
 let vh = window.innerHeight;
@@ -1779,6 +1781,8 @@ const game = {
   resetStats: () => commandResult({ t: 'resetStats' }),
   resetSandbox: (full = false) => commandResult({ t: 'resetSandbox', full }),
   // ---- W24 run 2a: renderer
+  /** The build stamp shown in the corner (version.ts). */
+  version: { ...BUILD, label: versionLabel() },
   /** The view: 'models' (run 3 removed the other one). */
   get renderMode() {
     return 'models';

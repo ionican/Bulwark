@@ -1,5 +1,7 @@
 // Debug readout and selection panel. Plain DOM over the canvas; text only, no colour coding.
 
+import { versionLabel } from '../version.ts';
+
 export interface HudStats {
   fps: number;
   tickMs: number;
@@ -22,6 +24,7 @@ border:1px solid rgba(244,239,230,.35);border-radius:4px;padding:6px 9px;pointer
 .hud.stats{left:8px;top:8px}.hud.sel{left:8px;bottom:8px;max-width:340px;white-space:normal}
 .hud.help{left:50%;top:50%;transform:translate(-50%,-50%);font-size:12px;display:none;z-index:8}
 .hud.res{right:8px;top:8px;white-space:pre;font-size:11px}
+.hud.ver{right:8px;bottom:8px;font-size:11px;padding:3px 7px}
 .boxsel{position:fixed;border:1.5px dashed #fff3a0;background:rgba(255,243,160,.08);pointer-events:none;display:none}`;
 
 export class Hud {
@@ -46,11 +49,14 @@ export class Hud {
     const help = this.div('hud help');
     this.help = help;
     help.textContent =
+      `Bulwark ${versionLabel()}\n` +
       'Left click: select · Shift + left drag: box select · Right click: move, assist a site, reclaim a wreck · Shift: queue\n' +
       'Build: pick from the bar, click to place, drag to lay a wall run or belt line, R rotates belts, Esc/right click cancels\n' +
       'Queue: Shift adds an order to the selected units’ queues, no Shift replaces them; Shift held keeps the build tool, releasing it closes it\n' +
       'Camera: left drag orbits (turn and tilt) · right drag, WASD/arrows, screen edge: pan · wheel: zoom to cursor · middle drag: dolly · Q/E: turn · Home: whole map\n' +
       'Space: pause (orders still work) · Shift+1/2/3: speed · C: call next wave early · Y: research';
+    // the build stamp, always shown, so a player can say which build they are playing (version.ts)
+    this.div('hud ver').textContent = `Bulwark ${versionLabel()}`;
     this.box = this.div('boxsel');
   }
 
