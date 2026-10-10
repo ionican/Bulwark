@@ -51,7 +51,7 @@ export class Hud {
     help.textContent =
       `Bulwark ${versionLabel()}\n` +
       'Left click: select · Shift + left drag: box select · Right click: move, assist a site, reclaim a wreck · Shift: queue\n' +
-      'Build: pick from the bar, click to place, drag to lay a wall run or belt line, R rotates belts, Esc/right click cancels\n' +
+      'Build: pick from the bar, click to place, drag to lay a wall run, a belt line or a row of buildings, R rotates belts, Esc/right click cancels\n' +
       'Queue: Shift adds an order to the selected units’ queues, no Shift replaces them; Shift held keeps the build tool, releasing it closes it\n' +
       'Camera: left drag orbits (turn and tilt) · right drag, WASD/arrows, screen edge: pan · wheel: zoom to cursor · middle drag: dolly · Q/E: turn · Home: whole map\n' +
       'Space: pause (orders still work) · Shift+1/2/3: speed · C: call next wave early · Y: research';

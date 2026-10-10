@@ -18,14 +18,13 @@ import { siteReadout, type SiteReadout } from './render/siteReadout.ts';
 import { SiteHover } from './ui/siteHover.ts';
 import { waitingCounts, waitingState } from './render/waiting.ts';
 import { DragPreview, inspectDrag } from './render/dragPreview.ts';
-import { DragPlanCache, beltLineTiles, dragLabel, snapshotSiteSource, type DragPlan, type DragView } from './dragPlan.ts';
+import { DragPlanCache, beltLineTiles, dragLabel, paintsRow, placeableOn, planDrag, rowBuildCommands, type DragPlan, type DragView } from './dragPlan.ts';
 import { Tools, gateCommand, runCommand, spawnAtCommand, toolLabel } from './tools.ts';
 import { SandboxPanel, debugSpawnVisible, multToSlider } from './ui/sandboxPanel.ts';
 import { editingTarget } from './ui/focusReturn.ts';
 import { OVERLAY_NAMES, hideOverlay, overlayMeshes, setOverlayDepthTest } from './render/debugRender.ts';
 import { RouteView } from './render/routeView.ts';
 import { WorkerWindow } from './workerWindow.ts';
-import { ownReservedSite } from './sim/queue.ts';
 import { footprintRange, groundHeight } from './render/ground.ts';
 import { INSPECT_FRAME, drawnMeshes, entitiesOf, inspectScene, submissionFloor, type InspectFrame } from './render/inspect.ts';
 import { LOD_THRESHOLDS } from './render/lod.ts';
@@ -542,18 +541,33 @@ function placeable(kind: number, tx: number, ty: number, dir: number, queue: boo
   if (canPlaceOn(terrain, occupancy, kind, tx, ty)) return true;
   const s = interp.curr;
   if (!s || queue) return false;
-  const ids = builders();
-  return ids.length > 0 && ownReservedSite(snapshotSiteSource(s, occupancy), ids, kind, tx, ty, dir, false) >= 0;
+  // the rule itself (C2 included) is dragPlan.ts placeableOn, which a painted row's positions use too
+  return placeableOn(dragView(s), builders(), kind, tx, ty, dir, queue);
+}
+
+/** Sends a build command and marks its tiles at once, so a quick second click does not double-book them. */
+function sendBuild(cmd: Extract<Command, { t: 'build' }>) {
+  command(cmd);
+  const [fw, fh] = buildingFootprint(cmd.kind);
+  for (let j = 0; j < fh; j++) for (let i = 0; i < fw; i++) occupancy[(cmd.ty + j) * terrain.w + cmd.tx + i] = -1;
 }
 
 function placeBuild(kind: number, tx: number, ty: number, dir: number, queue: boolean): boolean {
   const ids = selectedBuilders();
   if (!ids.length || !placeable(kind, tx, ty, dir, queue, () => ids)) return false;
-  command({ t: 'build', ids, kind, tx, ty, dir, queue });
-  // Mark the tiles at once so a quick second click does not double-book them.
-  const [fw, fh] = buildingFootprint(kind);
-  for (let j = 0; j < fh; j++) for (let i = 0; i < fw; i++) occupancy[(ty + j) * terrain.w + tx + i] = -1;
+  sendBuild({ t: 'build', ids, kind, tx, ty, dir, queue });
   return true;
+}
+
+/**
+ * A painted row (Richard, 10 Oct): the positions planDrag places between footprint anchors `from`
+ * and `to` (the preview's own plan), one build each, the first with `queue` and the rest appended.
+ */
+function placeRow(kind: number, from: [number, number], to: [number, number], dir: number, queue: boolean) {
+  const s = interp.curr;
+  const ids = selectedBuilders();
+  if (!s || !ids.length) return;
+  for (const cmd of rowBuildCommands(planDrag(dragView(s), kind, ids, from, to, dir, queue), ids, queue)) sendBuild(cmd);
 }
 
 /** A belt line (dragPlan.ts beltLineTiles, the tiles the drag preview shows): the first piece placed takes `queue`, the rest append. */
@@ -586,7 +600,7 @@ function dragView(s: Snapshot): DragView {
 }
 
 /**
- * The plan for the drag now: walls and belts only (other kinds place one building on release).
+ * The plan for the drag now: a wall run, a belt line or a painted row (dragPlan.ts paintsRow).
  * Worked out again only when its inputs change (end tiles, tool, direction, Shift, snapshot tick).
  * Shift is the release's rule (the pointer's Shift or the keyboard's): without it the run replaces
  * the builders' queues and keeps their own wall sites it covers (W25c, dragPlan.ts).
@@ -594,7 +608,7 @@ function dragView(s: Snapshot): DragView {
 function currentDragPlan(): DragPlan | null {
   const s = interp.curr;
   const buildMode = buildTool();
-  if (!drag || !buildMode || !s || !(buildMode.kind === B.wall || isBelt(buildMode.kind))) {
+  if (!drag || !buildMode || !s || !(buildMode.kind === B.wall || isBelt(buildMode.kind) || paintsRow(buildMode.kind))) {
     dragPlan = null;
     dragPlans.clear();
     return null;
@@ -705,8 +719,10 @@ const gestures = new Gestures(orbit, {
   buildDragPreview(d) {
     const a = d && tileAtScreen(d.x0, d.y0);
     const b = d && tileAtScreen(d.x1, d.y1);
-    // the same end tiles buildDrag sends on release
-    drag = d && a && b ? { x1: d.x1, y1: d.y1, from: [a.tx, a.ty], to: [b.tx, b.ty], shift: d.shift } : null;
+    // the same end tiles buildDrag sends on release (a row: the footprint anchors a click would use)
+    const row = buildTool();
+    const ends = (t: NonNullable<typeof a>): [number, number] => (row && paintsRow(row.kind) ? footprintAt(row.kind, t.g.x, t.g.z) : [t.tx, t.ty]);
+    drag = d && a && b ? { x1: d.x1, y1: d.y1, from: ends(a), to: ends(b), shift: d.shift } : null;
     if (!drag) dragPlan = null;
   },
   buildDrag(x0, y0, x1, y1, shift) {
@@ -720,6 +736,7 @@ const gestures = new Gestures(orbit, {
         const ids = selectedBuilders();
         if (ids.length) void commandResult(runCommand(ids, [a.tx, a.ty], [b.tx, b.ty], runDepth(), shift));
       } else if (isBelt(buildMode.kind)) placeBeltLine(buildMode.kind, a.tx, a.ty, b.tx, b.ty, buildMode.dir, shift);
+      else if (paintsRow(buildMode.kind)) placeRow(buildMode.kind, footprintAt(buildMode.kind, a.g.x, a.g.z), footprintAt(buildMode.kind, b.g.x, b.g.z), buildMode.dir, shift);
       else {
         const [tx, ty] = footprintAt(buildMode.kind, b.g.x, b.g.z);
         placeBuild(buildMode.kind, tx, ty, buildMode.dir, shift);
@@ -1348,7 +1365,7 @@ function frame(now: number) {
     const buildMode = buildTool();
     const active = buildMode ? BUILDING_KINDS[buildMode.kind]! : tools.name === 'upgrade' ? 'upgrade' : null;
     const hint = buildMode
-      ? `Placing ${buildingInfo(buildMode.kind).label}${isBelt(buildMode.kind) ? ' — drag for a line, R rotates' : ''}. Shift queues more; Esc cancels.`
+      ? `Placing ${buildingInfo(buildMode.kind).label}${isBelt(buildMode.kind) ? ' — drag for a line, R rotates' : paintsRow(buildMode.kind) ? ' — drag for a row' : ''}. Shift queues more; Esc cancels.`
       : tools.name === 'upgrade'
         ? 'Click a wall or turret to upgrade it (tiers need research).'
         : builders

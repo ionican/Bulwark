@@ -1,4 +1,4 @@
-// W25 item 7: the live preview of a build-mode drag (wall run or belt line), drawn every frame
+// W25 item 7: the live preview of a build-mode drag (wall run, belt line or painted row), drawn every frame
 // while the button is down, as W23's painter does (look/src/w23/painter.ts). The tiles come from
 // dragPlan.ts (the simulation's own planner, run on the latest snapshot); this module only draws.
 //
@@ -82,12 +82,15 @@ export class DragPreview {
         const z = ty + fh / 2;
         this.build.push(x, groundHeight(t, x, z) + LIFT, z, fw / 2, 1, fh / 2);
       }
+      // a skipped position: the dashed outline round its footprint and a cross (a painted row's
+      // 2 × 2 or 3 × 3 kinds as well as a run's or line's single tiles)
+      const c = Math.min(fw, fh) * 0.36;
       for (const [tx, ty] of tiles.skipped) {
-        const x = tx + 0.5;
-        const z = ty + 0.5;
+        const x = tx + fw / 2;
+        const z = ty + fh / 2;
         const y = groundHeight(t, x, z) + LIFT;
-        this.skipOutline.push(x, y, z, 0.5, 1, 0.5);
-        this.skipCross.push(x, y + 0.01, z, 0.36, 1, 0.36);
+        this.skipOutline.push(x, y, z, fw / 2, 1, fh / 2);
+        this.skipCross.push(x, y + 0.01, z, c, 1, c);
       }
     }
     this.build.commit();

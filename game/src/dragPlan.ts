@@ -12,11 +12,19 @@
 // while paused (the same snapshot tick) redraws the preview (Codex R1-11). snapshotSiteSource is the
 // snapshot side of queue.ts ownReservedSite (C2: the placement preview and the build-bar click).
 //
+// Paint a row (Richard, 10 Oct): any other kind but the gate — a turret, a generator, an extractor —
+// is laid as a row along the drag's main axis from its start, footprints edge to edge, at most
+// ROW_MAX (buildingRowTiles). Each position passes the single-click placement rule (placeableOn,
+// which main.ts's click uses too) with the queue flag it will be sent with: the first placed takes
+// Shift's, the rest append (rowBuildCommands, as a belt line); blocked positions are skipped. The
+// preview and the release both go through planDrag, so they cannot differ.
+//
 // Not under render/: it reaches runs.ts and world.ts (canPlaceOn), which render code may not import.
 
-import { B, buildingFootprint, buildingInfo, type Cost } from './sim/kinds.ts';
+import { B, buildingFootprint, buildingInfo, isBelt, type Cost } from './sim/kinds.ts';
+import type { Command } from './sim/commands.ts';
 import { planRunOn, type RunPlan, type RunPlanSource } from './sim/runs.ts';
-import { ownWallSites, type QueueSource, type ReplaceSource, type SiteSource } from './sim/queue.ts';
+import { ownReservedSite, ownWallSites, type QueueSource, type ReplaceSource, type SiteSource } from './sim/queue.ts';
 import { BF_COMPLETE, Q_BUILD, Q_RUN, isReserved } from './sim/schema.ts';
 import { runSitesOf, type Snapshot } from './sim/snapshot.ts';
 import type { Terrain } from './sim/terrain.ts';
@@ -123,6 +131,46 @@ export function snapshotSiteSource(s: Snapshot, occupancy: Int32Array): SiteSour
   };
 }
 
+/** Kinds a build-mode drag lays as a row: all but walls (a run), belt kinds (a line) and the gate (its own tool). */
+export const paintsRow = (kind: number): boolean => kind !== B.wall && kind !== B.gate && !isBelt(kind);
+
+/** Most buildings one drag lays as a row. */
+export const ROW_MAX = 32;
+
+/**
+ * Footprint anchors of a row of `kind` from anchor `from` towards anchor `to`: along x when the drag
+ * moves at least as far in x as in z (as a belt line chooses), else along z; from `from`, stepping
+ * one footprint, as many as fit up to `to` (at least one: a drag under one footprint is a single
+ * building at the start), at most ROW_MAX.
+ */
+export function buildingRowTiles(kind: number, from: [number, number], to: [number, number]): Array<[number, number]> {
+  const [fw, fh] = buildingFootprint(kind);
+  const dx = to[0] - from[0];
+  const dz = to[1] - from[1];
+  const alongX = Math.abs(dx) >= Math.abs(dz);
+  const d = alongX ? dx : dz;
+  const step = (alongX ? fw : fh) * (d < 0 ? -1 : 1);
+  const n = Math.min(ROW_MAX, Math.floor(Math.abs(d) / Math.abs(step)) + 1);
+  const out: Array<[number, number]> = [];
+  for (let i = 0; i < n; i++) out.push(alongX ? [from[0] + i * step, from[1]] : [from[0], from[1] + i * step]);
+  return out;
+}
+
+/**
+ * The single-click placement rule on a snapshot view: the tiles are free ground (or the deposit an
+ * extractor needs), or (run 3 C2) it is exactly a reserved site the builders `ids` hold themselves
+ * and the order is unshifted (queue.ts ownReservedSite).
+ */
+export function placeableOn(v: DragView, ids: readonly number[], kind: number, tx: number, ty: number, dir: number, queue: boolean): boolean {
+  if (canPlaceOn(v.terrain, v.occupancy, kind, tx, ty)) return true;
+  return !queue && !!v.snapshot && ids.length > 0 && ownReservedSite(snapshotSiteSource(v.snapshot, v.occupancy), ids, kind, tx, ty, dir, false) >= 0;
+}
+
+/** The build commands a row plan sends on release, in order: the first takes `queue`, the rest append. */
+export function rowBuildCommands(plan: DragPlan, ids: number[], queue: boolean): Array<Extract<Command, { t: 'build' }>> {
+  return plan.build.map(([tx, ty, dir], i) => ({ t: 'build', ids, kind: plan.kind, tx, ty, dir, queue: queue || i > 0 }));
+}
+
 /**
  * The wall run a drag from `from` to `to` lays for builders `ids` (runs.ts planRunOn). Without
  * `queue` (Shift), the builders' own wall sites the run covers are kept (W25c, header).
@@ -167,9 +215,10 @@ export function beltLineTiles(x0: number, z0: number, x1: number, z1: number, di
 
 /**
  * The whole drag plan for build kind `kind` (walls: a run `depth` rows deep, as the wall tool lays;
- * belts: a line). `queue`: Shift is held, so the builders' queues are appended to, not replaced.
+ * belts: a line; paintsRow kinds: a row, `from` and `to` being footprint anchors). `queue`: Shift is
+ * held, so the builders' queues are appended to, not replaced. `dir`: belts' and rows' direction.
  */
-export function planDrag(v: DragView, kind: number, ids: readonly number[], from: [number, number], to: [number, number], beltDir = 0, queue = false, depth = 1): DragPlan {
+export function planDrag(v: DragView, kind: number, ids: readonly number[], from: [number, number], to: [number, number], dir = 0, queue = false, depth = 1): DragPlan {
   const info = buildingInfo(kind);
   const plan: DragPlan = { kind, build: [], skipped: [], cost: [0, 0, 0], refused: null };
   if (kind === B.wall) {
@@ -179,9 +228,15 @@ export function planDrag(v: DragView, kind: number, ids: readonly number[], from
       for (const [x, y] of run.tiles) plan.build.push([x, y, 0]);
       plan.skipped = run.skippedAt;
     }
+  } else if (paintsRow(kind)) {
+    for (const [x, y] of buildingRowTiles(kind, from, to)) {
+      // checked with the queue flag rowBuildCommands sends it with
+      if (placeableOn(v, ids, kind, x, y, dir, queue || plan.build.length > 0)) plan.build.push([x, y, dir]);
+      else plan.skipped.push([x, y]);
+    }
   } else {
-    for (const [x, y, dir] of beltLineTiles(from[0], from[1], to[0], to[1], beltDir)) {
-      if (canPlaceOn(v.terrain, v.occupancy, kind, x, y)) plan.build.push([x, y, dir]);
+    for (const [x, y, d] of beltLineTiles(from[0], from[1], to[0], to[1], dir)) {
+      if (canPlaceOn(v.terrain, v.occupancy, kind, x, y)) plan.build.push([x, y, d]);
       else plan.skipped.push([x, y]);
     }
   }
@@ -189,12 +244,17 @@ export function planDrag(v: DragView, kind: number, ids: readonly number[], from
   return plan;
 }
 
-/** "18 tiles · 3 skipped · 1,800 mass · 2,700 energy" (or the refusal). */
+/**
+ * "18 tiles · 3 skipped · 1,800 mass · 2,700 energy" (or the refusal); a row: "Energy generator × 5
+ * (2 skipped) · 750 mass".
+ */
 export function dragLabel(p: DragPlan): string {
   if (p.refused) return `Nothing laid: ${p.refused}`;
   const names = ['mass', 'energy', 'rare'];
-  const parts = [`${p.build.length} tile${p.build.length === 1 ? '' : 's'}`];
-  if (p.skipped.length) parts.push(`${p.skipped.length} skipped`);
+  const parts = paintsRow(p.kind)
+    ? [`${buildingInfo(p.kind).label} × ${p.build.length}${p.skipped.length ? ` (${p.skipped.length} skipped)` : ''}`]
+    : [`${p.build.length} tile${p.build.length === 1 ? '' : 's'}`];
+  if (p.skipped.length && !paintsRow(p.kind)) parts.push(`${p.skipped.length} skipped`);
   p.cost.forEach((c, k) => {
     if (c > 0) parts.push(`${Math.round(c).toLocaleString('en-GB')} ${names[k]}`);
   });
