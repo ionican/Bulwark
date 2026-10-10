@@ -33,6 +33,19 @@ export class Tools {
     return true;
   }
 
+  /**
+   * A tool that needs builders (build, wall or upgrade), chosen by the build bar or a key: armed when
+   * `builders` are selected; without them the shortcut cannot arm, and the map returns to select
+   * whatever tool was active, so an armed gate or spawn tool does not act on the next click.
+   */
+  chooseForBuilders(name: 'build' | 'wall' | 'upgrade', builders: boolean, kind = -1): boolean {
+    if (!builders) {
+      this.reset();
+      return false;
+    }
+    return this.choose(name, kind);
+  }
+
   /** A left action with the tool (a placement, a gate, a spawn, an upgrade order). */
   acted(shift: boolean): void {
     if (this.name === 'select') return;
