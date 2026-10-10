@@ -28,7 +28,8 @@
 //      and the gun turret killed; paused, the Stats rows for the gun turret and the rusher equal
 //      __game.stats() at the panel's recorded tick
 //   7  tune: the gun turret's damage slider dragged by the mouse to 2× → __game.tuning 2 (± one
-//      step) and the effective damage label doubles; Reset kind → 1
+//      step) and the effective damage label doubles; Space straight after the drag pauses the game
+//      once (Codex review 2: the slider gives keyboard focus back); Reset kind → 1
 //   8  isolation: a click, a drag and a wheel over the panel change nothing (selection, queues,
 //      camera, refusals, commands sent); a wall drag started on the map and released over the panel
 //      creates nothing and leaves no preview
@@ -516,6 +517,15 @@ async function tune() {
   const after = val();
   check(Math.abs(m - 2) <= 0.1 + 1e-9, `the damage slider dragged to 2× sets ${m}× (± one step)`, `damage multiplier after the drag: ${m}`);
   check(Math.abs(after / before - m) < 1e-6 * m && Math.abs(after - 2 * before) <= 0.1 * before + 1e-9, `the effective damage label doubles: ${before} → ${after} per shot`, `effective damage ${before} → ${after} (mult ${m})`);
+  // Codex review 2: the drag leaves no keyboard focus on the slider, so Space at once (no blur, no
+  // map click first) pauses the game, once
+  const focus0 = js(`document.activeElement?.tagName ?? null`);
+  const paused0 = js('__game.paused');
+  key(' ');
+  await frames(10);
+  const paused1 = js('__game.paused');
+  check(paused1 === !paused0, `Space straight after the slider drag pauses the game once (focus after the drag: ${focus0})`, `paused ${paused0} → ${paused1}; focus after the drag ${focus0}`);
+  await pause(paused0);
   await shot('w24r3-panel-tune.png');
   await clickEl('.sbx button[data-sbx="tune-reset-kind"]');
   await until('the gun turret reset', `!__game.tuning.some((t) => t.kind === 'gun')`, 10);

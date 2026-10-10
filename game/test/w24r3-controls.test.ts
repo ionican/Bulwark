@@ -137,3 +137,26 @@ describe('run 3 criterion 2 (map tools): the commands sent', () => {
     for (const depth of [1, 2, 3, 4]) expect(runCommand([1], [10, 10], [20, 10], depth, false)).toEqual({ t: 'buildRun', ids: [1], from: [10, 10], to: [20, 10], depth, queue: false });
   });
 });
+
+describe('Codex review 1: a build, wall or upgrade shortcut with no builders returns to select', () => {
+  for (const armed of ['gate', 'spawn'] as const)
+    for (const [name, kind] of [['build', B.gun], ['wall', B.wall], ['upgrade', -1]] as const)
+      it(`from ${armed}: ${name} with no builders selected leaves select active (no wall converted, no aliens spawned)`, () => {
+        const t = sandboxTools();
+        expect(t.choose(armed)).toBe(true);
+        expect(t.chooseForBuilders(name, false, kind)).toBe(false);
+        expect(t.name, `${armed} must not stay armed`).toBe('select');
+        expect(t.kind).toBe(-1);
+      });
+
+  it('with builders selected the shortcut arms its tool, as before', () => {
+    const t = sandboxTools();
+    t.choose('gate');
+    expect(t.chooseForBuilders('build', true, B.gun)).toBe(true);
+    expect([t.name, t.kind]).toEqual(['build', B.gun]);
+    expect(t.chooseForBuilders('build', true, B.wall)).toBe(true);
+    expect(t.name).toBe('wall');
+    expect(t.chooseForBuilders('upgrade', true)).toBe(true);
+    expect(t.name).toBe('upgrade');
+  });
+});
