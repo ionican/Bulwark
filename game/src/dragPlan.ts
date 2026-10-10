@@ -7,12 +7,17 @@
 // sites that it covers (queue.ts ownWallSites, the simulation's rule); the preview applies the same
 // function to the snapshot's queues and run-site list, so it shows those tiles as laid too.
 //
+// Run 3: the wall-run depth chosen in the sandbox panel reaches the preview (planDrag's `depth`), and
+// DragPlanCache works the plan out again when any input changes, the depth included, so changing it
+// while paused (the same snapshot tick) redraws the preview (Codex R1-11). snapshotSiteSource is the
+// snapshot side of queue.ts ownReservedSite (C2: the placement preview and the build-bar click).
+//
 // Not under render/: it reaches runs.ts and world.ts (canPlaceOn), which render code may not import.
 
-import { B, buildingInfo, type Cost } from './sim/kinds.ts';
+import { B, buildingFootprint, buildingInfo, type Cost } from './sim/kinds.ts';
 import { planRunOn, type RunPlan, type RunPlanSource } from './sim/runs.ts';
-import { ownWallSites, type ReplaceSource } from './sim/queue.ts';
-import { BF_COMPLETE, Q_BUILD, Q_RUN } from './sim/schema.ts';
+import { ownWallSites, type ReplaceSource, type SiteSource } from './sim/queue.ts';
+import { BF_COMPLETE, Q_BUILD, Q_RUN, isReserved } from './sim/schema.ts';
 import { runSitesOf, type Snapshot } from './sim/snapshot.ts';
 import type { Terrain } from './sim/terrain.ts';
 import { canPlaceOn } from './sim/world.ts';
@@ -86,6 +91,29 @@ export function snapshotReplaceSource(s: Snapshot, ids: readonly number[]): Repl
   };
 }
 
+/** queue.ts SiteSource over a snapshot (run 3 C2): every unit row is live. */
+export function snapshotSiteSource(s: Snapshot): SiteSource {
+  const q = s.queues;
+  const c = s.buildings.cols;
+  return {
+    units: s.units.count,
+    liveId: (r) => s.units.id[r]!,
+    holds: (r, hold) => {
+      for (let i = q.first[r]!, end = i + q.count[r]!; i < end; i++) {
+        if (q.kind[i] === Q_BUILD) hold(q.target[i]!, -1);
+        else if (q.kind[i] === Q_RUN) hold(-1, q.run[i]!);
+      }
+    },
+    runSites: (run) => runSitesOf(s, run),
+    reservedSiteAt: (kind, tx, ty, dir) => {
+      const [fw, fh] = buildingFootprint(kind);
+      for (let r = 0; r < s.buildings.count; r++)
+        if (c.kind[r] === kind && c.tx[r] === tx && c.ty[r] === ty && c.dir[r] === (dir & 3) && c.fw[r] === fw && c.fh[r] === fh && isReserved(c.flags[r]!)) return s.buildings.id[r]!;
+      return -1;
+    },
+  };
+}
+
 /**
  * The wall run a drag from `from` to `to` lays for builders `ids` (runs.ts planRunOn). Without
  * `queue` (Shift), the builders' own wall sites the run covers are kept (W25c, header).
@@ -129,14 +157,14 @@ export function beltLineTiles(x0: number, z0: number, x1: number, z1: number, di
 }
 
 /**
- * The whole drag plan for build kind `kind` (walls: a run 1 deep, as the wall tool lays; belts: a
- * line). `queue`: Shift is held, so the builders' queues are appended to, not replaced.
+ * The whole drag plan for build kind `kind` (walls: a run `depth` rows deep, as the wall tool lays;
+ * belts: a line). `queue`: Shift is held, so the builders' queues are appended to, not replaced.
  */
-export function planDrag(v: DragView, kind: number, ids: readonly number[], from: [number, number], to: [number, number], beltDir = 0, queue = false): DragPlan {
+export function planDrag(v: DragView, kind: number, ids: readonly number[], from: [number, number], to: [number, number], beltDir = 0, queue = false, depth = 1): DragPlan {
   const info = buildingInfo(kind);
   const plan: DragPlan = { kind, build: [], skipped: [], cost: [0, 0, 0], refused: null };
   if (kind === B.wall) {
-    const run = planWallDrag(v, ids, from, to, 1, queue);
+    const run = planWallDrag(v, ids, from, to, depth, queue);
     if (typeof run === 'string') plan.refused = run;
     else {
       for (const [x, y] of run.tiles) plan.build.push([x, y, 0]);
@@ -162,4 +190,28 @@ export function dragLabel(p: DragPlan): string {
     if (c > 0) parts.push(`${Math.round(c).toLocaleString('en-GB')} ${names[k]}`);
   });
   return parts.join(' · ');
+}
+
+/**
+ * The drag plan, worked out again only when an input changes: the snapshot tick, the kind, the end
+ * tiles, the belt direction, Shift and the wall depth (run 3). A frame with nothing changed returns
+ * the same plan object and allocates nothing. (The builders are not compared, as before run 3: a
+ * selection change during a drag shows from the next snapshot.)
+ */
+export class DragPlanCache {
+  private plan: DragPlan | null = null;
+  private readonly key = { tick: -1, kind: -1, fx: 0, fy: 0, tx: 0, ty: 0, dir: -1, queue: false, depth: -1 };
+
+  get(v: DragView, tick: number, kind: number, ids: readonly number[], from: [number, number], to: [number, number], dir: number, queue: boolean, depth: number): DragPlan {
+    const k = this.key;
+    if (!this.plan || k.tick !== tick || k.kind !== kind || k.fx !== from[0] || k.fy !== from[1] || k.tx !== to[0] || k.ty !== to[1] || k.dir !== dir || k.queue !== queue || k.depth !== depth) {
+      Object.assign(k, { tick, kind, fx: from[0], fy: from[1], tx: to[0], ty: to[1], dir, queue, depth });
+      this.plan = planDrag(v, kind, ids, from, to, dir, queue, depth);
+    }
+    return this.plan;
+  }
+
+  clear(): void {
+    this.plan = null;
+  }
 }

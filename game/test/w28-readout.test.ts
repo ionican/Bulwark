@@ -43,7 +43,8 @@ describe('W28: construction hover readout', () => {
     expect(o.intake[1]!.perSecond).toBeCloseTo(60, 3);
     expect(o.percent).toBe(30);
     expect(o.builders).toBe(2);
-    expect(o.lines).toEqual(['Gun turret', '30% complete', '20 mass/s', '60 energy/s', '2 builders']);
+    // W24 run 3 (D2): "<resource> <received> / <wanted> per s"; the one engineer working wants 6.7 mass/s
+    expect(o.lines).toEqual(['Gun turret', '30% complete', 'mass 20 / 6.7 per s', 'energy 60 / 20 per s', '2 builders']);
   });
 
   it('a starved pair (no progress between the snapshots) shows 0/s', () => {
@@ -52,8 +53,8 @@ describe('W28: construction hover readout', () => {
     at(b, r, 103, 0.25);
     const o = siteReadout(a, b, id)!;
     expect(o.intake.map((i) => i.perSecond)).toEqual([0, 0]);
-    expect(o.lines).toContain('0 mass/s');
-    expect(o.lines).toContain('0 energy/s');
+    expect(o.lines).toContain('mass 0 / 6.7 per s');
+    expect(o.lines).toContain('energy 0 / 20 per s');
     expect(o.lines).toContain('1 builder');
   });
 
@@ -93,7 +94,7 @@ describe('W28: construction hover readout', () => {
     expect(o.intakeNote).toBe('paused');
     expect(o.intake.every((i) => i.perSecond === null)).toBe(true);
     for (const line of o.lines) expect(line).not.toMatch(/NaN|Infinity/);
-    expect(o.lines).toContain('mass/s: paused');
+    expect(o.lines).toContain('mass paused / 6.7 per s');
     // no earlier snapshot, or one from another piece of work: "measuring", not a figure
     expect(siteReadout(null, b, id)!.intakeNote).toBe('measuring');
     at(a, r, 140, 0.9, BF_STARTED | BF_COMPLETE | BF_UPGRADING, 1);

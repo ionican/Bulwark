@@ -90,8 +90,23 @@ function cutMats(src: Mats): Mats {
   return out;
 }
 
+/**
+ * Reserved-site outlines. W24 run 3 (D1): depth-tested, so a building in front hides the part of an
+ * outline behind it; no depth writes, and a polygon offset towards the camera so an outline lying
+ * on the ground does not flicker against it.
+ */
 function outlineMaterial(): MeshBasicMaterial {
-  return new MeshBasicMaterial({ name: 'reserved-outline', vertexColors: true, depthTest: false, depthWrite: false, fog: false, toneMapped: false });
+  return new MeshBasicMaterial({
+    name: 'reserved-outline',
+    vertexColors: true,
+    depthTest: true,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -4,
+    fog: false,
+    toneMapped: false,
+  });
 }
 
 /** The browser set, from the loaded texture bank. */

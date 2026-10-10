@@ -260,7 +260,11 @@ export class EntityRenderer {
     this.lines = new Batch(scene, [lineGeometry(0.12, '#cfeeff'), lineGeometry(0.05, '#a8f5df')], [flat], 512, 0, C.buildings + C.units);
     const dome = new MeshBasicMaterial({ color: '#cfe6ff', transparent: true, opacity: 0.12, depthWrite: false, side: DoubleSide });
     this.shields = new Batch(scene, [shieldDomeGeometry(), dashedRingGeometry()], [dome, flat], 128, 0, C.buildings);
-    this.frames = new Batch(scene, [constructionFrameGeometry()], [icon], 512, 14, C.buildings);
+    // W24 run 3 (D1): frames are depth-tested on their own material (a building in front hides the
+    // part behind it), offset towards the camera so a frame on the ground does not flicker; the
+    // strategic icons keep theirs, drawn over everything.
+    const frame = new MeshBasicMaterial({ name: 'construction-frame', vertexColors: true, depthTest: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
+    this.frames = new Batch(scene, [constructionFrameGeometry()], [frame], 512, 14, C.buildings);
     this.reserved = new Batch(scene, [reservedOutlineGeometry()], [icon], 1024, 14, C.buildings);
     const back = new MeshBasicMaterial({ color: '#120f0d', depthTest: false, depthWrite: false });
     const fill = new MeshBasicMaterial({ color: '#f4efe6', depthTest: false, depthWrite: false });

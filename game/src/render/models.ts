@@ -890,18 +890,32 @@ export class ModelRenderer {
    * One building's model into `sink` (the frame's batches, or a W27 preview capture) in pose `P`.
    * Walls and gates read their pieces from `layout` at anchor tile `tile`.
    */
+  /**
+   * Height above a building's base (its footprint's highest ground) that its construction cut spans:
+   * a started site is drawn up to base + this × progress. W24 run 3 (C1): picking uses the same
+   * span for the building's volume, so what can be clicked is what is drawn. 0 for a kind with no model.
+   */
+  buildHeight(kind: number, tier: number): number {
+    if (kind === B.wall) return TIERS[Math.max(1, Math.min(3, tier))]!.top + 0.3;
+    if (kind === B.gate) return PYLON_H + 0.3;
+    if (kind === B.massExtractor || kind === B.rareExtractor) return EXTRACTOR_HEIGHT[kind === B.massExtractor ? 'mass' : 'rare'] + 0.3;
+    if (TURRET_KINDS.has(kind)) return this.kitKinds.get(kind)!.top * (TURRET_SCALE.get(kind) ?? 1) + 0.3;
+    const name = W17_BUILDING_MODEL.get(kind);
+    return name === undefined ? 0 : this.models[this.modelIndex.get(name)!]!.height + 0.2;
+  }
+
   private drawBuilding(sink: BuildingSink, P: Readonly<BuildingPose>, layout: WallLayout, kind: number, tile: number, dir: number, tier: number, cx: number, top: number, bottom: number, cz: number, fw: number, fh: number, lv: number, damage: number, complete: boolean, progress: number): void {
     if (top - bottom > 0.01) sink.plinth(cx, top + 0.02, cz, fw, top - bottom + 0.1, fh);
     const cutOf = (height: number) => (complete ? BUILT : top + height * progress);
     if (kind === B.wall) {
       const first = layout.first[tile]!;
       const n = layout.count[tile]!;
-      const cut = cutOf(TIERS[Math.max(1, Math.min(3, tier))]!.top + 0.3);
+      const cut = cutOf(this.buildHeight(kind, tier));
       for (let k = 0; k < n; k++) sink.part(this.parts.get(layout.parts[first + k]!), lv, layout.matrices, (first + k) * 16, 1, damage + 10, cut);
     } else if (kind === B.gate) {
       const pieces = layout.gates.get(tile);
       const frame = layout.gateFrames.get(tile);
-      const cut = cutOf(PYLON_H + 0.3);
+      const cut = cutOf(this.buildHeight(kind, tier));
       if (pieces) for (const pc of pieces) sink.part(this.parts.get(pc.part), lv, pc.m, 0, 1, damage + 10, cut);
       // the door leaves at this frame's opening (W23 leafOffsets)
       if (frame) {
@@ -914,16 +928,15 @@ export class ModelRenderer {
     } else if (TURRET_KINDS.has(kind)) {
       const k = this.kitKinds.get(kind)!;
       const s = TURRET_SCALE.get(kind) ?? 1;
-      const cut = complete ? BUILT : top + (k.top * s + 0.3) * progress;
+      const cut = cutOf(this.buildHeight(kind, tier));
       this.pushKit(k, cx, top, cz, P.yaw, s, lv, damage, cut, P.pitch, P.recoil, sink);
     } else {
       const name = W17_BUILDING_MODEL.get(kind);
       if (name === undefined) return;
       const mi = this.modelIndex.get(name)!;
-      const model = this.models[mi]!;
       const yaw = isBelt(kind) ? BELT_YAW[dir & 3]! : 0;
       _m.makeRotationY(yaw).setPosition(cx, top, cz);
-      const cut = cutOf(model.height + 0.2);
+      const cut = cutOf(this.buildHeight(kind, tier));
       sink.model(mi, _m.elements, 0, damage, cut);
       if (kind === B.splitter || kind === B.merger) sink.model(this.modelIndex.get(kind === B.splitter ? 'splitterMarker' : 'mergerMarker')!, _m.elements, 0, damage, cut);
       // W17 moving parts (generator vane, shredder rollers, assembler arm): turned by the running time
@@ -1011,7 +1024,7 @@ export class ModelRenderer {
     const P = (id: string) => this.parts.get(id);
     const base = extractorMatrix(_m, { x, y, z, rot: 0 });
     const pose = extractorPose({ kind, x, y, z, rot: 0, built, working, t, damage }, this.pose);
-    const cut = built < 1 ? y + (EXTRACTOR_HEIGHT[kind] + 0.3) * built : BUILT;
+    const cut = built < 1 ? y + this.buildHeight(kind === 'mass' ? B.massExtractor : B.rareExtractor, 1) * built : BUILT;
     if (kind === 'mass') {
       sink.part(P('mass/base'), lv, base, 0, 1, damage, cut);
       sink.part(P('mass/drum'), lv, pivotMatrix(_m2, base, pose.spin, 0), 0, 1, damage, cut);

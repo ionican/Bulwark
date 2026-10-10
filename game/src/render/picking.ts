@@ -7,11 +7,23 @@
 // point alone used to stand in for a mobile, so with the camera tilted low a click on a 3.7-tile
 // commander's torso hit the ground far behind it. Wrecks are flat and keep the ground-radius test.
 // The result does not depend on which LOD is drawn, so it works the same at every zoom level.
+//
+// W24 run 3 (C1): with `buildingHeight` (the renderer's construction cut span, ModelRenderer
+// buildHeight) buildings have pick volumes too, and the click goes to whichever volume — unit,
+// building or alien — the ray enters first, so an engineer hidden behind a turret no longer takes
+// the click. A building's volume is its footprint from the lowest ground under it to its base (the
+// footprint's highest ground, where the renderer stands it) plus the span; a started site's span is
+// cut at its progress; a reserved site has none (only its outline is drawn); a gate has only its two
+// side columns, so a unit in or behind the corridor stays selectable. A ray that enters no volume
+// falls back to the building on the ground tile (a reserved site is still clicked by its tile), then
+// a wreck. Without `buildingHeight` the order is the one before run 3.
 
 import { Vector3, type PerspectiveCamera } from 'three';
-import { alienInfo, unitInfo } from '../sim/kinds.ts';
+import { B, alienInfo, unitInfo } from '../sim/kinds.ts';
+import { BF_COMPLETE, isReserved } from '../sim/schema.ts';
+import { inGateCorridor } from '../sim/gate.ts';
 import type { Terrain } from '../sim/terrain.ts';
-import { groundHeight, heightRange, rayGround } from './ground.ts';
+import { footprintRange, groundHeight, heightRange, rayGround } from './ground.ts';
 import { worldPerPixel } from './cameraRig.ts';
 import { alienVolume, unitVolume, type PickVolume } from './pickVolumes.ts';
 
@@ -37,8 +49,25 @@ export interface PickView {
   mapH: number;
   /** Building row + 1 per tile (0 = no building). Built by buildOccupancy. */
   occupancy: Int32Array;
-  /** Footprint fw × fh tiles from the anchor (tx, ty), from the snapshot columns (W24). */
-  buildings: { count: number; id: Uint32Array; kind: Uint8Array; tx: Int16Array; ty: Int16Array; fw: Uint8Array; fh: Uint8Array };
+  /**
+   * Footprint fw × fh tiles from the anchor (tx, ty), from the snapshot columns (W24). Run 3: the
+   * construction state (flags, progress), tier and gate axis (dir), for the pick volumes.
+   */
+  buildings: {
+    count: number;
+    id: Uint32Array;
+    kind: Uint8Array;
+    tx: Int16Array;
+    ty: Int16Array;
+    fw: Uint8Array;
+    fh: Uint8Array;
+    flags?: ArrayLike<number>;
+    progress?: ArrayLike<number>;
+    tier?: ArrayLike<number>;
+    dir?: ArrayLike<number>;
+  };
+  /** Run 3: the renderer's construction cut span (ModelRenderer.buildHeight); without it buildings are picked by ground tile. */
+  buildingHeight?: (kind: number, tier: number) => number;
   units: MobileRows;
   aliens: MobileRows;
   /** Optional: wrecks (picked last, so a click on a building or alien wins). */
@@ -193,6 +222,86 @@ function nearestVolume(rows: MobileRows, volume: (kind: number) => PickVolume, t
   return best;
 }
 
+/**
+ * Distance along the ray (_o, _d) at which it enters the box [x0, x1] × [y0, y1] × [z0, z1], or -1
+ * if it misses (or the box is behind the camera).
+ */
+function rayBox(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): number {
+  let t0 = 0;
+  let t1 = Infinity;
+  const o = [_o.x, _o.y, _o.z];
+  const d = [_d.x, _d.y, _d.z];
+  const lo = [x0, y0, z0];
+  const hi = [x1, y1, z1];
+  for (let i = 0; i < 3; i++) {
+    if (Math.abs(d[i]!) < 1e-12) {
+      if (o[i]! < lo[i]! || o[i]! > hi[i]!) return -1;
+      continue;
+    }
+    const a = (lo[i]! - o[i]!) / d[i]!;
+    const b = (hi[i]! - o[i]!) / d[i]!;
+    t0 = Math.max(t0, Math.min(a, b));
+    t1 = Math.min(t1, Math.max(a, b));
+    if (t0 > t1) return -1;
+  }
+  return t0;
+}
+
+/**
+ * Row of the building whose pick volume the ray (_o, _d) enters first, and the distance; row -1 when
+ * none. See the file comment for the volumes.
+ */
+function nearestBuilding(view: PickView, terrain: Terrain, height: (kind: number, tier: number) => number): { row: number; t: number } {
+  const b = view.buildings;
+  const range = rangeOf(terrain);
+  let row = -1;
+  let best = Infinity;
+  for (let r = 0; r < b.count; r++) {
+    const flags = b.flags?.[r] ?? BF_COMPLETE;
+    if (isReserved(flags)) continue;
+    const kind = b.kind[r]!;
+    const full = height(kind, b.tier?.[r] ?? 1);
+    const h = flags & BF_COMPLETE ? full : full * (b.progress?.[r] ?? 1);
+    if (!(h > 0)) continue;
+    const tx = b.tx[r]!;
+    const ty = b.ty[r]!;
+    const fw = b.fw[r]!;
+    const fh = b.fh[r]!;
+    // cheap reject against the map's height band before the footprint's own heights are read
+    if (rayBox(tx, range.lo, ty, tx + fw, range.hi + h, ty + fh) < 0) continue;
+    const g = footprintRange(terrain, tx, ty, fw, fh);
+    let t: number;
+    if (kind === B.gate) {
+      // the two side columns only (one tile across the run, the full run deep)
+      const dir = b.dir?.[r] ?? 0;
+      t = Infinity;
+      for (let i = 0; i < (dir === 0 ? fw : fh); i++) {
+        const x = dir === 0 ? tx + i : tx;
+        const z = dir === 0 ? ty : ty + i;
+        if (inGateCorridor(tx, ty, dir, x, z)) continue;
+        const ti = rayBox(x, g.bottom, z, dir === 0 ? x + 1 : tx + fw, g.top + h, dir === 0 ? ty + fh : z + 1);
+        if (ti >= 0 && ti < t) t = ti;
+      }
+      if (t === Infinity) t = -1;
+    } else t = rayBox(tx, g.bottom, ty, tx + fw, g.top + h, ty + fh);
+    if (t >= 0 && t < best) {
+      best = t;
+      row = r;
+    }
+  }
+  return { row, t: best };
+}
+
+/** Distance along the ray to mobile row `r`'s widened cylinder (as nearestVolume measures it). */
+function volumeDistance(rows: MobileRows, r: number, volume: (kind: number) => PickVolume, terrain: Terrain, camera: PerspectiveCamera, vh: number, pad: number): number {
+  const x = rows.x[r]!;
+  const z = rows.z[r]!;
+  const v = volume(rows.kind[r]!);
+  const y = groundHeight(terrain, x, z);
+  const extra = pad * worldPerPixel(camera, Math.hypot(x - _o.x, y + v.height / 2 - _o.y, z - _o.z), vh);
+  return rayCylinder(_o, _d, x, z, v.radius + extra, y - extra, y + v.height + extra);
+}
+
 /** The building row on the ground tile `hit` falls in, or −1. */
 function buildingRowAt(hit: GroundHit | null, view: PickView): number {
   if (!hit) return -1;
@@ -229,7 +338,16 @@ export function pickScreen(
   _o.copy(camera.position);
   _d.set((sx / vw) * 2 - 1, -(sy / vh) * 2 + 1, 0.5).unproject(camera).sub(_o).normalize();
   const u = nearestVolume(view.units, unitVolume, terrain, camera, vh, pickPx);
-  if (u >= 0) return { type: 'unit', id: view.units.id[u]!, kind: view.units.kind[u]! };
+  if (view.buildingHeight) {
+    // run 3: whichever volume the ray enters first
+    const tu = u >= 0 ? volumeDistance(view.units, u, unitVolume, terrain, camera, vh, pickPx) : Infinity;
+    const bld = nearestBuilding(view, terrain, view.buildingHeight);
+    const a = nearestVolume(view.aliens, alienVolume, terrain, camera, vh, pickPx);
+    const ta = a >= 0 ? volumeDistance(view.aliens, a, alienVolume, terrain, camera, vh, pickPx) : Infinity;
+    if (u >= 0 && tu <= bld.t && tu <= ta) return { type: 'unit', id: view.units.id[u]!, kind: view.units.kind[u]! };
+    if (bld.row >= 0 && bld.t <= ta) return { type: 'building', id: view.buildings.id[bld.row]!, kind: view.buildings.kind[bld.row]! };
+    if (a >= 0) return { type: 'alien', id: view.aliens.id[a]!, kind: view.aliens.kind[a]! };
+  } else if (u >= 0) return { type: 'unit', id: view.units.id[u]!, kind: view.units.kind[u]! };
   const hit = screenToGround(camera, sx, sy, vw, vh, terrain);
   const row = buildingRowAt(hit, view);
   if (row >= 0) return { type: 'building', id: view.buildings.id[row]!, kind: view.buildings.kind[row]! };

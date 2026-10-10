@@ -10,17 +10,30 @@
 // "paused"; a site with no earlier sample of the same work (just placed, an upgrade just started,
 // a new world) shows "measuring". Text and numbers only, never colour.
 //
+// W24 run 3 (D2): each resource line reads "<resource> <received> / <wanted> per s". Wanted is the
+// rate at full supply: cost × the summed build power of the units working on the site ÷ its build
+// time, with the build power from the simulation's own unitBuildRate (kind, Field Engineering, the
+// buildRate tune) and cost and time from siteWork, as economy.ts stepConstruction spends them.
+// Working units are those building with `work` (id + 1) naming the site in the later snapshot. With
+// none: "<resource> <received> / no builder". `stable`: both snapshots have the same working units
+// and the same tuning and research, so the received figure was earned at the wanted rate's terms.
+//
 // Pure: no DOM, no three.js (ui/siteHover.ts draws the panel; main.ts picks the site under the cursor).
 
 import type { Snapshot } from '../sim/snapshot.ts';
 import { BF_COMPLETE, BF_UPGRADING, isReserved } from '../sim/schema.ts';
 import { TICK_HZ, buildingInfo, siteWork } from '../sim/kinds.ts';
+import { US_BUILDING } from '../sim/schema.ts';
+import { unitBuildRate } from '../sim/tuning.ts';
+import { sameRules, snapshotRules } from '../snapshotRules.ts';
 import { RESOURCE_NAMES, type ResourceName } from './waiting.ts';
 
 export interface SiteIntake {
   resource: ResourceName;
-  /** Per second of game time; null while paused or measuring. */
+  /** Received, per second of game time; null while paused or measuring. */
   perSecond: number | null;
+  /** Wanted at full supply by the units working on the site, per second; null with no builder. */
+  wanted: number | null;
 }
 
 export interface SiteReadout {
@@ -36,6 +49,10 @@ export interface SiteReadout {
   /** Why the intake has no figure: equal ticks, or no earlier sample of the same work. */
   intakeNote: '' | 'paused' | 'measuring';
   builders: number;
+  /** Units building this site in the later snapshot. */
+  working: number;
+  /** Both snapshots have the same working units, tuning and research. */
+  stable: boolean;
   /** The panel's text, one line each. */
   lines: string[];
 }
@@ -44,6 +61,23 @@ function rowOf(snap: Snapshot, id: number): number {
   const ids = snap.buildings.id;
   for (let r = 0; r < snap.buildings.count; r++) if (ids[r] === id) return r;
   return -1;
+}
+
+/** Ids of the units building `id` in `s`, ascending (unit rows are in slot order, not id order). */
+function workingUnits(s: Snapshot, id: number): number[] {
+  const u = s.units;
+  const out: number[] = [];
+  for (let r = 0; r < u.count; r++) if (u.cols.state[r] === US_BUILDING && u.cols.work[r]! - 1 === id) out.push(u.id[r]!);
+  return out.sort((a, b) => a - b);
+}
+
+/** Summed build power of the units building `id` in `s`, with the simulation's multipliers. */
+function buildPower(s: Snapshot, id: number): number {
+  const rules = snapshotRules(s);
+  const u = s.units;
+  let bp = 0;
+  for (let r = 0; r < u.count; r++) if (u.cols.state[r] === US_BUILDING && u.cols.work[r]! - 1 === id) bp += unitBuildRate(rules, u.cols.kind[r]!);
+  return bp;
 }
 
 /** "20", "2.5", "0.33", "0". */
@@ -67,7 +101,7 @@ export function siteReadout(prev: Snapshot | null, curr: Snapshot, id: number): 
   if (flags & BF_COMPLETE && !upgrading) return null;
   const kind = c.kind[r]!;
   const tier = c.tier[r]!;
-  const { cost } = siteWork(kind, upgrading, tier, c.fw[r]!, c.fh[r]!);
+  const { cost, time } = siteWork(kind, upgrading, tier, c.fw[r]!, c.fh[r]!);
   const progress = c.progress[r]!;
   const reserved = !upgrading && isReserved(flags);
   // the earlier sample must be of the same work: same building, same construction or upgrade
@@ -77,9 +111,13 @@ export function siteReadout(prev: Snapshot | null, curr: Snapshot, id: number): 
   const dt = same ? (curr.tick - prev!.tick) / TICK_HZ : 0;
   const intakeNote: SiteReadout['intakeNote'] = !same ? 'measuring' : dt === 0 ? 'paused' : '';
   const done = intakeNote ? 0 : Math.max(0, progress - pc!.progress[pr]!);
+  const working = workingUnits(curr, id);
+  const bp = working.length ? buildPower(curr, id) : 0;
+  const before = prev ? workingUnits(prev, id) : null;
+  const stable = !!prev && before!.length === working.length && before!.every((v, i) => v === working[i]) && sameRules(prev, curr);
   const intake: SiteIntake[] = [];
   RESOURCE_NAMES.forEach((resource, k) => {
-    if (cost[k]! > 0) intake.push({ resource, perSecond: intakeNote ? null : (cost[k]! * done) / dt });
+    if (cost[k]! > 0) intake.push({ resource, perSecond: intakeNote ? null : (cost[k]! * done) / dt, wanted: working.length ? (cost[k]! * bp) / time : null });
   });
   const name = buildingInfo(kind).label;
   const upgradeTo = upgrading ? tier + 1 : 0;
@@ -88,8 +126,8 @@ export function siteReadout(prev: Snapshot | null, curr: Snapshot, id: number): 
   const lines = [
     upgrading ? `${name} — upgrading to tier ${upgradeTo}` : name,
     reserved ? 'reserved — not started' : `${percent}% complete`,
-    ...intake.map((i) => (i.perSecond === null ? `${i.resource}/s: ${intakeNote}` : `${formatRate(i.perSecond)} ${i.resource}/s`)),
+    ...intake.map((i) => `${i.resource} ${i.perSecond === null ? intakeNote : formatRate(i.perSecond)} / ${i.wanted === null ? 'no builder' : `${formatRate(i.wanted)} per s`}`),
     `${builders} ${builders === 1 ? 'builder' : 'builders'}`,
   ];
-  return { id, name, upgradeTo, reserved, percent, intake, intakeNote, builders, lines };
+  return { id, name, upgradeTo, reserved, percent, intake, intakeNote, builders, working: working.length, stable, lines };
 }
