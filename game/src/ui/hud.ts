@@ -1,6 +1,6 @@
 // Debug readout and selection panel. Plain DOM over the canvas; text only, no colour coding.
 
-import { versionLabel } from '../version.ts';
+import { cornerLabel, versionLabel } from '../version.ts';
 
 export interface HudStats {
   fps: number;
@@ -56,7 +56,7 @@ export class Hud {
       'Camera: left drag orbits (turn and tilt) · right drag, WASD/arrows, screen edge: pan · wheel: zoom to cursor · middle drag: dolly · Q/E: turn · Home: whole map\n' +
       'Space: pause (orders still work) · Shift+1/2/3: speed · C: call next wave early · Y: research';
     // the build stamp, always shown, so a player can say which build they are playing (version.ts)
-    this.div('hud ver').textContent = `Bulwark ${versionLabel()}`;
+    this.div('hud ver').textContent = `Bulwark ${cornerLabel()}`;
     this.box = this.div('boxsel');
   }
 

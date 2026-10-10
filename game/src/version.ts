@@ -25,3 +25,9 @@ export function versionLabel(b: Build = BUILD): string {
   const date = m ? ` · ${Number(m[3])} ${MONTHS[Number(m[2]) - 1]} ${m[1]}` : '';
   return `build ${b.number} · ${b.commit}${date}${b.local ? ' · local changes' : ''}`;
 }
+
+/** The corner's short form, "build 129 · c537d2e" (" · local" for uncommitted work): narrow enough to
+ *  clear the build bar on smaller windows; the date stays in the help panel and the page title. */
+export function cornerLabel(b: Build = BUILD): string {
+  return `build ${b.number} · ${b.commit}${b.local ? ' · local' : ''}`;
+}
