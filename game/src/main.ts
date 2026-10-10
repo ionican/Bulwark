@@ -3,10 +3,10 @@
 //
 // URL parameters: ?stress=1 (stress scene), ?sandbox=1 (W24 mechanics sandbox), ?seed=<n>
 // (simulation seed, default 1), ?rich=1 (debug: start with 1,000,000 of each resource),
-// ?greybox=1 (W13's greybox renderer, for comparison), ?quality=high (default medium).
+// ?quality=high (default medium). W24 run 3 removed the second renderer and its URL switch.
 // The scenario shown is the one in the snapshot: loading a save switches to the save's scenario.
 
-import { Mesh, PerspectiveCamera, type Material } from 'three';
+import { Box3, InstancedMesh, Matrix4, Mesh, PerspectiveCamera, Vector3, type Material } from 'three';
 import { createRenderer, type Quality } from './render/adapter.ts';
 import { measureRenderCost } from './render/cost.ts';
 import { Orbit, applyRig, clampRig, pitchFor, worldPerPixel, type Rig } from './render/cameraRig.ts';
@@ -18,8 +18,14 @@ import { siteReadout, type SiteReadout } from './render/siteReadout.ts';
 import { SiteHover } from './ui/siteHover.ts';
 import { waitingCounts, waitingState } from './render/waiting.ts';
 import { DragPreview, inspectDrag } from './render/dragPreview.ts';
-import { beltLineTiles, dragLabel, planDrag, type DragPlan, type DragView } from './dragPlan.ts';
-import { groundHeight } from './render/ground.ts';
+import { DragPlanCache, beltLineTiles, dragLabel, snapshotSiteSource, type DragPlan, type DragView } from './dragPlan.ts';
+import { Tools, gateCommand, runCommand, spawnAtCommand, toolLabel, type ToolName } from './tools.ts';
+import { SandboxPanel, debugSpawnVisible, multToSlider } from './ui/sandboxPanel.ts';
+import { OVERLAY_NAMES, hideOverlay, overlayMeshes, setOverlayDepthTest } from './render/debugRender.ts';
+import { RouteView } from './render/routeView.ts';
+import { WorkerWindow } from './workerWindow.ts';
+import { ownReservedSite } from './sim/queue.ts';
+import { footprintRange, groundHeight } from './render/ground.ts';
 import { INSPECT_FRAME, drawnMeshes, entitiesOf, inspectScene, submissionFloor, type InspectFrame } from './render/inspect.ts';
 import { LOD_THRESHOLDS } from './render/lod.ts';
 import { Interpolator, type MobileView } from './render/interp.ts';
@@ -113,8 +119,7 @@ const scenario: ScenarioName = params.get('stress') === '1' ? 'stress' : params.
 const seed = (Number(params.get('seed') ?? '1') || 1) >>> 0;
 
 const terrain = map1Terrain();
-const renderMode = params.get('greybox') === '1' ? 'greybox' : 'models';
-const adapter = createRenderer(renderMode, params.get('quality') === 'high' ? 'high' : 'medium');
+const adapter = createRenderer(params.get('quality') === 'high' ? 'high' : 'medium');
 document.body.appendChild(adapter.canvas);
 let consoleErrors = 0;
 window.addEventListener('error', () => consoleErrors++);
@@ -151,6 +156,8 @@ let siteShown: { readout: SiteReadout; tick: number } | null = null;
 let samePrevWorld = false;
 let lastRunnerWorld = -1;
 const dragPreview = new DragPreview(scene, terrain, view.models);
+// W24 run 3: the sandbox panel's "Show routes" (off by default)
+const routeView = new RouteView(scene, terrain);
 const hud = new Hud();
 
 let vw = window.innerWidth;
@@ -213,7 +220,13 @@ let savedBlobUrl: string | null = null;
 /** Commands sent with a ref, waiting for the worker's acceptance or refusal. */
 type CommandResult = { ok: true; tick: number; detail?: Record<string, unknown> } | { ok: false; reason: string };
 const waiting = new Map<number, (r: CommandResult) => void>();
+/** Refs whose refusal the sender shows itself (the sandbox panel): no second toast here. */
+const quietRefs = new Set<number>();
 let nextRef = 1;
+/** Commands sent to the worker so far (check-panel: input over the panel sends none). */
+let commandsSent = 0;
+/** W24 run 3: the benchmark's worker timing window (workerWindow.ts). */
+const workerWindow = new WorkerWindow();
 let commanderDeathsSeen = 0;
 
 worker.onmessage = (ev: MessageEvent<FromWorker>) => {
@@ -223,16 +236,18 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
     if (rejected.length > 50) rejected.shift();
     // A refusal is reported, not an error: the console shows it as a warning, the toast with a cross.
     console.warn('command refused:', msg.reason, msg.cmd);
-    toasts.show(`Refused: ${msg.reason}`, true);
+    if (msg.ref === undefined || !quietRefs.has(msg.ref)) toasts.show(`Refused: ${msg.reason}`, true);
     if (msg.ref !== undefined) {
       waiting.get(msg.ref)?.({ ok: false, reason: msg.reason });
       waiting.delete(msg.ref);
+      quietRefs.delete(msg.ref);
     }
     return;
   }
   if (msg.type === 'accepted') {
     waiting.get(msg.ref)?.({ ok: true, tick: msg.tick, detail: msg.detail });
     waiting.delete(msg.ref);
+    quietRefs.delete(msg.ref);
     return;
   }
   if (msg.type === 'notice' || msg.type === 'error') {
@@ -259,7 +274,12 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
   const snap = decodeSnapshot(msg.buffer);
   const dropped = interp.push(snap, performance.now(), msg.runner.world);
   samePrevWorld = msg.runner.world === lastRunnerWorld;
+  // a new world (load, reset, rewind): back to the select tool
+  if (!samePrevWorld) tools.worldChanged();
   lastRunnerWorld = msg.runner.world;
+  // the worker's clock, on this page's (both count from their own time origin)
+  const t = msg.timing;
+  workerWindow.record({ ...t, startedAt: t.startedAt - performance.timeOrigin, endedAt: t.endedAt - performance.timeOrigin });
   // W26: the idle units column follows each snapshot
   idleNow = idleUnits(snap);
   idleColumn.update(idleNow);
@@ -288,12 +308,18 @@ worker.onerror = (e) => {
 send({ type: 'init', seed, scenario, rich: params.get('rich') === '1' });
 
 function command(cmd: Command) {
+  commandsSent++;
   send({ type: 'command', cmd });
 }
 
-/** Sends a command and resolves with its final result: applied at its tick, or refused with the reason. */
-function commandResult(cmd: Command): Promise<CommandResult> {
+/**
+ * Sends a command and resolves with its final result: applied at its tick, or refused with the
+ * reason. `quiet`: the caller shows a refusal itself (the sandbox panel), so no toast here.
+ */
+function commandResult(cmd: Command, quiet = false): Promise<CommandResult> {
   const ref = nextRef++;
+  commandsSent++;
+  if (quiet) quietRefs.add(ref);
   return new Promise((resolve) => {
     waiting.set(ref, resolve);
     send({ type: 'command', cmd, ref });
@@ -302,8 +328,10 @@ function commandResult(cmd: Command): Promise<CommandResult> {
 
 function buildingRows(s: Snapshot) {
   const c = s.buildings.cols;
-  return { count: s.buildings.count, id: s.buildings.id, kind: c.kind, tx: c.tx, ty: c.ty, fw: c.fw, fh: c.fh };
+  return { count: s.buildings.count, id: s.buildings.id, kind: c.kind, tx: c.tx, ty: c.ty, fw: c.fw, fh: c.fh, flags: c.flags, progress: c.progress, tier: c.tier, dir: c.dir };
 }
+/** C1: a building's pick volume is as tall as the renderer's construction cut span. */
+const buildingHeight = (kind: number, tier: number) => view.models.buildHeight(kind, tier);
 
 // ---- time, waves, research, saves -------------------------------------------------------------
 
@@ -361,6 +389,7 @@ function pickView(): PickView | null {
     mapH: terrain.h,
     occupancy,
     buildings: buildingRows(s),
+    buildingHeight,
     units: interp.units,
     aliens: interp.aliens,
     wrecks: { count: s.wrecks.count, id: s.wrecks.id, kind: s.wrecks.cols.kind, x: s.wrecks.cols.x, z: s.wrecks.cols.z },
@@ -464,28 +493,47 @@ function pickIdle(type: IdleType, all: boolean): number[] {
 
 // ---- build tools ---------------------------------------------------------------------------
 
-let buildMode: { kind: number; dir: number } | null = null;
-let upgradeMode = false;
+/** The scenario of the running world (the snapshot's; a loaded save brings its own). */
+function currentScenario(): string {
+  const g = interp.curr?.globals;
+  return g ? (SCENARIO_NAMES[g[G_SCENARIO]!] ?? scenario) : scenario;
+}
 /**
- * W25: a placement was made with Shift held since the build tool was picked. Releasing Shift then
- * closes the tool (except belts, which stay open as before); Esc always closes it.
+ * W24 run 3: the one active map tool (tools.ts). Gate and spawn are sandbox-only. Choosing a tool
+ * ends the previous one; Escape or right click cancels it; a world change returns to select.
  */
-let shiftPlaced = false;
+const tools = new Tools((name) => (name !== 'gate' && name !== 'spawn') || currentScenario() === 'sandbox');
+/** The build tool's rotation (R), kept across tools as before. */
+let buildDir = 0;
+const buildModeNow = { kind: -1, dir: 0 };
+/** The build or wall tool's kind and rotation, or null (the shape main.ts used before run 3). */
+function buildTool(): { kind: number; dir: number } | null {
+  if (tools.name !== 'build' && tools.name !== 'wall') return null;
+  buildModeNow.kind = tools.kind;
+  buildModeNow.dir = buildDir;
+  return buildModeNow;
+}
 /**
  * Shift held, from the keyboard. A pointer event's own shiftKey is used too; this also covers input
  * whose pointer events carry no modifiers (agent-browser's mouse with its keydown Shift).
  */
 let shiftHeld = false;
 
+/** The build bar or a key picks a building kind (null: back to select). Needs builders selected. */
 function setBuildMode(kind: BuildingKind | null) {
-  upgradeMode = false;
-  shiftPlaced = false;
   if (kind === null || !selectedBuilders().length) {
-    buildMode = null;
+    if (buildTool()) tools.choose('select');
     ghost.hide();
     return;
   }
-  buildMode = { kind: B[kind], dir: buildMode?.dir ?? 0 };
+  tools.choose('build', B[kind]);
+}
+
+/** Arms the gate or spawn tool (the sandbox panel's buttons); false outside the sandbox. */
+function armTool(name: ToolName): boolean {
+  const ok = tools.choose(name);
+  if (ok) ghost.hide();
+  return ok;
 }
 
 /** Footprint origin under a ground point, centred on the cursor. */
@@ -494,9 +542,19 @@ function footprintAt(kind: number, gx: number, gz: number): [number, number] {
   return [fw === 1 ? Math.floor(gx) : Math.round(gx - fw / 2), fh === 1 ? Math.floor(gz) : Math.round(gz - fh / 2)];
 }
 
+/**
+ * True when (kind, tx, ty, dir) can be ordered now: the tiles are free, or (C2) it is exactly a
+ * reserved site the builders `ids` hold themselves and the order is unshifted (queue.ts ownReservedSite).
+ */
+function placeable(kind: number, tx: number, ty: number, dir: number, ids: number[], queue: boolean): boolean {
+  if (canPlaceOn(terrain, occupancy, kind, tx, ty)) return true;
+  const s = interp.curr;
+  return !!s && !queue && ids.length > 0 && ownReservedSite(snapshotSiteSource(s), ids, kind, tx, ty, dir, false) >= 0;
+}
+
 function placeBuild(kind: number, tx: number, ty: number, dir: number, queue: boolean): boolean {
   const ids = selectedBuilders();
-  if (!ids.length || !canPlaceOn(terrain, occupancy, kind, tx, ty)) return false;
+  if (!ids.length || !placeable(kind, tx, ty, dir, ids, queue)) return false;
   command({ t: 'build', ids, kind, tx, ty, dir, queue });
   // Mark the tiles at once so a quick second click does not double-book them.
   const [fw, fh] = buildingFootprint(kind);
@@ -519,7 +577,10 @@ function placeBeltLine(kind: number, x0: number, z0: number, x1: number, z1: num
  */
 let drag: { x1: number; y1: number; from: [number, number]; to: [number, number]; shift: boolean } | null = null;
 let dragPlan: DragPlan | null = null;
-const dragMadeFrom = { kind: -1, dir: -1, fx: 0, fy: 0, tx: 0, ty: 0, tick: -1, queue: false };
+/** Remakes the plan only when its inputs change (tick, kind, end tiles, direction, Shift, depth). */
+const dragPlans = new DragPlanCache();
+/** The wall-run depth: the sandbox panel's choice while it is shown, else 1. */
+const runDepth = () => (sandboxPanel.shown ? sandboxPanel.model.depth : 1);
 const dragLabelEl = document.createElement('div');
 dragLabelEl.className = 'pnl draglabel';
 dragLabelEl.style.cssText = 'position:fixed;display:none;pointer-events:none;font-size:11px;padding:2px 6px;z-index:9';
@@ -538,18 +599,17 @@ function dragView(s: Snapshot): DragView {
  */
 function currentDragPlan(): DragPlan | null {
   const s = interp.curr;
+  const buildMode = buildTool();
   if (!drag || !buildMode || !s || !(buildMode.kind === B.wall || isBelt(buildMode.kind))) {
     dragPlan = null;
+    dragPlans.clear();
     return null;
   }
-  const m = dragMadeFrom;
-  const [fx, fy] = drag.from;
-  const [tx, ty] = drag.to;
   const queue = drag.shift || shiftHeld;
-  if (!dragPlan || m.kind !== buildMode.kind || m.dir !== buildMode.dir || m.fx !== fx || m.fy !== fy || m.tx !== tx || m.ty !== ty || m.tick !== s.tick || m.queue !== queue) {
-    Object.assign(m, { kind: buildMode.kind, dir: buildMode.dir, fx, fy, tx, ty, tick: s.tick, queue });
-    dragPlan = planDrag(dragView(s), buildMode.kind, selectedBuilders(), [fx, fy], [tx, ty], buildMode.dir, queue);
-    dragLabelEl.textContent = dragLabel(dragPlan);
+  const plan = dragPlans.get(dragView(s), s.tick, buildMode.kind, selectedBuilders(), drag.from, drag.to, buildMode.dir, queue, buildMode.kind === B.wall ? runDepth() : 1);
+  if (plan !== dragPlan) {
+    dragPlan = plan;
+    dragLabelEl.textContent = dragLabel(plan);
   }
   return dragPlan;
 }
@@ -588,32 +648,48 @@ function tileAtScreen(x: number, y: number): { tx: number; ty: number; g: Ground
 const gestures = new Gestures(orbit, {
   camera,
   viewportHeight: () => vh,
-  building: () => buildMode !== null || upgradeMode,
+  building: () => tools.name !== 'select',
   click(button, x, y, shift) {
     if (button === 0) {
+      const buildMode = buildTool();
       if (buildMode) {
         const t = tileAtScreen(x, y);
         if (t) {
           const [tx, ty] = footprintAt(buildMode.kind, t.g.x, t.g.z);
           placeBuild(buildMode.kind, tx, ty, buildMode.dir, shift);
-          if (shift) shiftPlaced = true;
         }
         // Belts stay selected for laying more; other buildings only while Shift is held.
-        if (!shift && !isBelt(buildMode.kind)) setBuildMode(null);
+        toolActed(shift);
         return;
       }
-      if (upgradeMode) {
+      if (tools.name === 'upgrade') {
         const view = pickView();
         const p = view ? pickScreen(camera, x, y, vw, vh, terrain, view) : null;
         const ids = selectedEngineers();
         if (p && p.type === 'building' && buildingInfo(p.kind).tiers && ids.length) command({ t: 'upgrade', ids, target: p.id, queue: shift });
-        if (!shift) upgradeMode = false;
+        toolActed(shift);
+        return;
+      }
+      if (tools.name === 'gate') {
+        // the selected builders (all of them when none is selected); no axis: the simulation picks it
+        const t = tileAtScreen(x, y);
+        const ids = selectedBuilders();
+        if (t) void commandResult(gateCommand(ids.length ? ids : allUnitIds(), t.tx, t.ty, shift));
+        toolActed(shift);
+        return;
+      }
+      if (tools.name === 'spawn') {
+        const t = tileAtScreen(x, y);
+        const m = sandboxPanel.model;
+        if (t) void commandResult(spawnAtCommand(m.spawnKind, t.tx + 0.5, t.ty + 0.5, m.count));
+        toolActed(shift);
         return;
       }
       selectAt(x, y, shift);
     } else if (button === 2) {
-      if (buildMode || upgradeMode) {
-        setBuildMode(null);
+      // any tool but select: right click cancels it (select: an order, as before)
+      if (tools.rightClick()) {
+        ghost.hide();
         return;
       }
       rightClick(x, y, shift);
@@ -643,22 +719,22 @@ const gestures = new Gestures(orbit, {
     if (!drag) dragPlan = null;
   },
   buildDrag(x0, y0, x1, y1, shift) {
-    if (!buildMode) return;
+    const buildMode = buildTool();
+    if (!buildMode) return; // a drag with the upgrade, gate or spawn tool does nothing
     const a = tileAtScreen(x0, y0);
     const b = tileAtScreen(x1, y1);
     if (a && b) {
       if (buildMode.kind === B.wall) {
-        // a wall drag lays a run (one order per builder, built tile by tile: run 1's buildRun)
+        // a wall drag lays a run (one order per builder, built tile by tile: run 1's buildRun) at the panel's depth
         const ids = selectedBuilders();
-        if (ids.length) void commandResult({ t: 'buildRun', ids, from: [a.tx, a.ty], to: [b.tx, b.ty], depth: 1, queue: shift });
+        if (ids.length) void commandResult(runCommand(ids, [a.tx, a.ty], [b.tx, b.ty], runDepth(), shift));
       } else if (isBelt(buildMode.kind)) placeBeltLine(buildMode.kind, a.tx, a.ty, b.tx, b.ty, buildMode.dir, shift);
       else {
         const [tx, ty] = footprintAt(buildMode.kind, b.g.x, b.g.z);
         placeBuild(buildMode.kind, tx, ty, buildMode.dir, shift);
       }
-      if (shift) shiftPlaced = true;
     }
-    if (!shift && !isBelt(buildMode.kind)) setBuildMode(null);
+    toolActed(shift);
   },
 });
 const ptr = (e: PointerEvent) => ({ button: e.button, x: e.clientX, y: e.clientY, shift: e.shiftKey || shiftHeld });
@@ -676,7 +752,12 @@ canvas.addEventListener('pointermove', (e) => {
   gestures.move(ptr(e));
   updateSiteHover(true);
 });
-canvas.addEventListener('pointerup', (e) => gestures.up(ptr(e)));
+canvas.addEventListener('pointerup', (e) => {
+  // a gesture started on the map and released over the sandbox panel (the canvas holds the
+  // pointer) is cancelled: no command, no selection change, no preview left
+  if (sandboxPanel.contains(e.clientX, e.clientY)) gestures.cancel();
+  else gestures.up(ptr(e));
+});
 canvas.addEventListener('pointercancel', () => gestures.cancel());
 canvas.addEventListener('pointerleave', () => {
   mouse = null;
@@ -743,9 +824,24 @@ function rightClick(x: number, y: number, queue: boolean) {
 const KEY_TO_KIND = new Map<string, BuildingKind>();
 for (const k of BUILDING_KINDS) if (BUILDING_INFO[k].key) KEY_TO_KIND.set(BUILDING_INFO[k].key, k);
 
+/** After a left action with the tool: without Shift it returns to select (belts stay), with Shift it stays. */
+function toolActed(shift: boolean) {
+  tools.acted(shift);
+  if (!buildTool()) ghost.hide();
+}
+
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Shift') shiftHeld = true;
-  if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
+  // Escape first, before the editable-control filter: it cancels the tool even from the count field
+  if (e.key === 'Escape') {
+    // a drag under way ends with nothing queued (its release is ignored), then the tool closes
+    if (gestures.buildDragging) gestures.cancel();
+    if (tools.escape()) ghost.hide();
+    return;
+  }
+  // letters and digits typed into a field or a list go to it, not to shortcuts
+  const tag = (e.target as HTMLElement)?.tagName;
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
   const k = e.key.toLowerCase();
   if (e.code === 'Space') {
     e.preventDefault();
@@ -769,12 +865,7 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (e.key === 'Home') setView('far');
-  if (e.key === 'Escape') {
-    // a drag under way ends with nothing queued (its release is ignored), then the tool closes
-    if (gestures.buildDragging) gestures.cancel();
-    setBuildMode(null);
-  }
-  if (k === 'r' && buildMode) buildMode.dir = (buildMode.dir + 1) & 3;
+  if (k === 'r' && buildTool()) buildDir = (buildDir + 1) & 3;
   // a held key repeats: picking the same tool again would forget a Shift placement (W25)
   else if (KEY_TO_KIND.has(k) && !e.repeat) setBuildMode(KEY_TO_KIND.get(k)!);
   else if (k === 'u') startUpgrade();
@@ -786,8 +877,9 @@ window.addEventListener('keyup', (e) => {
   keys.delete(e.key.toLowerCase());
   if (e.key === 'Shift') {
     shiftHeld = false;
-    // Shift released after placing with it: the build tool closes (belts stay, as before).
-    if (buildMode && shiftPlaced && !isBelt(buildMode.kind)) setBuildMode(null);
+    // Shift released after acting with it: the tool closes (belts stay, as before).
+    tools.shiftReleased();
+    if (!buildTool()) ghost.hide();
   }
 });
 window.addEventListener('blur', () => {
@@ -796,9 +888,8 @@ window.addEventListener('blur', () => {
 });
 
 function startUpgrade() {
-  buildMode = null;
   ghost.hide();
-  upgradeMode = selectedEngineers().length > 0;
+  tools.choose(selectedEngineers().length > 0 ? 'upgrade' : 'select');
 }
 function dropTurret() {
   for (const id of selectedEngineers()) command({ t: 'dropTurret', id });
@@ -822,6 +913,112 @@ const bar = new BuildBar(
   },
   terrain.entries.map((e) => e.name),
 );
+/** The build bar's DEBUG spawn box: hidden while the sandbox panel is shown. */
+const debugBox = document.querySelector<HTMLElement>('.dbg');
+
+// ---- W24 run 3: the sandbox panel (ui/sandboxPanel.ts) -------------------------------------------
+
+const sandboxPanel = new SandboxPanel({
+  // the panel shows a refusal itself: no second toast from the worker message
+  send: (cmd) => commandResult(cmd, true),
+  toast: (text, bad) => toasts.show(text, bad),
+  armTool,
+});
+
+/** The active tool in words, for the panel ("Tool: spawn rusher × 8 — click the map"). */
+function toolText(): string {
+  const m = sandboxPanel.model;
+  return toolLabel(tools, { spawnName: ALIEN_KINDS[m.spawnKind], count: m.count, depth: runDepth(), kindName: tools.kind >= 0 ? buildingInfo(tools.kind).label : undefined });
+}
+
+// ---- W24 run 3: D1 diagnostics (__game.debugRender) ---------------------------------------------
+
+/**
+ * Renders the scene once without the post stack and reads back rect (CSS px) as luminance 0–255,
+ * row by row from the top. The same scene renders to the same pixels, so two captures differ only
+ * by what was changed between them (an overlay hidden).
+ */
+function captureRect(r: { x0: number; y0: number; x1: number; y1: number }) {
+  const R = adapter.renderer;
+  const dpr = R.getPixelRatio();
+  const W = adapter.canvas.width;
+  const H = adapter.canvas.height;
+  const cl = (v: number, hi: number) => Math.max(0, Math.min(hi, Math.round(v * dpr)));
+  const x0 = cl(Math.min(r.x0, r.x1), W);
+  const x1 = cl(Math.max(r.x0, r.x1), W);
+  const y0 = cl(Math.min(r.y0, r.y1), H);
+  const y1 = cl(Math.max(r.y0, r.y1), H);
+  const w = Math.max(0, x1 - x0);
+  const h = Math.max(0, y1 - y0);
+  R.setRenderTarget(null);
+  R.render(scene, camera);
+  const gl = R.getContext();
+  const buf = new Uint8Array(w * h * 4);
+  if (w && h) gl.readPixels(x0, H - y1, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+  const data: number[] = new Array(w * h);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const i = ((h - 1 - y) * w + x) * 4;
+      data[y * w + x] = 0.2126 * buf[i]! + 0.7152 * buf[i + 1]! + 0.0722 * buf[i + 2]!;
+    }
+  return { w, h, data };
+}
+
+const _corner = new Vector3();
+/** Screen rectangle (CSS px) of the projected corners of boxes; null when none is in front of the camera. */
+function screenRect(corners: (v: Vector3, k: number) => boolean): { x0: number; y0: number; x1: number; y1: number } | null {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (let k = 0; corners(_corner, k); k++) {
+    _corner.project(camera);
+    if (_corner.z > 1) continue;
+    const x = ((_corner.x + 1) / 2) * vw;
+    const y = ((1 - _corner.y) / 2) * vh;
+    x0 = Math.min(x0, x);
+    y0 = Math.min(y0, y);
+    x1 = Math.max(x1, x);
+    y1 = Math.max(y1, y);
+  }
+  return x0 <= x1 ? { x0, y0, x1, y1 } : null;
+}
+
+/** A building's pick volume (C1: footprint × the renderer's construction height) on screen. */
+function buildingScreenBox(id: number) {
+  const s = interp.curr;
+  const r = buildingRow(id);
+  if (!s || r < 0) return null;
+  const c = s.buildings.cols;
+  const tx = c.tx[r]!;
+  const ty = c.ty[r]!;
+  const fw = c.fw[r]!;
+  const fh = c.fh[r]!;
+  const g = footprintRange(terrain, tx, ty, fw, fh);
+  const top = g.top + view.models.buildHeight(c.kind[r]!, c.tier[r]!);
+  return screenRect((v, k) => k < 8 && !!v.set(k & 1 ? tx + fw : tx, k & 2 ? top : g.bottom, k & 4 ? ty + fh : ty));
+}
+
+const _m4 = new Matrix4();
+/** The drawn instances of one overlay (by material name) on screen. */
+function overlayScreenBox(name: string) {
+  const boxes: Box3[] = [];
+  for (const m of overlayMeshes(scene, name)) {
+    if (!m.visible || !(m instanceof InstancedMesh)) continue;
+    m.geometry.computeBoundingBox();
+    m.updateMatrixWorld();
+    for (let i = 0; i < m.count; i++) {
+      m.getMatrixAt(i, _m4);
+      boxes.push(m.geometry.boundingBox!.clone().applyMatrix4(_m4.premultiply(m.matrixWorld)));
+    }
+  }
+  return screenRect((v, k) => {
+    const b = boxes[k >> 3];
+    if (!b) return false;
+    v.set(k & 1 ? b.max.x : b.min.x, k & 2 ? b.max.y : b.min.y, k & 4 ? b.max.z : b.min.z);
+    return true;
+  });
+}
 
 // ---- W25: order queues of the selected units ---------------------------------------------------
 
@@ -977,6 +1174,7 @@ function steer(dt: number) {
 }
 
 function updateGhost() {
+  const buildMode = buildTool();
   if (!buildMode || !mouse || dragPlan) {
     ghost.hide();
     return;
@@ -987,7 +1185,8 @@ function updateGhost() {
     return;
   }
   const [tx, ty] = footprintAt(buildMode.kind, g.x, g.z);
-  const ok = canPlaceOn(terrain, occupancy, buildMode.kind, tx, ty);
+  // C2: the builders' own reserved site of exactly this kind and place shows as allowed
+  const ok = canPlaceOn(terrain, occupancy, buildMode.kind, tx, ty) || placeable(buildMode.kind, tx, ty, buildMode.dir, selectedBuilders(), shiftHeld);
   ghost.show(buildMode.kind, tx, ty, buildMode.dir, ok, worldPerPixel(camera, g.dist, vh), rig.yaw, performance.now() / 1000);
 }
 
@@ -1068,6 +1267,13 @@ function frame(now: number) {
   if (snap) waitView.update({ camera, viewportHeight: vh, snapshot: snap });
   updateDragPreview();
   updateGhost();
+  // W24 run 3: a tool the scenario stopped allowing is dropped; the panel and the routes follow the snapshot
+  tools.check();
+  sandboxPanel.update(snap, now);
+  if (sandboxPanel.shown) sandboxPanel.setTool({ name: tools.name, label: toolText() });
+  routeView.update(snap, sandboxPanel.shown && sandboxPanel.model.routes);
+  const dbg = debugSpawnVisible(snap) ? '' : 'none';
+  if (debugBox && debugBox.style.display !== dbg) debugBox.style.display = dbg;
   updateMs = performance.now() - tUpdate;
   const floor = inspectPending ? submissionFloor(scene) : null;
   adapter.render(dt);
@@ -1097,7 +1303,7 @@ function frame(now: number) {
       distance: rig.distance,
       renderer: adapter.describe(),
       scenario: { map1: 'map 1', stress: 'stress scene', empty: 'empty map', sandbox: 'sandbox (map 1)' }[SCENARIO_NAMES[snap.globals[G_SCENARIO]!] ?? 'map1'],
-      view: renderMode === 'greybox' ? 'greybox' : `models · ${adapter.quality}`,
+      view: `models · ${adapter.quality}`,
     });
     const g = snap.globals;
     hud.updateEconomy({
@@ -1156,10 +1362,11 @@ function frame(now: number) {
       rewindWave: cps.length ? cps[cps.length - 1]!.wave : 0,
     });
     const builders = selectedBuilders().length > 0;
-    const active = buildMode ? BUILDING_KINDS[buildMode.kind]! : upgradeMode ? 'upgrade' : null;
+    const buildMode = buildTool();
+    const active = buildMode ? BUILDING_KINDS[buildMode.kind]! : tools.name === 'upgrade' ? 'upgrade' : null;
     const hint = buildMode
       ? `Placing ${buildingInfo(buildMode.kind).label}${isBelt(buildMode.kind) ? ' — drag for a line, R rotates' : ''}. Shift queues more; Esc cancels.`
-      : upgradeMode
+      : tools.name === 'upgrade'
         ? 'Click a wall or turret to upgrade it (tiers need research).'
         : builders
           ? ''
@@ -1464,7 +1671,21 @@ const game = {
     return ghost.state ? { ...ghost.state, kindName: BUILDING_KINDS[ghost.state.kind] } : null;
   },
   get buildMode() {
-    return buildMode ? BUILDING_KINDS[buildMode.kind] : upgradeMode ? 'upgrade' : null;
+    const b = buildTool();
+    return b ? BUILDING_KINDS[b.kind] : tools.name === 'upgrade' ? 'upgrade' : null;
+  },
+  /** W24 run 3: the active map tool (tools.ts), its building kind and its words in the panel. */
+  get tool() {
+    return { name: tools.name, kind: tools.kind >= 0 ? (BUILDING_KINDS[tools.kind] ?? null) : null, label: toolText() };
+  },
+  /** W24 run 3: the sandbox panel's state, and the slider position (0..1) of a multiplier. */
+  get sandboxPanel() {
+    const m = sandboxPanel.model;
+    return { shown: sandboxPanel.shown, tick: sandboxPanel.tick, tab: m.tab, collapsed: m.collapsed, depth: m.depth, count: m.count, routes: m.routes, sliderFor: (mult: number) => multToSlider(mult) };
+  },
+  /** Commands sent to the worker so far. */
+  get commandsSent() {
+    return commandsSent;
   },
   selectAt: (x: number, y: number) => selectAt(x, y),
   get speed() {
@@ -1572,8 +1793,10 @@ const game = {
   resetStats: () => commandResult({ t: 'resetStats' }),
   resetSandbox: (full = false) => commandResult({ t: 'resetSandbox', full }),
   // ---- W24 run 2a: renderer
-  /** 'models' (default) or 'greybox' (?greybox=1). */
-  renderMode,
+  /** The view: 'models' (run 3 removed the other one). */
+  get renderMode() {
+    return 'models';
+  },
   get quality(): Quality {
     return adapter.quality;
   },
@@ -1756,7 +1979,53 @@ const game = {
   },
   /** W25: a placement was made with Shift since the build tool was picked (releasing Shift closes it). */
   get shiftPlaced() {
-    return shiftPlaced;
+    return tools.shiftActed;
+  },
+  // ---- W24 run 3
+  /** The map: size, base, entries, and ground heights as the renderer stands buildings on them. */
+  terrainInfo: {
+    w: terrain.w,
+    h: terrain.h,
+    base: { ...terrain.base },
+    entries: terrain.entries.map((e) => ({ name: e.name, x: e.x, z: e.z })),
+    footprintTop: (tx: number, ty: number, fw: number, fh: number) => footprintRange(terrain, tx, ty, fw, fh).top,
+    height: (x: number, z: number) => groundHeight(terrain, x, z),
+  },
+  /** One tile: its type and ground height at its centre. */
+  tileInfo: (x: number, z: number) => {
+    const tx = Math.floor(x);
+    const tz = Math.floor(z);
+    if (tx < 0 || tz < 0 || tx >= terrain.w || tz >= terrain.h) return { type: 'outside', height: 0 };
+    const t = terrain.tiles[tz * terrain.w + tx]!;
+    return { type: ['ground', 'rock', 'mass', 'rare'][t] ?? String(t), height: groundHeight(terrain, tx + 0.5, tz + 0.5) };
+  },
+  /** Screen point (CSS px) of world point (x, y, z). */
+  worldToScreenY: (x: number, y: number, z: number) => {
+    const p = new Vector3(x, y, z).project(camera);
+    return { x: ((p.x + 1) / 2) * vw, y: ((1 - p.y) / 2) * vh };
+  },
+  /**
+   * The benchmark's worker timing window (workerWindow.ts): start() at the start of a measured
+   * window, stop() at its end returns the report (tick-weighted median and maximum per-tick step
+   * time, encoding, ticks, seconds, dropped batches by reason).
+   */
+  workerWindow: {
+    start: () => workerWindow.start(performance.now(), runnerInfo.world),
+    stop: () => workerWindow.stop(performance.now()),
+  },
+  /**
+   * D1 diagnostics (render/debugRender.ts), view settings only: hide one depth-tested overlay, turn
+   * their depth test off and on, count what each draws, and read back a rectangle of a plain render
+   * of the scene (no post stack, so two renders of the same scene are identical) as luminance.
+   */
+  debugRender: {
+    names: [...OVERLAY_NAMES],
+    hideOverlay: (name: string, hide = true) => hideOverlay(scene, name, hide),
+    overlayDepthTest: (on: boolean) => setOverlayDepthTest(scene, on),
+    drawn: (name: string) => overlayMeshes(scene, name).reduce((a, m) => a + (m.visible ? (m instanceof InstancedMesh ? m.count : 1) : 0), 0),
+    capture: (rect: { x0: number; y0: number; x1: number; y1: number }) => captureRect(rect),
+    screenBox: (id: number) => buildingScreenBox(id),
+    overlayScreenBox: (name: string) => overlayScreenBox(name),
   },
   /** Removes order `order` (its id, as `queues` lists it) from unit `id`'s queue (resolves with the final result). */
   dequeue: (id: number, order: number) => commandResult({ t: 'dequeue', id, order }),

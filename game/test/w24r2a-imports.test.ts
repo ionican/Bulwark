@@ -13,7 +13,10 @@ import { AXIS_X, AXIS_Z, gateDepth } from '../src/sim/gate.ts';
 import { GATE_AXIS_Z, gateDepthOf } from '../src/render/wallLayout.ts';
 
 const SRC = fileURLToPath(new URL('../src/', import.meta.url));
-const PURE_SIM = new Set(['sim/kinds.ts', 'sim/balance.ts', 'sim/schema.ts', 'sim/table.ts', 'sim/terrain.ts', 'sim/rng.ts']);
+// W24 run 3: tuning.ts joins the list. Its value imports are kinds.ts and balance.ts only; the D2
+// readout (render/siteReadout.ts) reads build power through its unitBuildRate, as the plan requires,
+// rather than re-deriving the multipliers.
+const PURE_SIM = new Set(['sim/kinds.ts', 'sim/balance.ts', 'sim/schema.ts', 'sim/table.ts', 'sim/terrain.ts', 'sim/rng.ts', 'sim/tuning.ts']);
 
 function filesUnder(dir: string): string[] {
   const out: string[] = [];

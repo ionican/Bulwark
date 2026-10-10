@@ -48,7 +48,8 @@ describe('criterion 7: every projectile row at the simulation’s capacity is dr
 
 describe('criterion 1: snapshot-only, the new modules included', () => {
   const SRC = fileURLToPath(new URL('../src/', import.meta.url));
-  const PURE_SIM = new Set(['sim/kinds.ts', 'sim/balance.ts', 'sim/schema.ts', 'sim/table.ts', 'sim/terrain.ts', 'sim/rng.ts']);
+  // W24 run 3: tuning.ts (value imports kinds.ts and balance.ts only) for the D2 readout's build power
+  const PURE_SIM = new Set(['sim/kinds.ts', 'sim/balance.ts', 'sim/schema.ts', 'sim/table.ts', 'sim/terrain.ts', 'sim/rng.ts', 'sim/tuning.ts']);
   const files = (dir: string): string[] => readdirSync(dir).flatMap((n) => (statSync(join(dir, n)).isDirectory() ? files(join(dir, n)) : n.endsWith('.ts') ? [join(dir, n)] : []));
   const imports = (file: string): string[] => {
     const src = readFileSync(file, 'utf8');

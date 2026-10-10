@@ -21,7 +21,6 @@
 import { Vector3, type PerspectiveCamera } from 'three';
 import { B, alienInfo, unitInfo } from '../sim/kinds.ts';
 import { BF_COMPLETE, isReserved } from '../sim/schema.ts';
-import { inGateCorridor } from '../sim/gate.ts';
 import type { Terrain } from '../sim/terrain.ts';
 import { footprintRange, groundHeight, heightRange, rayGround } from './ground.ts';
 import { worldPerPixel } from './cameraRig.ts';
@@ -223,6 +222,13 @@ function nearestVolume(rows: MobileRows, volume: (kind: number) => PickVolume, t
 }
 
 /**
+ * True when tile (x, z) is the corridor column of a gate anchored at (tx, ty) along `dir` (0: the
+ * run along x). The same rule as sim/gate.ts inGateCorridor, which render code may not import
+ * (test/w24r2a-imports); test/w24r3-rules checks the two agree.
+ */
+export const gateCorridorTile = (tx: number, ty: number, dir: number, x: number, z: number): boolean => (dir === 0 ? x === tx + 1 : z === ty + 1);
+
+/**
  * Distance along the ray (_o, _d) at which it enters the box [x0, x1] × [y0, y1] × [z0, z1], or -1
  * if it misses (or the box is behind the camera).
  */
@@ -278,7 +284,7 @@ function nearestBuilding(view: PickView, terrain: Terrain, height: (kind: number
       for (let i = 0; i < (dir === 0 ? fw : fh); i++) {
         const x = dir === 0 ? tx + i : tx;
         const z = dir === 0 ? ty : ty + i;
-        if (inGateCorridor(tx, ty, dir, x, z)) continue;
+        if (gateCorridorTile(tx, ty, dir, x, z)) continue;
         const ti = rayBox(x, g.bottom, z, dir === 0 ? x + 1 : tx + fw, g.top + h, dir === 0 ? ty + fh : z + 1);
         if (ti >= 0 && ti < t) t = ti;
       }

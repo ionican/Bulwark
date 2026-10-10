@@ -29,7 +29,8 @@
 //     panel with its percent and its mass intake; sampled on every snapshot for 8 s, the figure is
 //     positive and at most the mass income while the trickle is shared (economy.ts shares it every
 //     tick, so a steadily starved site does not drop to 0 here); once its builders are stopped (X)
-//     the same site reads 0 mass/s and 0 builders; the panel takes no pointer events; moving off
+//     the same site reads "mass 0 / no builder" and 0 builders (W24 run 3, D2: received / wanted);
+//     the panel takes no pointer events; moving off
 //     the site hides it; screenshot w28-hover-readout.png
 //   - W25b, Stop: the X key on the two engineers removes the run's reserved tiles and the run;
 //     its started tiles stay
@@ -508,7 +509,7 @@ async function checkHoverReadout(sites) {
   await frames(10);
   const first = js('__game.siteHover');
   check(
-    first.visible && first.id === site.id && first.lines.some((l) => /^\d+% complete$/.test(l)) && first.lines.some((l) => / mass\/s$|^mass\/s: /.test(l)),
+    first.visible && first.id === site.id && first.lines.some((l) => /^\d+% complete$/.test(l)) && first.lines.some((l) => /^mass \S+ \/ (\S+ per s|no builder)$/.test(l)),
     `W28: hovering site ${site.id} shows the panel: ${first.lines.join(' | ')}`,
     `W28: hover panel over site ${site.id}: ${JSON.stringify(first)}`,
   );
@@ -553,7 +554,7 @@ async function checkHoverReadout(sites) {
   js(`(__game.camera.set(${JSON.stringify(rig)}), true)`);
 }
 
-/** W28: a started site whose builders were stopped reads 0 mass/s and 0 builders on the next snapshots. */
+/** W28: a started site whose builders were stopped reads "mass 0 / no builder" and 0 builders on the next snapshots (D2 text since W24 run 3). */
 async function checkHoverStopped(id) {
   const rig = js('__game.camera.get()');
   const b = js(`__game.list('building').find((b) => b.id === ${id})`);
@@ -565,7 +566,7 @@ async function checkHoverStopped(id) {
   await frames(20);
   const h = js('__game.siteHover');
   check(
-    h.visible && h.id === id && h.intake.mass === 0 && h.lines.includes('0 mass/s') && h.lines.includes('0 builders'),
+    h.visible && h.id === id && h.intake.mass === 0 && h.lines.includes('mass 0 / no builder') && h.lines.includes('0 builders'),
     `W28: after Stop, site ${id} reads ${h.lines.join(' | ')}`,
     `W28: hover panel over stopped site ${id}: ${JSON.stringify(h)}`,
   );

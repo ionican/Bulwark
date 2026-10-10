@@ -41,6 +41,12 @@
 //     Pass: game camera ≥ 55 fps average and ≥ 45 1%-low; strategic zoom-out ≥ 40 average. A pose
 //     that fails at a 1-minute load average above 8 is measured once more after the load falls
 //     below 8 (waiting up to 5 min); both results are printed.
+//     W24 run 3: the worker timing window (__game.workerWindow, src/workerWindow.ts) opens at the
+//     start of the measured window and closes at its end, before the render-cost measurement. Per
+//     pose: the device pixel ratio, the renderer's pixel ratio, the drawing buffer, and the worker's
+//     tick-weighted per-tick step time (median, max), encoding and ticks. At the game camera the
+//     pose fails on a median of 50 ms or more, fewer than 8 ticks per second of window, or any
+//     missing or non-finite figure (scripts/benchGate.mjs judgeWorkerWindow).
 //   screenshots, written on every run (to --shots <dir>, else the vault's Bulwark Art Reference)
 //     and required: w24-2b-engineers-beaming, w24-2b-turret-recoil-flash, w24-2b-shots-in-flight,
 //     w24-2b-gate-open, w24-2b-strategic-zoom.
@@ -61,7 +67,7 @@ import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { homedir, loadavg } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { judgeSamples } from './benchGate.mjs';
+import { judgeSamples, judgeWorkerWindow } from './benchGate.mjs';
 import { ART_REF, screenshot } from './shots.mjs';
 
 const GAME = fileURLToPath(new URL('..', import.meta.url));
@@ -402,6 +408,8 @@ const MEASURE_JS = (seconds, { pauseAt = 0, hideAt = 0 } = {}) => `(async () => 
   let runAt = 0;
   for (let s = 1; s <= ${seconds}; s++) {
     await new Promise((r) => setTimeout(r, Math.max(0, t0 + s * 1000 - performance.now())));
+    // W24 run 3: the worker timing window opens with the measured window, after the 5 s warm-up
+    if (s === 5) g.workerWindow.start();
     // sustain
     const alive = g.entityCounts.aliens;
     if (alive < 160) ${JSON.stringify(ALIENS)}.forEach((k, i) => g.spawnAt(k, 50.5 + i * 10, 30.5, Math.ceil((160 - alive) / 4)));
@@ -427,6 +435,9 @@ const MEASURE_JS = (seconds, { pauseAt = 0, hideAt = 0 } = {}) => `(async () => 
     R.samples.push({ s, d, cov: Object.fromEntries(Object.entries(rep).map(([k, e]) => [k, [e.covered, e.entities]])), alive, ungrouped: ungrouped?.meshes ?? [], frame });
   }
   on = false;
+  // closed at the end of the measured window, before the render-cost measurements
+  R.worker = g.workerWindow.stop();
+  R.screen = { devicePixelRatio: window.devicePixelRatio, ...g.viewport };
   if (${hideAt}) g.hideModelMaterials(false);
   if (${pauseAt} && g.paused) g.control.pause();
   R.drawCalls = g.drawCalls;
@@ -467,6 +478,14 @@ async function measurePose(label, rig, zoomOut) {
   const problems = judgeSamples(window, { zoomOut, aliens: ALIENS, turrets: TURRETS, buildingKinds: BUILDING_KINDS, doors: !zoomOut });
   const perf = zoomOut ? avg >= GATE.zoomAvg : avg >= GATE.gameAvg && low >= GATE.gameLow;
   if (!perf) problems.push(zoomOut ? `${avg.toFixed(1)} fps average < ${GATE.zoomAvg}` : `${avg.toFixed(1)} fps average / ${low.toFixed(1)} 1%-low (gate ${GATE.gameAvg} / ${GATE.gameLow})`);
+  // W24 run 3: the worker's tick-weighted median per-tick step time, gated at the game camera only
+  const wk = R.worker;
+  if (!zoomOut) problems.push(...judgeWorkerWindow(wk));
+  const f2 = (v) => (Number.isFinite(v) ? v.toFixed(2) : String(v));
+  note(
+    `benchmark ${label}: screen devicePixelRatio ${R.screen.devicePixelRatio}, renderer pixel ratio ${R.screen.pixelRatio}, drawing buffer ${R.screen.buffer.join(' × ')} (CSS ${R.screen.css.join(' × ')}); ` +
+      `worker window ${f2(wk?.seconds)} s: ${wk?.ticks} ticks in ${wk?.kept} batches, per-tick step median ${f2(wk?.medianTickMs)} ms (tick-weighted), max ${f2(wk?.maxTickMs)} ms; snapshot encoding median ${f2(wk?.encodeMedianMs)} ms, max ${f2(wk?.encodeMaxMs)} ms; dropped ${JSON.stringify(wk?.dropped)}${zoomOut ? ' (reported only when zoomed out)' : ''}`,
+  );
   const last = window[window.length - 1];
   const visible = Object.entries(last?.cov ?? {}).map(([k, [cov, ent]]) => `${k} ${cov}/${ent}`).join(', ');
   const act = window.reduce((a, x) => { for (const k in x.d) a[k] = (a[k] ?? 0) + x.d[k]; return a; }, {});

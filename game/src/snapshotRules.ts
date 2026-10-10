@@ -7,9 +7,16 @@
 // a real world's (w24r3-panel, w24r3-readout) would fail.
 
 import { RESEARCH_INDEX } from './sim/balance.ts';
-import { G_RESEARCH_DONE, type Snapshot } from './sim/snapshot.ts';
+import type { Snapshot } from './sim/snapshot.ts';
 import { Tuning } from './sim/tuning.ts';
 import type { World } from './sim/world.ts';
+
+/**
+ * Index of the research-done mask in the snapshot's globals (sim/snapshot.ts G_RESEARCH_DONE). Not
+ * imported: render code may not import the snapshot encoder (test/w24r2a-imports); test/w24r3-rules
+ * checks the two agree.
+ */
+export const RESEARCH_DONE_GLOBAL = 28;
 
 const cache = new WeakMap<Snapshot, World>();
 
@@ -21,7 +28,7 @@ export function snapshotRules(s: Snapshot): World {
   tuning.building.set(s.tuning.building);
   tuning.alien.set(s.tuning.alien);
   tuning.unit.set(s.tuning.unit);
-  const done = s.globals[G_RESEARCH_DONE] ?? 0;
+  const done = s.globals[RESEARCH_DONE_GLOBAL] ?? 0;
   const researched = (id: string) => {
     const i = RESEARCH_INDEX[id];
     return i !== undefined && (done & (1 << i)) !== 0;
@@ -33,7 +40,7 @@ export function snapshotRules(s: Snapshot): World {
 
 /** True when two snapshots carry the same tuning and research (the rule figures are the same). */
 export function sameRules(a: Snapshot, b: Snapshot): boolean {
-  if ((a.globals[G_RESEARCH_DONE] ?? 0) !== (b.globals[G_RESEARCH_DONE] ?? 0)) return false;
+  if ((a.globals[RESEARCH_DONE_GLOBAL] ?? 0) !== (b.globals[RESEARCH_DONE_GLOBAL] ?? 0)) return false;
   for (const k of ['building', 'alien', 'unit'] as const) {
     const x = a.tuning[k];
     const y = b.tuning[k];
