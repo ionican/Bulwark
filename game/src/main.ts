@@ -522,7 +522,8 @@ let shiftHeld = false;
 /** The build bar or a key picks a building kind (null: back to select). Needs builders selected. */
 function setBuildMode(kind: BuildingKind | null) {
   if (kind === null || !selectedBuilders().length) {
-    if (buildTool()) tools.choose('select');
+    // as before run 3: the build and upgrade tools close (an armed gate or spawn tool stays)
+    if (buildTool() || tools.name === 'upgrade') tools.choose('select');
     ghost.hide();
     return;
   }
