@@ -843,13 +843,14 @@ window.addEventListener('keydown', (e) => {
   const tag = (e.target as HTMLElement)?.tagName;
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
   const k = e.key.toLowerCase();
-  if (e.code === 'Space') {
+  if (e.code === 'Space' || e.key === ' ') {
     e.preventDefault();
     if (!e.repeat) togglePause();
     return;
   }
-  if (e.shiftKey && /^Digit[123]$/.test(e.code)) {
-    setSpeed(Number(e.code.slice(5)));
+  // Shift from the event or the keyboard state (agent-browser's keys carry no modifiers; as W25)
+  if ((e.shiftKey || shiftHeld) && (/^Digit[123]$/.test(e.code) || /^[123]$/.test(e.key))) {
+    setSpeed(/^Digit[123]$/.test(e.code) ? Number(e.code.slice(5)) : Number(e.key));
     return;
   }
   if (k === 'c' && !e.repeat) {

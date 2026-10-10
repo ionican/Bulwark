@@ -39,9 +39,10 @@
 //      engineer behind a reserved site and one behind the gate's corridor are selectable
 //   11 C2: the commander's reserved turret site; an unshifted build-bar click on exactly that site
 //      is accepted (same building id, queue length 1)
-//   12 D1: an upgrade frame and a reserved outline each behind a gun turret: the overlay's own
-//      pixel contribution (frame drawn with and without it) is zero inside the occluding turret and
-//      non-zero outside it; with the overlays' depth test off it is non-zero inside (the negative)
+//   12 D1: an upgrade frame (a heavy turret being upgraded) and a reserved outline (a heavy turret
+//      site), each partly behind a gun turret: the overlay's own pixel contribution (the frame
+//      drawn with and without it) is zero inside the occluding turret and non-zero on its
+//      unobstructed part; with the overlays' depth test off it is non-zero inside (the negative)
 //   13 screenshots: w24r3-panel-build.png, -spawn.png, -tune.png, -economy.png, -stats.png,
 //      w24r3-overlays-occluded.png (to --shots <dir>, else the vault's Bulwark Art Reference)
 // 0 console errors throughout. It always stops its server and closes only its own session.
@@ -130,6 +131,43 @@ async function drag(a, b, steps = 8, button = 'left') {
   ab('mouse', 'up', button);
   await frames(3);
 }
+/**
+ * A real wheel event at (x, y). agent-browser 0.37.1's `mouse wheel` dispatches at (0, 0) whatever
+ * the mouse position (probed 2026-10-10), so this sends the same CDP input event itself, to this
+ * session's page, at the point given.
+ */
+async function wheelAt(x, y, dy) {
+  const ws = new WebSocket(ab('get', 'cdp-url').cdpUrl);
+  await new Promise((res, rej) => {
+    ws.onopen = res;
+    ws.onerror = () => rej(new Error('CDP connection failed'));
+  });
+  let next = 0;
+  const pending = new Map();
+  ws.onmessage = (m) => {
+    const d = JSON.parse(String(m.data));
+    if (d.id && pending.has(d.id)) {
+      pending.get(d.id)(d);
+      pending.delete(d.id);
+    }
+  };
+  const call = (method, params = {}, sessionId) =>
+    new Promise((res, rej) => {
+      const id = ++next;
+      pending.set(id, (d) => (d.error ? rej(new Error(`${method}: ${d.error.message}`)) : res(d.result)));
+      ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+    });
+  try {
+    const { targetInfos } = await call('Target.getTargets');
+    const page = targetInfos.find((t) => t.type === 'page' && t.url.startsWith(ORIGIN));
+    if (!page) throw new Error('no page of this origin to send the wheel to');
+    const { sessionId } = await call('Target.attachToTarget', { targetId: page.targetId, flatten: true });
+    await call('Input.dispatchMouseEvent', { type: 'mouseWheel', x: Math.round(x), y: Math.round(y), deltaX: 0, deltaY: dy }, sessionId);
+    await call('Target.detachFromTarget', { sessionId });
+  } finally {
+    ws.close();
+  }
+}
 const shiftDown = () => ab('keydown', 'Shift');
 const shiftUp = () => ab('keyup', 'Shift');
 /** A key press with whatever has focus (keydown then keyup). */
@@ -198,13 +236,29 @@ async function tab(name) {
 
 /** Selects unit `id` by a real click near its screen point (Shift: added). */
 async function selectUnit(id, add = false) {
-  for (const [ox, oy] of [[0, -4], [0, 0], [2, -8], [-2, -2]]) {
-    const p = js(`__game.screenOf('unit', ${id})`);
-    if (add) shiftDown();
-    await click(p.x + ox, p.y + oy);
-    if (add) shiftUp();
-    const sel = js('__game.selected.map((s) => s.id)');
-    if (sel.includes(id)) return sel;
+  const tryClicks = async () => {
+    for (const [ox, oy] of [[0, -4], [0, 0], [2, -8], [-2, -2]]) {
+      const p = js(`__game.screenOf('unit', ${id})`);
+      if (add) shiftDown();
+      await click(p.x + ox, p.y + oy);
+      if (add) shiftUp();
+      const sel = js('__game.selected.map((s) => s.id)');
+      if (sel.includes(id)) return sel;
+    }
+    return null;
+  };
+  const sel = await tryClicks();
+  if (sel) return sel;
+  // hidden from this camera (C1: a building in front takes the click): look straight down on it, then back
+  const rig = js('__game.camera.get()');
+  const u = units().find((x) => x.id === id);
+  if (u) {
+    camera({ x: u.x, z: u.z, distance: 18, yaw: rig.yaw, pitch: (80 * Math.PI) / 180 });
+    await frames(5);
+    const again = await tryClicks();
+    camera(rig);
+    await frames(5);
+    if (again) return again;
   }
   throw new Error(`could not select unit ${id} by clicking it`);
 }
@@ -284,7 +338,11 @@ async function economy() {
 
 // ---- 4: the enclosure fixture ------------------------------------------------------------------
 
-/** A clear, flat, rock-free 11 × 9 rectangle ≥ 12 tiles from the base and every entry, with a free ring round it. */
+/**
+ * A clear, flat, rock-free 11 × 9 rectangle ≥ 12 tiles from the base and every entry, with a free
+ * ring round it, the 12 tiles north of it (the spawn side) and the 16 tiles south of it (the C2 site
+ * and the D1 turrets) clear ground too.
+ */
 function pickRectangle() {
   return js(`(() => {
     const t = __game.terrainInfo;
@@ -292,14 +350,14 @@ function pickRectangle() {
     const used = new Set();
     for (const b of bs) for (let j = 0; j < b.fh; j++) for (let i = 0; i < b.fw; i++) used.add((b.ty + j) * t.w + b.tx + i);
     const far = (x, z) => Math.hypot(x - t.base.x, z - t.base.z) >= 12 && t.entries.every((e) => Math.hypot(x - e.x, z - e.z) >= 12);
-    // the rectangle, a ring of 3 round it, and the 12 tiles north of it (the spawn side) clear and flat
+    // the rectangle, a ring of 3 round it, 12 tiles north of it (the spawn side) and 16 south clear
     for (let r = 14; r < 40; r++)
       for (let a = 0; a < 32; a++) {
         const x0 = Math.round(t.base.x + r * Math.cos((a / 32) * 2 * Math.PI)) - 5;
         const z0 = Math.round(t.base.z + r * Math.sin((a / 32) * 2 * Math.PI)) - 4;
         let ok = true;
         let lo = Infinity, hi = -Infinity;
-        for (let z = z0 - 13; z <= z0 + 11 && ok; z++)
+        for (let z = z0 - 13; z <= z0 + 24 && ok; z++)
           for (let x = x0 - 3; x <= x0 + 13 && ok; x++) {
             if (x < 1 || z < 1 || x >= t.w - 1 || z >= t.h - 1) { ok = false; break; }
             if (__game.tileInfo(x, z).type !== 'ground' || used.has(z * t.w + x)) ok = false;
@@ -472,16 +530,24 @@ const worldState = () =>
 async function isolation(f) {
   await tab('economy');
   await selectUnit(f.e1);
-  const base = worldState();
   const box = js(`(() => { const r = document.querySelector('.sbx').getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; })()`);
   const mid = { x: box.x + box.w / 2, y: box.y + box.h - 20 };
+  // first, the same wheel over the map zooms: the event reaches the page where it is sent
+  const probe = { x: box.x + box.w + 200, y: mid.y };
+  const d0 = js('__game.camera.get().distance');
+  await wheelAt(probe.x, probe.y, 200);
+  await frames(5);
+  const d1 = js('__game.camera.get().distance');
+  check(d1 > d0, `a wheel sent over the map zooms (distance ${d0.toFixed(1)} → ${d1.toFixed(1)}), so the wheel over the panel below is a real test`, `the wheel over the map did not zoom (${d0} → ${d1})`);
+  await frames(10);
+  const base = worldState();
   // a click on the panel's own background, a drag across it, a wheel over it
   const bg = js(`(() => { const e = document.elementFromPoint(${mid.x}, ${mid.y}); return e ? e.tagName + '.' + e.className : null; })()`);
   await click(mid.x, mid.y);
   await drag(mid, { x: mid.x - 60, y: mid.y - 120 }, 6);
   ab('mouse', 'move', R(mid.x), R(mid.y));
-  ab('mouse', 'wheel', '400');
-  ab('mouse', 'wheel', '-200');
+  await wheelAt(mid.x, mid.y, 400);
+  await wheelAt(mid.x, mid.y, -200);
   await frames(20);
   const after = worldState();
   check(after === base, `a click, a drag and a wheel over the panel (on ${bg}) change nothing on the map`, `isolation: before ${base} after ${after}`);
@@ -600,18 +666,24 @@ async function reservedAndC2(f) {
   camera({ x: tx + 1, z: tz + 5, distance: 16, yaw: 0, pitch: (35 * Math.PI) / 180 });
   await frames(5);
   await clickEl('.bar button[data-kind="gun"]');
+  // the preview over exactly that site, before the click
+  const at = toScreen(tx + 1, tz + 1);
+  ab('mouse', 'move', R(at.x), R(at.y));
+  await frames(5);
   const ghost = js('__game.ghost');
+  const oid0 = queueOf(cmdr)[0]?.oid;
   const rej = js('__game.rejected.length');
   const sent = js('__game.commandsSent');
   await clickTile(tx + 1, tz + 1);
   await pause(false);
-  await until('the order applied', `(__game.queues.find((q) => q.id === ${cmdr})?.orders.length ?? 0) === 1 && __game.commandsSent > ${sent}`, 10);
+  // applied at its tick: a new order replaced the old one (or a refusal came back)
+  await until('the order applied', `__game.commandsSent > ${sent} && ((__game.queues.find((q) => q.id === ${cmdr})?.orders[0]?.oid ?? -1) !== ${oid0 ?? -1} || __game.rejected.length > ${rej})`, 10);
   await pause(true);
   const q = queueOf(cmdr);
   const still = buildings().find((b) => b.kindName === 'gun' && b.tx === tx && b.ty === tz);
   check(
-    q.length === 1 && q[0].target === site.id && still?.id === site.id && js('__game.rejected.length') === rej && ghost?.ok === true,
-    `C2: an unshifted build-bar click on the commander's own reserved site is accepted (preview allowed; same id ${site.id}; queue length 1)`,
+    q.length === 1 && q[0].target === site.id && q[0].oid !== oid0 && still?.id === site.id && js('__game.rejected.length') === rej && ghost?.ok === true && ghost.tx === tx && ghost.ty === tz,
+    `C2: an unshifted build-bar click on the commander's own reserved site is accepted (preview allowed; a new order ${oid0} → ${q[0]?.oid} on the same id ${site.id}; queue length 1)`,
     `C2: queue ${JSON.stringify(q)}, site ${JSON.stringify(still)}, refusals ${JSON.stringify(js('__game.rejected').slice(-2))}, ghost ${JSON.stringify(ghost)}`,
   );
   await pause(false);
@@ -636,11 +708,16 @@ function contribution(name, r) {
 }
 
 async function overlays(f) {
-  // two occluding gun turrets O1, O2 south of the rectangle; behind O1 (north) a gun turret that will
-  // be upgraded (its frame), behind O2 a reserved site (its outline)
+  // Two occluding gun turrets O1, O2 (2 × 2) south of the rectangle. Behind O1 (north) a heavy
+  // turret (3 × 3) that will be upgraded (its frame); behind O2 a reserved heavy turret site (its
+  // outline). Each occluder stands one tile east of the heavy footprint's west edge, so it covers
+  // the middle of the frame or outline on screen and a side of it is unobstructed.
   const oz = f.z0 + 21;
-  const o1x = f.x0;
-  const o2x = f.x0 + 7;
+  const h1 = f.x0; // heavy turret, tiles x0..x0+2, oz-3..oz-1 (just behind O1)
+  const h2 = f.x0 + 7; // reserved heavy site
+  const occ1 = h1 + 1;
+  const occ2 = h2 + 1;
+  const hz = oz - 3;
   const engs = [f.e1, f.e2];
   await selectUnit(engs[0]);
   await selectUnit(engs[1], true);
@@ -648,43 +725,73 @@ async function overlays(f) {
   await frames(10);
   await clickEl('.bar button[data-kind="gun"]');
   shiftDown();
-  for (const [x, z] of [[o1x, oz], [o2x, oz], [o1x, oz - 3]]) await clickTile(x + 1, z + 1);
+  for (const x of [occ1, occ2]) await clickTile(x + 1, oz + 1);
   shiftUp();
-  await until('three turrets complete', `[[${o1x}, ${oz}], [${o2x}, ${oz}], [${o1x}, ${oz - 3}]].every(([x, z]) => __game.list('building').some((b) => b.kindName === 'gun' && b.tx === x && b.ty === z && b.complete))`, 240);
-  const up = buildings().find((b) => b.kindName === 'gun' && b.tx === o1x && b.ty === oz - 3);
-  // the upgrade: U, then a click on the turret (an engineer selected)
+  // queued behind the guns (Shift), so it does not replace their orders
+  await clickEl('.bar button[data-kind="heavy"]');
+  shiftDown();
+  await clickTile(h1 + 1.5, hz + 1.5);
+  shiftUp();
+  await until(
+    'the two guns and the heavy turret complete',
+    `[['gun', ${occ1}, ${oz}], ['gun', ${occ2}, ${oz}], ['heavy', ${h1}, ${hz}]].every(([k, x, z]) => __game.list('building').some((b) => b.kindName === k && b.tx === x && b.ty === z && b.complete))`,
+    300,
+  );
+  const up = buildings().find((b) => b.kindName === 'heavy' && b.tx === h1 && b.ty === hz);
+  // the upgrade: U, then a click on the heavy turret (an engineer selected)
   await selectUnit(engs[0]);
   press('u');
   check(tool().name === 'upgrade', 'U arms the upgrade tool', `tool ${JSON.stringify(tool())}`);
-  await clickTile(o1x + 1, oz - 2);
+  await clickTile(h1 + 1.5, hz + 1.5);
   await until('the upgrade under way', `__game.buildQueue.some((b) => b.id === ${up.id} && b.upgrading)`, 20);
   await pause(true);
-  // the reserved site behind O2, by the commander at the base
+  // the reserved heavy site behind O2, by the commander
   const cmdr = units().find((u) => u.kindName === 'commander').id;
   await selectUnit(cmdr);
   camera({ x: f.x0 + 5, z: oz, distance: 26, yaw: 0, pitch: (60 * Math.PI) / 180 });
   await frames(5);
-  await clickEl('.bar button[data-kind="gun"]');
-  await clickTile(o2x + 1, oz - 2);
+  // first a move away (south-east), then the site queued behind it: the site stays reserved while it walks
+  const far = toScreen(f.x0 + 13.5, oz + 3.5);
+  await click(far.x, far.y, 'right');
+  await clickEl('.bar button[data-kind="heavy"]');
+  shiftDown();
+  await clickTile(h2 + 1.5, hz + 1.5);
+  shiftUp();
   await pause(false);
-  await until('the reserved site behind O2', `__game.list('building').some((b) => b.kindName === 'gun' && b.tx === ${o2x} && b.ty === ${oz - 3} && b.state === 'reserved')`, 10);
+  try {
+    await until('the reserved site behind O2', `__game.list('building').some((b) => b.kindName === 'heavy' && b.tx === ${h2} && b.ty === ${hz} && b.state === 'reserved')`, 10);
+  } catch (e) {
+    const why = js(`({ sel: __game.selected.map((s) => s.type + ':' + s.id), queue: __game.queues.find((q) => q.id === ${cmdr})?.orders ?? null, rejected: __game.rejected.slice(-3).map((r) => r.reason), ghost: __game.ghost, tool: __game.tool })`);
+    throw new Error(`${e.message}: ${JSON.stringify(why)}`);
+  }
   await pause(true);
   // deselect (frames and outlines only; no selection markers)
   await click(...Object.values(toScreen(f.x0 + 20.5, oz + 8.5)));
-  const pose = { x: f.x0 + 4.5, z: oz + 1, distance: 11, yaw: 0, pitch: (24 * Math.PI) / 180 };
+  const pose = { x: f.x0 + 5, z: oz + 1, distance: 11, yaw: 0, pitch: (24 * Math.PI) / 180 };
   camera(pose);
   await frames(30);
-  const o1 = buildings().find((b) => b.kindName === 'gun' && b.tx === o1x && b.ty === oz).id;
-  const o2 = buildings().find((b) => b.kindName === 'gun' && b.tx === o2x && b.ty === oz).id;
+  const o1 = buildings().find((b) => b.kindName === 'gun' && b.tx === occ1 && b.ty === oz).id;
+  const o2 = buildings().find((b) => b.kindName === 'gun' && b.tx === occ2 && b.ty === oz).id;
   const frameDrawn = js(`__game.debugRender.drawn('construction-frame')`);
   const outlineDrawn = js(`__game.debugRender.drawn('reserved-outline')`);
   check(frameDrawn > 0 && outlineDrawn > 0, `a real upgrade frame (${frameDrawn}) and a real reserved outline (${outlineDrawn}) are drawn`, `drawn: frame ${frameDrawn}, outline ${outlineDrawn}`);
   for (const [name, occ] of [['construction-frame', o1], ['reserved-outline', o2]]) {
-    // inside: the middle of the occluding turret's body on screen; outside: the screen away from both turrets
+    // inside: the middle of the occluding turret's body on screen, where it covers the overlay;
+    // outside: the overlay's part beside the occluder's screen rectangle (unobstructed), on whichever
+    // side perspective leaves the wider strip
     const box = js(`__game.debugRender.screenBox(${occ})`);
-    const inside = { x0: box.x0 + (box.x1 - box.x0) * 0.3, x1: box.x0 + (box.x1 - box.x0) * 0.7, y0: box.y0 + (box.y1 - box.y0) * 0.35, y1: box.y0 + (box.y1 - box.y0) * 0.8 };
     const sb = js(`__game.debugRender.overlayScreenBox(${JSON.stringify(name)})`);
-    const outside = { x0: sb.x0, x1: sb.x1, y0: sb.y0, y1: Math.min(sb.y1, box.y0 - 2) };
+    const inside = {
+      x0: Math.max(sb.x0, box.x0 + (box.x1 - box.x0) * 0.3),
+      x1: Math.min(sb.x1, box.x0 + (box.x1 - box.x0) * 0.7),
+      y0: Math.max(sb.y0, box.y0 + (box.y1 - box.y0) * 0.35),
+      y1: Math.min(sb.y1, box.y0 + (box.y1 - box.y0) * 0.8),
+    };
+    const west = { x0: sb.x0, x1: Math.min(sb.x1, box.x0 - 2), y0: sb.y0, y1: sb.y1 };
+    const east = { x0: Math.max(sb.x0, box.x1 + 2), x1: sb.x1, y0: sb.y0, y1: sb.y1 };
+    const outside = west.x1 - west.x0 >= east.x1 - east.x0 ? west : east;
+    if (!(inside.x1 > inside.x0 && inside.y1 > inside.y0 && outside.x1 > outside.x0))
+      throw new Error(`D1 ${name}: the occluder does not partly cover the overlay on screen (occluder ${JSON.stringify(box)}, overlay ${JSON.stringify(sb)})`);
     const inOn = contribution(name, inside);
     const outOn = contribution(name, outside);
     js('__game.debugRender.overlayDepthTest(false)');
