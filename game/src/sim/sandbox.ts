@@ -13,7 +13,6 @@ import { TILE_ROCK, tileAt } from './terrain.ts';
 import { visitRings } from './grid.ts';
 import type { World } from './world.ts';
 
-export const SPAWN_AT_MAX = 50;
 /** Tiles round the spawn point searched for room (Euclidean, to tile centres). */
 export const SPAWN_RADIUS = 6;
 /** Minimum distance between a new alien and any other alien, in tiles. */

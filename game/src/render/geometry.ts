@@ -542,6 +542,10 @@ export function buildingGeometries(): KindGeometry[] {
 export function alienGeometries(): KindGeometry[] {
   return ALIEN_KINDS.map((k) => ({ full: alienFull(k), simple: alienSimple(k), icon: iconGeometry(ALIEN_ICONS[k], PALETTE.iconAlien) }));
 }
+/** The alien kinds' icon shapes alone (the route origins: render/routeView.ts). */
+export function alienIconGeometries(): BufferGeometry[] {
+  return ALIEN_KINDS.map((k) => iconGeometry(ALIEN_ICONS[k], PALETTE.iconAlien));
+}
 export function unitGeometries(): KindGeometry[] {
   return UNIT_KINDS.map((k) => ({ full: unitFull(k), simple: unitSimple(k), icon: iconGeometry(UNIT_ICONS[k], PALETTE.iconFriend) }));
 }

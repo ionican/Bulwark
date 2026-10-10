@@ -28,7 +28,6 @@ import { ownWallSites, worldReplaceSource } from './queue.ts';
 
 export const RUN_CAPACITY = 32;
 export const MAX_RUN_LENGTH = 128;
-export const MAX_RUN_DEPTH = 4;
 
 export interface WallRun {
   id: number;

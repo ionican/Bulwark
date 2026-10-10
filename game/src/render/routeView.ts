@@ -1,20 +1,23 @@
 // W24 run 3: the Spawn tab's "Show routes" toggle (default off; Richard asked for no routes in 2a).
 // When on, each route in the snapshot's originRoutes (the predicted path from each recent sandbox
 // spawn origin, tile cells z × width + x) is drawn as a dashed line just above the ground, with the
-// alien kind's icon shape at its origin. Rebuilt only when the routes change.
+// alien kind's icon shape at its origin. Rebuilt only when the routes change, checked once per snapshot.
 
 import { BufferGeometry, Float32BufferAttribute, Group, Line, LineDashedMaterial, Mesh, MeshBasicMaterial, type Scene } from 'three';
 import type { Snapshot } from '../sim/snapshot.ts';
 import type { Terrain } from '../sim/terrain.ts';
-import { alienGeometries } from './geometry.ts';
+import { alienIconGeometries } from './geometry.ts';
 import { groundHeight } from './ground.ts';
 
 export class RouteView {
   readonly group = new Group();
   private readonly line = new LineDashedMaterial({ color: '#f4efe6', dashSize: 0.6, gapSize: 0.45, depthTest: false, transparent: true, opacity: 0.9 });
   private readonly iconMat = new MeshBasicMaterial({ vertexColors: true, depthTest: false });
-  private readonly icons = alienGeometries().map((g) => g.icon);
+  /** Built on the first update with the routes on (most games never show them). */
+  private icons: ReturnType<typeof alienIconGeometries> | null = null;
   private key = '';
+  /** The snapshot the key was last made from: the routes change only with the snapshot. */
+  private snap: Snapshot | null = null;
 
   constructor(
     scene: Scene,
@@ -28,7 +31,8 @@ export class RouteView {
 
   update(s: Snapshot | null, on: boolean): void {
     this.group.visible = on && !!s;
-    if (!on || !s) return;
+    if (!on || !s || s === this.snap) return;
+    this.snap = s;
     const routes = s.originRoutes;
     const key = routes.map((r) => `${r.x},${r.z},${r.kind},${r.category},${r.cells.length},${r.cells[r.cells.length - 1] ?? -1}`).join(';');
     if (key === this.key) return;
@@ -54,6 +58,7 @@ export class RouteView {
         line.name = 'overlay/route';
         this.group.add(line);
       }
+      this.icons ??= alienIconGeometries();
       const icon = this.icons[r.kind];
       if (icon) {
         const m = new Mesh(icon, this.iconMat);

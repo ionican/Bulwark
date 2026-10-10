@@ -10,7 +10,8 @@
 // The logic (SandboxPanelModel and the functions below it) is pure and tested in
 // test/w24r3-panel.test.ts; the DOM half (SandboxPanel) is driven by scripts/check-panel.mjs.
 
-import { TUNE_MAX, TUNE_MIN } from '../sim/balance.ts';
+import { map1 } from '../../../model/data/map1.ts';
+import { MAX_RUN_DEPTH, SPAWN_AT_MAX, TUNE_MAX, TUNE_MIN } from '../sim/balance.ts';
 import type { Command } from '../sim/commands.ts';
 import { ALIEN_INFO, ALIEN_KINDS, B, BUILDING_INFO, BUILDING_KINDS, TICK_HZ, UNIT_INFO, UNIT_KINDS, buildingInfo, type AlienKind } from '../sim/kinds.ts';
 import { gateBaseHp } from '../sim/gate.ts';
@@ -35,7 +36,8 @@ import {
 } from '../sim/tuning.ts';
 import { SCENARIO_NAMES } from '../sim/world.ts';
 import { snapshotRules } from '../snapshotRules.ts';
-import { clampSpawnCount, type ToolName } from '../tools.ts';
+import { RESOURCE_NAMES } from '../render/waiting.ts';
+import { clampInt, clampSpawnCount, type ToolName } from '../tools.ts';
 import { alienIconSvg } from './panels.ts';
 
 export const PANEL_TABS = ['build', 'spawn', 'tune', 'economy', 'stats'] as const;
@@ -50,8 +52,8 @@ export interface PanelSink {
   armTool(name: ToolName): boolean;
 }
 
-/** Waves the Spawn tab offers (map 1's twenty), shown 1–20 and sent as index 0–19. */
-export const WAVES = 20;
+/** Waves the Spawn tab offers: map 1's, as startWave validates them (20: shown 1–20, sent as index 0–19). */
+export const WAVES = map1.waves.length;
 /** The two-click resets: the second click must come within this many ms. */
 export const CONFIRM_MS = 3000;
 
@@ -62,8 +64,6 @@ export const scenarioOf = (s: Snapshot): string => SCENARIO_NAMES[s.globals[G_SC
 export const panelVisible = (s: Snapshot | null): boolean => !!s && scenarioOf(s) === 'sandbox';
 /** The DEBUG spawn box (top right) is hidden whenever the panel is shown. */
 export const debugSpawnVisible = (s: Snapshot | null): boolean => !panelVisible(s);
-/** Alien count, a whole number 1–50 (NaN: 1). */
-export const clampCount = (n: number): number => clampSpawnCount(n);
 /** Wave shown 1–20, sent 0–19. */
 export const waveIndex = (wave: number): number => wave - 1;
 
@@ -202,7 +202,7 @@ export class SandboxPanelModel {
 
   // Build
   setDepth(d: number): void {
-    this.depth = Math.min(4, Math.max(1, Math.round(Number.isFinite(d) ? d : 1)));
+    this.depth = clampInt(d, 1, MAX_RUN_DEPTH);
   }
   armGate(): boolean {
     return this.sink.armTool('gate');
@@ -216,16 +216,16 @@ export class SandboxPanelModel {
     this.spawnKind = k;
   }
   setCount(v: string | number): void {
-    this.count = clampCount(typeof v === 'number' ? v : v.trim() === '' ? Number.NaN : Number(v));
+    this.count = clampSpawnCount(typeof v === 'number' ? v : v.trim() === '' ? Number.NaN : Number(v));
   }
   stepCount(d: number): void {
-    this.count = clampCount(this.count + d);
+    this.count = clampSpawnCount(this.count + d);
   }
   armSpawn(): boolean {
     return this.sink.armTool('spawn');
   }
   setWave(n: number): void {
-    this.wave = Math.min(WAVES, Math.max(1, Math.round(Number.isFinite(n) ? n : 1)));
+    this.wave = clampInt(n, 1, WAVES);
   }
   startWave(): Promise<boolean> {
     return this.send({ t: 'startWave', index: waveIndex(this.wave) });
@@ -340,6 +340,16 @@ export interface PanelToolState {
   label: string;
 }
 
+/** Sets the text only when it differs (an unchanged write still replaces the text node). */
+const setText = (el: Element, t: string): void => {
+  if (el.textContent !== t) el.textContent = t;
+};
+/** Shows or hides `el`, writing style.display only when it changes. */
+const setShown = (el: HTMLElement, on: boolean): void => {
+  const d = on ? '' : 'none';
+  if (el.style.display !== d) el.style.display = d;
+};
+
 /** The sandbox panel's DOM over a SandboxPanelModel. */
 export class SandboxPanel {
   readonly el: HTMLDivElement;
@@ -357,6 +367,10 @@ export class SandboxPanel {
   private readonly keys = new Map<string, string>();
   private tool: PanelToolState = { name: 'select', label: '' };
   private tuneKey = '';
+  /** The panel's fixed elements, looked up once (only the tune field rows are rebuilt). */
+  private readonly els: ReturnType<SandboxPanel['lookUp']>;
+  /** The tune field rows of the current target and kind (tuneKey), by field. */
+  private readonly fieldEls = new Map<string, { slider: HTMLInputElement; mult: HTMLElement; val: HTMLElement }>();
 
   constructor(sink: PanelSink, now: () => number = () => performance.now()) {
     const style = document.createElement('style');
@@ -398,7 +412,37 @@ export class SandboxPanel {
     this.el.addEventListener('input', (e) => this.onInput(e));
     this.el.addEventListener('change', (e) => this.onChange(e));
     document.body.appendChild(this.el);
+    this.els = this.lookUp();
+    // the time-controls box above moves only with the window
     this.layout();
+    window.addEventListener('resize', () => this.layout());
+  }
+
+  private lookUp() {
+    const q = <T extends Element = HTMLElement>(sel: string): T => this.el.querySelector(sel) as T;
+    const all = (sel: string) => Array.from(this.el.querySelectorAll<HTMLButtonElement>(sel));
+    return {
+      tabs: all('button[data-tab]'),
+      collapse: q('button[data-sbx="collapse"]'),
+      gate: q('button[data-sbx="gate"]'),
+      place: q('button[data-sbx="place"]'),
+      depths: all('button[data-depth]'),
+      runs: q('[data-sbx="runs"]'),
+      spawnKinds: all('button[data-spawn-kind]'),
+      count: q<HTMLInputElement>('input[data-sbx="count"]'),
+      wave: q('[data-sbx="wave"]'),
+      routes: q('button[data-sbx="routes"]'),
+      tuneTargets: all('button[data-tune-target]'),
+      tuneKind: q<HTMLSelectElement>('select[data-sbx="tune-kind"]'),
+      fields: q('[data-sbx="fields"]'),
+      unlimited: q('button[data-sbx="unlimited"]'),
+      resources: q('[data-sbx="resources"]'),
+      producers: q('[data-sbx="producers"]'),
+      reset: q('button[data-sbx="reset"]'),
+      resetFull: q('button[data-sbx="reset-full"]'),
+      shooters: q('table[data-sbx="shooters"]'),
+      aliens: q('table[data-sbx="aliens"]'),
+    };
   }
 
   /** True when the screen point is over the shown panel. */
@@ -422,6 +466,7 @@ export class SandboxPanel {
     if (shown !== this.shown) {
       this.shown = shown;
       this.el.style.display = shown ? '' : 'none';
+      if (shown) this.layout();
       this.dirty = true;
     }
     if (!s || !shown) return;
@@ -433,21 +478,23 @@ export class SandboxPanel {
     this.tick = s.tick;
   }
 
+  /** Under the time controls: run at construction, when the panel is shown, and on resize. */
   private layout(): void {
     const t = document.querySelector('.timec');
-    if (t) this.el.style.top = `${Math.round(t.getBoundingClientRect().bottom + 8)}px`;
+    const top = t && `${Math.round(t.getBoundingClientRect().bottom + 8)}px`;
+    if (top && this.el.style.top !== top) this.el.style.top = top;
   }
 
   private sectionHtml(t: PanelTab): string {
     switch (t) {
       case 'build':
-        return `<h4>Wall run depth</h4><div class="row">${[1, 2, 3, 4].map((d) => `<button data-depth="${d}">${d}</button>`).join('')}<span class="note">rows (wall tool: key 1)</span></div>
+        return `<h4>Wall run depth</h4><div class="row">${Array.from({ length: MAX_RUN_DEPTH }, (_, i) => i + 1).map((d) => `<button data-depth="${d}">${d}</button>`).join('')}<span class="note">rows (wall tool: key 1)</span></div>
 <h4>Gate</h4><div class="row"><button data-sbx="gate"></button><span class="note">click a finished wall</span></div>
 <h4>Wall runs</h4><div data-sbx="runs" class="note"></div>
 <div class="note">Buildings: the build bar at the bottom.</div>`;
       case 'spawn':
         return `<h4>Alien</h4><div class="row">${ALIEN_KINDS.map((k, i) => `<button data-spawn-kind="${k}" data-kind-index="${i}">${alienIconSvg(k, 14)} ${ALIEN_INFO[k].label.split(' ').pop()}</button>`).join('')}</div>
-<div class="row">count <button data-sbx="count-down" title="one fewer">−</button><input type="number" data-sbx="count" min="1" max="50" step="1" value="8"><button data-sbx="count-up" title="one more">+</button><button data-sbx="place"></button></div>
+<div class="row">count <button data-sbx="count-down" title="one fewer">−</button><input type="number" data-sbx="count" min="1" max="${SPAWN_AT_MAX}" step="1" value="8"><button data-sbx="count-up" title="one more">+</button><button data-sbx="place"></button></div>
 <h4>Waves</h4><div class="row">wave <button data-sbx="wave-down">−</button><span data-sbx="wave"></span><button data-sbx="wave-up">+</button><button data-sbx="start-wave">Start wave</button></div>
 <div class="row"><button data-sbx="clear-aliens">Clear aliens</button><button data-sbx="clear-wrecks">Clear wrecks</button><button data-sbx="routes"></button></div>`;
       case 'tune':
@@ -466,10 +513,6 @@ export class SandboxPanel {
     }
   }
 
-  private q<T extends Element = HTMLElement>(sel: string): T {
-    return this.el.querySelector(sel) as T;
-  }
-
   /** Sets innerHTML only when it changed (a click on a rebuilt button would be lost). */
   private html(key: string, el: Element, html: string): void {
     if (this.keys.get(key) === html) return;
@@ -484,22 +527,21 @@ export class SandboxPanel {
   }
 
   private drawArmed(): void {
-    this.mark(this.q('button[data-sbx="gate"]'), this.tool.name === 'gate', this.tool.name === 'gate' ? 'Gate tool — armed' : 'Gate tool');
-    this.mark(this.q('button[data-sbx="place"]'), this.tool.name === 'spawn', this.tool.name === 'spawn' ? 'Place — armed' : 'Place');
+    this.mark(this.els.gate, this.tool.name === 'gate', this.tool.name === 'gate' ? 'Gate tool — armed' : 'Gate tool');
+    this.mark(this.els.place, this.tool.name === 'spawn', this.tool.name === 'spawn' ? 'Place — armed' : 'Place');
   }
 
   private draw(s: Snapshot): void {
     const m = this.model;
-    this.layout();
     // tabs and collapse
     const labels = m.tabLabels();
-    this.el.querySelectorAll<HTMLButtonElement>('button[data-tab]').forEach((b, i) => {
-      if (b.textContent !== labels[i]) b.textContent = labels[i]!;
+    this.els.tabs.forEach((b, i) => {
+      setText(b, labels[i]!);
       b.classList.toggle('on', b.dataset.tab === m.tab);
     });
-    this.q('button[data-sbx="collapse"]').textContent = m.collapseLabel();
-    this.body.style.display = m.collapsed ? 'none' : '';
-    for (const [t, sec] of this.sections) sec.style.display = t === m.tab ? '' : 'none';
+    setText(this.els.collapse, m.collapseLabel());
+    setShown(this.body, !m.collapsed);
+    for (const [t, sec] of this.sections) setShown(sec, t === m.tab);
     this.drawArmed();
     if (m.collapsed) return;
     if (m.tab === 'build') this.drawBuild(s);
@@ -510,12 +552,13 @@ export class SandboxPanel {
   }
 
   private drawBuild(s: Snapshot): void {
-    this.el.querySelectorAll<HTMLButtonElement>('button[data-depth]').forEach((b) => this.mark(b, Number(b.dataset.depth) === this.model.depth, b.dataset.depth!));
+    for (const b of this.els.depths) this.mark(b, Number(b.dataset.depth) === this.model.depth, b.dataset.depth!);
     // builders per run: units with an order of that run in their queue
     const builders = new Map<number, number>();
     const qv = s.queues;
+    const seen = new Set<number>();
     for (let r = 0; r < s.units.count; r++) {
-      const seen = new Set<number>();
+      seen.clear();
       for (let i = qv.first[r]!, end = i + qv.count[r]!; i < end; i++) if (qv.run[i]! > 0) seen.add(qv.run[i]!);
       for (const run of seen) builders.set(run, (builders.get(run) ?? 0) + 1);
     }
@@ -526,58 +569,59 @@ export class SandboxPanel {
       const n = builders.get(id) ?? 0;
       rows.push(`<div class="row">run ${id}: ${s.runs[i + 2]} / ${s.runs[i + 1]} tiles, ${n} ${n === 1 ? 'builder' : 'builders'} <button data-cancel-run="${id}" title="Cancel the run's remaining reserved tiles">×</button></div>`);
     }
-    this.html('runs', this.q('[data-sbx="runs"]'), rows.length ? rows.join('') : 'none');
+    this.html('runs', this.els.runs, rows.length ? rows.join('') : 'none');
   }
 
   private drawSpawn(): void {
     const m = this.model;
     // the chosen kind carries "▸" in front of its icon and the outline
-    this.el.querySelectorAll<HTMLButtonElement>('button[data-spawn-kind]').forEach((b) => {
+    for (const b of this.els.spawnKinds) {
       const k = b.dataset.spawnKind as AlienKind;
       const on = Number(b.dataset.kindIndex) === m.spawnKind;
       b.classList.toggle('on', on);
       this.html(`kind-${k}`, b, `${on ? '▸ ' : ''}${alienIconSvg(k, 14)} ${ALIEN_INFO[k].label.split(' ').pop()}`);
-    });
-    const count = this.q<HTMLInputElement>('input[data-sbx="count"]');
+    }
+    const count = this.els.count;
     if (document.activeElement !== count && count.value !== String(m.count)) count.value = String(m.count);
-    this.q('[data-sbx="wave"]').textContent = `${m.wave} of ${WAVES}`;
-    const routes = this.q('button[data-sbx="routes"]');
-    this.mark(routes, m.routes, `Show routes: ${m.routes ? 'ON' : 'OFF'}`);
+    setText(this.els.wave, `${m.wave} of ${WAVES}`);
+    this.mark(this.els.routes, m.routes, `Show routes: ${m.routes ? 'ON' : 'OFF'}`);
   }
 
   private drawTune(s: Snapshot): void {
     const m = this.model;
-    this.el.querySelectorAll<HTMLButtonElement>('button[data-tune-target]').forEach((b) => {
+    for (const b of this.els.tuneTargets) {
       const on = b.dataset.tuneTarget === m.tuneTarget;
       this.mark(b, on, { building: 'Buildings', alien: 'Aliens', unit: 'Units' }[b.dataset.tuneTarget as TuneTarget]);
-    });
+    }
     const kinds = TUNE_KINDS[m.tuneTarget];
     const key = `${m.tuneTarget}:${m.tuneKind}`;
-    const select = this.q<HTMLSelectElement>('select[data-sbx="tune-kind"]');
+    const select = this.els.tuneKind;
     const labels = this.kindLabels(m.tuneTarget);
     this.html(`kinds-${m.tuneTarget}`, select, kinds.map((k, i) => `<option value="${k}">${labels[i]}</option>`).join(''));
     if (select.value !== kinds[m.tuneKind]) select.value = kinds[m.tuneKind]!;
     const fields = tuneLabels(s, m.tuneTarget, m.tuneKind);
-    const box = this.q('[data-sbx="fields"]');
+    const box = this.els.fields;
     if (key !== this.tuneKey) {
       this.tuneKey = key;
       box.innerHTML = fields
         .map((f) => `<div class="field" data-tune-field="${f.field}"><span>${f.field}</span><input type="range" min="0" max="1000" step="1"><span class="mult"></span><span class="val"></span></div>`)
         .join('');
+      this.fieldEls.clear();
+      for (const el of box.querySelectorAll<HTMLElement>('[data-tune-field]'))
+        this.fieldEls.set(el.dataset.tuneField!, { slider: el.querySelector<HTMLInputElement>('input[type=range]')!, mult: el.querySelector<HTMLElement>('.mult')!, val: el.querySelector<HTMLElement>('.val')! });
     }
     for (const f of fields) {
-      const el = box.querySelector(`[data-tune-field="${f.field}"]`);
-      if (!el) continue;
-      const slider = el.querySelector<HTMLInputElement>('input[type=range]')!;
+      const row = this.fieldEls.get(f.field);
+      if (!row) continue;
       const shown = m.shownMult(f.field);
       if (!m.dragging(f.field)) {
         const v = String(Math.round(multToSlider(f.mult) * 1000));
-        if (slider.value !== v) slider.value = v;
+        if (row.slider.value !== v) row.slider.value = v;
       }
-      el.querySelector('.mult')!.textContent = `${num(shown)}×`;
-      const val = el.querySelector<HTMLElement>('.val')!;
-      val.dataset.value = String(f.value);
-      val.textContent = f.text;
+      setText(row.mult, `${num(shown)}×`);
+      const value = String(f.value);
+      if (row.val.dataset.value !== value) row.val.dataset.value = value;
+      setText(row.val, f.text);
     }
   }
 
@@ -591,13 +635,12 @@ export class SandboxPanel {
     const m = this.model;
     const g = s.globals;
     const on = g[G_UNLIMITED] === 1;
-    this.mark(this.q('button[data-sbx="unlimited"]'), on, `Free spending: ${on ? 'ON' : 'OFF'}`);
-    const names = ['mass', 'energy', 'rare'];
+    this.mark(this.els.unlimited, on, `Free spending: ${on ? 'ON' : 'OFF'}`);
     const f = (v: number) => (Math.abs(v) >= 100 ? Math.round(v).toLocaleString('en-GB') : num(v));
-    const res = `<table><tr><th></th><th>pool</th><th>income /s</th><th>spending /s</th></tr>${names
+    const res = `<table><tr><th></th><th>pool</th><th>income /s</th><th>spending /s</th></tr>${RESOURCE_NAMES
       .map((n, k) => `<tr><td>${n}</td><td>${f(g[G_MASS + k]!)}</td><td>${f(g[G_INCOME + k]!)}</td><td>${f(g[G_SPEND + k]!)}</td></tr>`)
       .join('')}<tr><td>parts</td><td>${f(g[G_PARTS]!)}</td><td colspan="2">made ${f(g[G_PARTS_MADE]!)}, used ${f(g[G_PARTS_USED]!)}</td></tr></table>`;
-    this.html('resources', this.q('[data-sbx="resources"]'), res);
+    this.html('resources', this.els.resources, res);
     const counts = new Map<number, number>();
     const c = s.buildings.cols;
     for (let r = 0; r < s.buildings.count; r++) {
@@ -605,18 +648,18 @@ export class SandboxPanel {
       if (c.flags[r]! & BF_COMPLETE && buildingInfo(k).role === 'economy') counts.set(k, (counts.get(k) ?? 0) + 1);
     }
     const prod = [...counts].sort((a, b) => a[0] - b[0]).map(([k, n]) => `${n} × ${buildingInfo(k).label}`);
-    this.html('producers', this.q('[data-sbx="producers"]'), prod.length ? prod.join('<br>') : 'none');
-    this.q('button[data-sbx="reset"]').textContent = m.resetLabel(false);
-    this.q('button[data-sbx="reset-full"]').textContent = m.resetLabel(true);
+    this.html('producers', this.els.producers, prod.length ? prod.join('<br>') : 'none');
+    setText(this.els.reset, m.resetLabel(false));
+    setText(this.els.resetFull, m.resetLabel(true));
   }
 
   private drawStats(s: Snapshot): void {
     const t = statsTables(s);
     const tr = (r: StatsRow) => `<tr data-row="${r.name}"${r.zero ? ' class="zero"' : ''}><td>${r.label}</td>${r.cells.map((x) => `<td>${x}</td>`).join('')}</tr>`;
-    this.html('shooters', this.q('table[data-sbx="shooters"]'), `<tr><th>kind</th><th>shots</th><th>hp removed</th><th>kills</th></tr>${t.shooters.map(tr).join('')}`);
+    this.html('shooters', this.els.shooters, `<tr><th>kind</th><th>shots</th><th>hp removed</th><th>kills</th></tr>${t.shooters.map(tr).join('')}`);
     this.html(
       'aliens',
-      this.q('table[data-sbx="aliens"]'),
+      this.els.aliens,
       `<tr><th>kind</th><th>spawned</th><th>killed</th><th>hp walls</th><th>hp bldgs</th><th>hp units</th></tr>${t.aliens.map(tr).join('')}<tr data-row="absorbed"><td>${t.absorbed.label}</td>${t.absorbed.cells.map((x) => `<td>${x}</td>`).join('')}</tr>`,
     );
   }

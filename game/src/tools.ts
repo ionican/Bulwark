@@ -8,6 +8,7 @@
 // Pure: main.ts owns the input and calls these; the panel names the tool from toolLabel().
 
 import type { Command } from './sim/commands.ts';
+import { SPAWN_AT_MAX } from './sim/balance.ts';
 import { B, isBelt } from './sim/kinds.ts';
 
 export type ToolName = 'select' | 'build' | 'wall' | 'upgrade' | 'gate' | 'spawn';
@@ -105,10 +106,13 @@ export function gateCommand(ids: number[], tx: number, ty: number, queue: boolea
   return { t: 'gate', ids, tx, ty, queue };
 }
 
-/** Clamps a typed or stepped alien count to a whole number 1..50 (NaN: 1). */
-export function clampSpawnCount(n: number): number {
-  return Number.isFinite(n) ? Math.min(50, Math.max(1, Math.round(n))) : 1;
+/** `v` rounded to a whole number in lo..hi (not finite: lo). */
+export function clampInt(v: number, lo: number, hi: number): number {
+  return Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : lo;
 }
+
+/** Clamps a typed or stepped alien count to a whole number 1..SPAWN_AT_MAX (NaN: 1). */
+export const clampSpawnCount = (n: number): number => clampInt(n, 1, SPAWN_AT_MAX);
 
 export function spawnAtCommand(kind: number, x: number, z: number, count: number): Cmd<'spawnAt'> {
   return { t: 'spawnAt', kind, x, z, count: clampSpawnCount(count) };

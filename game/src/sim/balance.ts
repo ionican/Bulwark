@@ -111,6 +111,10 @@ export const COMMANDER_WRECK_SALVAGE = 20;
 /** Sandbox tuning multipliers are clamped to this range (PLAN W24: 0.1× to 10×). */
 export const TUNE_MIN = 0.1;
 export const TUNE_MAX = 10;
+/** Most aliens one sandbox spawnAt places (validate.ts; the Spawn tab's count). */
+export const SPAWN_AT_MAX = 50;
+/** Deepest wall run, in rows (validate.ts buildRun; the Build tab's depth buttons). */
+export const MAX_RUN_DEPTH = 4;
 
 // ---- adjustments to W12 numbers ------------------------------------------------------------
 // Each is listed in the README with its reason. Nothing else in the game changes a W12 number.

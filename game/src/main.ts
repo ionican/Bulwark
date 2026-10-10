@@ -545,17 +545,20 @@ function footprintAt(kind: number, gx: number, gz: number): [number, number] {
 
 /**
  * True when (kind, tx, ty, dir) can be ordered now: the tiles are free, or (C2) it is exactly a
- * reserved site the builders `ids` hold themselves and the order is unshifted (queue.ts ownReservedSite).
+ * reserved site the builders hold themselves and the order is unshifted (queue.ts ownReservedSite).
+ * `builders` is called only for that second test.
  */
-function placeable(kind: number, tx: number, ty: number, dir: number, ids: number[], queue: boolean): boolean {
+function placeable(kind: number, tx: number, ty: number, dir: number, queue: boolean, builders: () => number[]): boolean {
   if (canPlaceOn(terrain, occupancy, kind, tx, ty)) return true;
   const s = interp.curr;
-  return !!s && !queue && ids.length > 0 && ownReservedSite(snapshotSiteSource(s), ids, kind, tx, ty, dir, false) >= 0;
+  if (!s || queue) return false;
+  const ids = builders();
+  return ids.length > 0 && ownReservedSite(snapshotSiteSource(s, occupancy), ids, kind, tx, ty, dir, false) >= 0;
 }
 
 function placeBuild(kind: number, tx: number, ty: number, dir: number, queue: boolean): boolean {
   const ids = selectedBuilders();
-  if (!ids.length || !placeable(kind, tx, ty, dir, ids, queue)) return false;
+  if (!ids.length || !placeable(kind, tx, ty, dir, queue, () => ids)) return false;
   command({ t: 'build', ids, kind, tx, ty, dir, queue });
   // Mark the tiles at once so a quick second click does not double-book them.
   const [fw, fh] = buildingFootprint(kind);
@@ -607,7 +610,7 @@ function currentDragPlan(): DragPlan | null {
     return null;
   }
   const queue = drag.shift || shiftHeld;
-  const plan = dragPlans.get(dragView(s), s.tick, buildMode.kind, selectedBuilders(), drag.from, drag.to, buildMode.dir, queue, buildMode.kind === B.wall ? runDepth() : 1);
+  const plan = dragPlans.get(s.tick, buildMode.kind, drag.from, drag.to, buildMode.dir, queue, buildMode.kind === B.wall ? runDepth() : 1, () => ({ view: dragView(s), ids: selectedBuilders() }));
   if (plan !== dragPlan) {
     dragPlan = plan;
     dragLabelEl.textContent = dragLabel(plan);
@@ -1188,7 +1191,7 @@ function updateGhost() {
   }
   const [tx, ty] = footprintAt(buildMode.kind, g.x, g.z);
   // C2: the builders' own reserved site of exactly this kind and place shows as allowed
-  const ok = canPlaceOn(terrain, occupancy, buildMode.kind, tx, ty) || placeable(buildMode.kind, tx, ty, buildMode.dir, selectedBuilders(), shiftHeld);
+  const ok = placeable(buildMode.kind, tx, ty, buildMode.dir, shiftHeld, selectedBuilders);
   ghost.show(buildMode.kind, tx, ty, buildMode.dir, ok, worldPerPixel(camera, g.dist, vh), rig.yaw, performance.now() / 1000);
 }
 

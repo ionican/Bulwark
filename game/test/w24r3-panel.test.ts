@@ -27,7 +27,6 @@ import type { Command } from '../src/sim/commands.ts';
 import {
   PANEL_TABS,
   SandboxPanelModel,
-  clampCount,
   debugSpawnVisible,
   multToSlider,
   panelVisible,
@@ -38,6 +37,7 @@ import {
   waveIndex,
   type PanelSink,
 } from '../src/ui/sandboxPanel.ts';
+import { clampSpawnCount } from '../src/tools.ts';
 
 const snap = (w: World): Snapshot => decodeSnapshot(encodeSnapshot(w));
 
@@ -133,7 +133,7 @@ describe('run 3 criterion 2: the panel controls send exactly their commands', ()
     expect(m.count).toBe(49);
     m.setCount('abc');
     expect(m.count).toBe(1);
-    expect(clampCount(7.6)).toBe(8);
+    expect(clampSpawnCount(7.6)).toBe(8);
     m.armSpawn();
     expect(armed).toEqual(['spawn']);
     m.setWave(1);

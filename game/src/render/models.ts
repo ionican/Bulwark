@@ -906,16 +906,17 @@ export class ModelRenderer {
 
   private drawBuilding(sink: BuildingSink, P: Readonly<BuildingPose>, layout: WallLayout, kind: number, tile: number, dir: number, tier: number, cx: number, top: number, bottom: number, cz: number, fw: number, fh: number, lv: number, damage: number, complete: boolean, progress: number): void {
     if (top - bottom > 0.01) sink.plinth(cx, top + 0.02, cz, fw, top - bottom + 0.1, fh);
-    const cutOf = (height: number) => (complete ? BUILT : top + height * progress);
+    // a finished building is drawn whole: its build height is looked up only for a started site
+    const cutOf = () => (complete ? BUILT : top + this.buildHeight(kind, tier) * progress);
     if (kind === B.wall) {
       const first = layout.first[tile]!;
       const n = layout.count[tile]!;
-      const cut = cutOf(this.buildHeight(kind, tier));
+      const cut = cutOf();
       for (let k = 0; k < n; k++) sink.part(this.parts.get(layout.parts[first + k]!), lv, layout.matrices, (first + k) * 16, 1, damage + 10, cut);
     } else if (kind === B.gate) {
       const pieces = layout.gates.get(tile);
       const frame = layout.gateFrames.get(tile);
-      const cut = cutOf(this.buildHeight(kind, tier));
+      const cut = cutOf();
       if (pieces) for (const pc of pieces) sink.part(this.parts.get(pc.part), lv, pc.m, 0, 1, damage + 10, cut);
       // the door leaves at this frame's opening (W23 leafOffsets)
       if (frame) {
@@ -928,7 +929,7 @@ export class ModelRenderer {
     } else if (TURRET_KINDS.has(kind)) {
       const k = this.kitKinds.get(kind)!;
       const s = TURRET_SCALE.get(kind) ?? 1;
-      const cut = cutOf(this.buildHeight(kind, tier));
+      const cut = cutOf();
       this.pushKit(k, cx, top, cz, P.yaw, s, lv, damage, cut, P.pitch, P.recoil, sink);
     } else {
       const name = W17_BUILDING_MODEL.get(kind);
@@ -936,7 +937,7 @@ export class ModelRenderer {
       const mi = this.modelIndex.get(name)!;
       const yaw = isBelt(kind) ? BELT_YAW[dir & 3]! : 0;
       _m.makeRotationY(yaw).setPosition(cx, top, cz);
-      const cut = cutOf(this.buildHeight(kind, tier));
+      const cut = cutOf();
       sink.model(mi, _m.elements, 0, damage, cut);
       if (kind === B.splitter || kind === B.merger) sink.model(this.modelIndex.get(kind === B.splitter ? 'splitterMarker' : 'mergerMarker')!, _m.elements, 0, damage, cut);
       // W17 moving parts (generator vane, shredder rollers, assembler arm): turned by the running time

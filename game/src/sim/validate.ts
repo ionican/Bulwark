@@ -5,11 +5,11 @@
 import { SANDBOX_COMMANDS, type Command } from './commands.ts';
 import { ALIEN_KINDS, B, BUILDING_KINDS, U, buildingInfo } from './kinds.ts';
 import { BF_COMPLETE, BF_UPGRADING } from './schema.ts';
-import { BUILD_REQUIRES, RESEARCH, RESEARCH_INDEX, TIER_REQUIRES } from './balance.ts';
+import { BUILD_REQUIRES, MAX_RUN_DEPTH, RESEARCH, RESEARCH_INDEX, SPAWN_AT_MAX, TIER_REQUIRES } from './balance.ts';
 import { MAX_ORDERS, type World } from './world.ts';
-import { MAX_RUN_DEPTH, newSites, planRun, runById, runCapacityProblem } from './runs.ts';
+import { newSites, planRun, runById, runCapacityProblem } from './runs.ts';
 import { planGate } from './gate.ts';
-import { SPAWN_AT_MAX, spawnPlaces } from './sandbox.ts';
+import { spawnPlaces } from './sandbox.ts';
 import { dequeueIndex, ownReservedSite, replacementProblem, worldSiteSource } from './queue.ts';
 import { TUNE_TARGETS, tuneFieldProblem, tuneProblem, type TuneTarget } from './tuning.ts';
 import { map1 } from '../../../model/data/map1.ts';

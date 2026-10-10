@@ -164,16 +164,35 @@ export function replacementProblem(w: World, cmd: RunCommand, plan: RunPlan): st
   return null;
 }
 
-/** What the own-reserved-site rule reads (run 3 C2): the queues, the runs' sites and the reserved sites. */
-export interface SiteSource {
-  /** Unit rows (or slots) to look at. */
+/** What the C2 and W25c rules read of the units' queues: the orders that hold sites, and the runs' sites. */
+export interface QueueSource {
+  /** Unit rows (or slots) to look at; `holds` skips any that are not live. */
   units: number;
-  /** Id of unit `u`, or -1 when it is not live. */
-  liveId(u: number): number;
   /** Calls `hold` for each build order (its site, run -1) and run order (site -1, its run) of unit `u`. */
   holds(u: number, hold: (site: number, run: number) => void): void;
   /** Sites of run `run` (at least its unfinished ones; none when the run is gone). */
   runSites(run: number): ArrayLike<number>;
+}
+
+/** QueueSource over the simulation's state. */
+export function worldQueueSource(w: World): QueueSource {
+  return {
+    units: w.units.highWater,
+    holds: (u, hold) => {
+      if (!w.units.alive[u]) return;
+      for (const o of w.orders[u] ?? []) {
+        if (o.t === 'build') hold(o.id, -1);
+        else if (o.t === 'run') hold(-1, o.run);
+      }
+    },
+    runSites: (run) => runById(w, run)?.sites ?? [],
+  };
+}
+
+/** What the own-reserved-site rule reads (run 3 C2): the queues, the runs' sites and the reserved sites. */
+export interface SiteSource extends QueueSource {
+  /** Id of unit `u`, or -1 when it is not live. */
+  liveId(u: number): number;
   /** Id of the reserved site of exactly `kind` (its own footprint) anchored at (tx, ty) facing `dir`, or -1. */
   reservedSiteAt(kind: number, tx: number, ty: number, dir: number): number;
 }
@@ -208,15 +227,8 @@ export function ownReservedSite(src: SiteSource, ids: readonly number[], kind: n
 export function worldSiteSource(w: World): SiteSource {
   const c = w.buildings.cols;
   return {
-    units: w.units.highWater,
+    ...worldQueueSource(w),
     liveId: (u) => (w.units.alive[u] ? w.units.id(u) : -1),
-    holds: (u, hold) => {
-      for (const o of w.orders[u] ?? []) {
-        if (o.t === 'build') hold(o.id, -1);
-        else if (o.t === 'run') hold(-1, o.run);
-      }
-    },
-    runSites: (run) => runById(w, run)?.sites ?? [],
     reservedSiteAt: (kind, tx, ty, dir) => {
       if (tx < 0 || ty < 0 || tx >= w.terrain.w || ty >= w.terrain.h) return -1;
       const s = w.occupancy[ty * w.terrain.w + tx]! - 1;
@@ -228,15 +240,9 @@ export function worldSiteSource(w: World): SiteSource {
 }
 
 /** What the replacement rule reads (W25c): the units' queues, the runs' sites, and the wall sites. */
-export interface ReplaceSource {
-  /** Unit rows (or slots) to look at; `holds` skips any that are not live. */
-  units: number;
+export interface ReplaceSource extends QueueSource {
   /** True if unit `u`'s queue is being replaced (an unshifted order to it). */
   replaced(u: number): boolean;
-  /** Calls `hold` for each build order (its site, run -1) and run order (site -1, its run) of unit `u`. */
-  holds(u: number, hold: (site: number, run: number) => void): void;
-  /** Sites of run `run` (at least its unfinished ones; none when the run is gone). */
-  runSites(run: number): ArrayLike<number>;
   /** Tile index (ty × map width + tx) of site `id` if it is an unfinished 1 × 1 wall site, else -1. */
   wallSiteTile(id: number): number;
 }
@@ -273,16 +279,8 @@ export function ownWallSites(src: ReplaceSource): Map<number, number> {
 export function worldReplaceSource(w: World, slots: ReadonlySet<number>): ReplaceSource {
   const c = w.buildings.cols;
   return {
-    units: w.units.highWater,
+    ...worldQueueSource(w),
     replaced: (u) => slots.has(u),
-    holds: (u, hold) => {
-      if (!w.units.alive[u]) return;
-      for (const o of w.orders[u] ?? []) {
-        if (o.t === 'build') hold(o.id, -1);
-        else if (o.t === 'run') hold(-1, o.run);
-      }
-    },
-    runSites: (run) => runById(w, run)?.sites ?? [],
     wallSiteTile: (id) => {
       const s = w.buildings.slotForId(id);
       if (s < 0 || c.kind[s] !== B.wall || c.fw[s] !== 1 || c.fh[s] !== 1 || c.flags[s]! & BF_COMPLETE) return -1;

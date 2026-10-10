@@ -23,6 +23,7 @@ import { deserializeWorld, serializeWorld } from '../src/sim/save.ts';
 import { RUN_CAPACITY } from '../src/sim/runs.ts';
 import { ownReservedSite, worldSiteSource } from '../src/sim/queue.ts';
 import { snapshotSiteSource } from '../src/dragPlan.ts';
+import { buildOccupancy } from '../src/render/picking.ts';
 import { CAPACITY, type World } from '../src/sim/world.ts';
 import type { Command } from '../src/sim/commands.ts';
 import { flatWorld } from './fixtures.ts';
@@ -70,7 +71,13 @@ const build = (ids: number[], over: Partial<{ kind: number; tx: number; ty: numb
 /** The predicate on the world and on its snapshot agree; returns the world's answer. */
 function predicate(w: World, ids: number[], kind = B.gun, tx = 40, ty = 40, dir = 0, queue = false): number {
   const onWorld = ownReservedSite(worldSiteSource(w), ids, kind, tx, ty, dir, queue);
-  const onSnap = ownReservedSite(snapshotSiteSource(decodeSnapshot(encodeSnapshot(w))), ids, kind, tx, ty, dir, queue);
+  const snap = decodeSnapshot(encodeSnapshot(w));
+  const b = snap.buildings;
+  const occ = buildOccupancy({ count: b.count, id: b.id, kind: b.cols.kind, tx: b.cols.tx, ty: b.cols.ty, fw: b.cols.fw, fh: b.cols.fh }, snap.mapW, w.terrain.h, new Int32Array(snap.mapW * w.terrain.h));
+  const onSnap = ownReservedSite(snapshotSiteSource(snap, occ), ids, kind, tx, ty, dir, queue);
+  // a tile booked by a click just sent (-1) falls back to scanning the building rows: same answer
+  const booked = ownReservedSite(snapshotSiteSource(snap, occ.map((o, i) => (i === ty * snap.mapW + tx ? -1 : o))), ids, kind, tx, ty, dir, queue);
+  expect(booked, 'a booked anchor tile scans the rows instead').toBe(onWorld);
   expect(onSnap, 'snapshot and world predicates agree').toBe(onWorld);
   return onWorld;
 }

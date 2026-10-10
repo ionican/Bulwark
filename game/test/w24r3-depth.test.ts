@@ -42,11 +42,14 @@ describe('run 3 criterion 2: wall-run depth in the drag preview', () => {
     const occ = buildOccupancy({ count: b.count, id: b.id, kind: b.cols.kind, tx: b.cols.tx, ty: b.cols.ty, fw: b.cols.fw, fh: b.cols.fh }, 40, 40, new Int32Array(40 * 40));
     const v: DragView = { terrain: w.terrain, occupancy: occ, kinds: b.cols.kind, units: { count: snap.units.count, id: snap.units.id, x: snap.units.cols.x, z: snap.units.cols.z }, snapshot: snap };
     const cache = new DragPlanCache();
-    const a = cache.get(v, snap.tick, B.wall, [e], [5, 5], [12, 5], 0, false, 1);
+    let made = 0;
+    const inputs = () => (made++, { view: v, ids: [e] });
+    const a = cache.get(snap.tick, B.wall, [5, 5], [12, 5], 0, false, 1, inputs);
     expect(a.build.length).toBe(8);
-    expect(cache.get(v, snap.tick, B.wall, [e], [5, 5], [12, 5], 0, false, 1), 'nothing changed: the same plan object').toBe(a);
-    const c = cache.get(v, snap.tick, B.wall, [e], [5, 5], [12, 5], 0, false, 3);
+    expect(cache.get(snap.tick, B.wall, [5, 5], [12, 5], 0, false, 1, inputs), 'nothing changed: the same plan object').toBe(a);
+    const c = cache.get(snap.tick, B.wall, [5, 5], [12, 5], 0, false, 3, inputs);
     expect(c).not.toBe(a);
     expect(c.build.length).toBe(24);
+    expect(made, 'the view and builders are built only on a miss').toBe(2);
   });
 });

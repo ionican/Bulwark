@@ -16,7 +16,7 @@
 
 import { B, buildingFootprint, buildingInfo, type Cost } from './sim/kinds.ts';
 import { planRunOn, type RunPlan, type RunPlanSource } from './sim/runs.ts';
-import { ownWallSites, type ReplaceSource, type SiteSource } from './sim/queue.ts';
+import { ownWallSites, type QueueSource, type ReplaceSource, type SiteSource } from './sim/queue.ts';
 import { BF_COMPLETE, Q_BUILD, Q_RUN, isReserved } from './sim/schema.ts';
 import { runSitesOf, type Snapshot } from './sim/snapshot.ts';
 import type { Terrain } from './sim/terrain.ts';
@@ -63,14 +63,11 @@ export function runSource(v: DragView): RunPlanSource {
   };
 }
 
-/** queue.ts ReplaceSource over a snapshot: the queues of builders `ids` are the ones replaced. */
-export function snapshotReplaceSource(s: Snapshot, ids: readonly number[]): ReplaceSource {
+/** queue.ts QueueSource over a snapshot: its queues (build and run orders) and run-site list. */
+export function snapshotQueueSource(s: Snapshot): QueueSource {
   const q = s.queues;
-  const b = s.buildings;
-  let rowOf: Map<number, number> | null = null;
   return {
     units: s.units.count,
-    replaced: (r) => ids.includes(s.units.id[r]!),
     holds: (r, hold) => {
       for (let i = q.first[r]!, end = i + q.count[r]!; i < end; i++) {
         if (q.kind[i] === Q_BUILD) hold(q.target[i]!, -1);
@@ -78,6 +75,16 @@ export function snapshotReplaceSource(s: Snapshot, ids: readonly number[]): Repl
       }
     },
     runSites: (run) => runSitesOf(s, run),
+  };
+}
+
+/** queue.ts ReplaceSource over a snapshot: the queues of builders `ids` are the ones replaced. */
+export function snapshotReplaceSource(s: Snapshot, ids: readonly number[]): ReplaceSource {
+  const b = s.buildings;
+  let rowOf: Map<number, number> | null = null;
+  return {
+    ...snapshotQueueSource(s),
+    replaced: (r) => ids.includes(s.units.id[r]!),
     wallSiteTile: (id) => {
       if (!rowOf) {
         rowOf = new Map();
@@ -91,25 +98,27 @@ export function snapshotReplaceSource(s: Snapshot, ids: readonly number[]): Repl
   };
 }
 
-/** queue.ts SiteSource over a snapshot (run 3 C2): every unit row is live. */
-export function snapshotSiteSource(s: Snapshot): SiteSource {
-  const q = s.queues;
+/**
+ * queue.ts SiteSource over a snapshot (run 3 C2): every unit row is live. `occupancy` is the snapshot's
+ * DragView.occupancy (building row + 1 per tile): the site anchored at (tx, ty) covers that tile, so
+ * one lookup finds it. A tile booked by a click just sent (-1) hides the row under it, so that case
+ * scans the building rows instead.
+ */
+export function snapshotSiteSource(s: Snapshot, occupancy: Int32Array): SiteSource {
   const c = s.buildings.cols;
   return {
-    units: s.units.count,
+    ...snapshotQueueSource(s),
     liveId: (r) => s.units.id[r]!,
-    holds: (r, hold) => {
-      for (let i = q.first[r]!, end = i + q.count[r]!; i < end; i++) {
-        if (q.kind[i] === Q_BUILD) hold(q.target[i]!, -1);
-        else if (q.kind[i] === Q_RUN) hold(-1, q.run[i]!);
-      }
-    },
-    runSites: (run) => runSitesOf(s, run),
     reservedSiteAt: (kind, tx, ty, dir) => {
       const [fw, fh] = buildingFootprint(kind);
-      for (let r = 0; r < s.buildings.count; r++)
-        if (c.kind[r] === kind && c.tx[r] === tx && c.ty[r] === ty && c.dir[r] === (dir & 3) && c.fw[r] === fw && c.fh[r] === fh && isReserved(c.flags[r]!)) return s.buildings.id[r]!;
-      return -1;
+      const at = (r: number) => c.kind[r] === kind && c.tx[r] === tx && c.ty[r] === ty && c.dir[r] === (dir & 3) && c.fw[r] === fw && c.fh[r] === fh && isReserved(c.flags[r]!);
+      const o = occupancy[ty * s.mapW + tx];
+      if (o === -1) {
+        for (let r = 0; r < s.buildings.count; r++) if (at(r)) return s.buildings.id[r]!;
+        return -1;
+      }
+      const r = (o ?? 0) - 1;
+      return r >= 0 && at(r) ? s.buildings.id[r]! : -1;
     },
   };
 }
@@ -194,19 +203,21 @@ export function dragLabel(p: DragPlan): string {
 
 /**
  * The drag plan, worked out again only when an input changes: the snapshot tick, the kind, the end
- * tiles, the belt direction, Shift and the wall depth (run 3). A frame with nothing changed returns
- * the same plan object and allocates nothing. (The builders are not compared, as before run 3: a
- * selection change during a drag shows from the next snapshot.)
+ * tiles, the belt direction, Shift and the wall depth (run 3). `inputs` (the snapshot view and the
+ * builders) is called only then, so a frame with nothing changed returns the same plan object without
+ * building either. (The builders are not compared, as before run 3: a selection change during a drag
+ * shows from the next snapshot.)
  */
 export class DragPlanCache {
   private plan: DragPlan | null = null;
   private readonly key = { tick: -1, kind: -1, fx: 0, fy: 0, tx: 0, ty: 0, dir: -1, queue: false, depth: -1 };
 
-  get(v: DragView, tick: number, kind: number, ids: readonly number[], from: [number, number], to: [number, number], dir: number, queue: boolean, depth: number): DragPlan {
+  get(tick: number, kind: number, from: [number, number], to: [number, number], dir: number, queue: boolean, depth: number, inputs: () => { view: DragView; ids: readonly number[] }): DragPlan {
     const k = this.key;
     if (!this.plan || k.tick !== tick || k.kind !== kind || k.fx !== from[0] || k.fy !== from[1] || k.tx !== to[0] || k.ty !== to[1] || k.dir !== dir || k.queue !== queue || k.depth !== depth) {
       Object.assign(k, { tick, kind, fx: from[0], fy: from[1], tx: to[0], ty: to[1], dir, queue, depth });
-      this.plan = planDrag(v, kind, ids, from, to, dir, queue, depth);
+      const { view, ids } = inputs();
+      this.plan = planDrag(view, kind, ids, from, to, dir, queue, depth);
     }
     return this.plan;
   }
