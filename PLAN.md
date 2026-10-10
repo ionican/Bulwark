@@ -324,9 +324,121 @@ Tests in `game/test/w27-*.test.ts`. The frozen Verify's vitest line gains the `"
 - **Terrain:** the playable map keeps the game's own gently rolling ground (the simulation does not use height, and buildings can go anywhere); the red-canyon look comes from W17 textures, lighting, haze, terraced outcrops on rock tiles and canyon scenery beyond the map edge. Making map 1 itself a canyon would change the playable map and needs a design decision first.
 - **Turret mapping** as in the inventory; changing it later is a one-line edit.
 
-## Run 3 — panel, controls and benchmark (outline; planned after run 2)
+## Run 3 — sandbox panel, real controls, carried fixes and the rest of the benchmark (planned 2026-10-10 after run 2b closed at `bf63d02`)
 
-The five-tab panel (Build, Spawn, Tune, Economy, Stats), with real mouse drags and real clicks exercised in agent-browser (Codex 20); a check script that starts its own strict-port server from the tested tree, uses a funded enclosure or rock-bounded corridor with an explicitly placed turret (Codex 19), and cleans up; an automated benchmark at a fixed camera with a sustained population, reporting device pixel ratio, visible counts, average and 1%-low frame rate and worker timings (Codex 18). Colour-blind safe throughout.
+Richard tests the four mechanics in the Goal from a panel instead of console calls. Everything the panel does goes through the existing sandbox commands and the `window.__game` hooks; the simulation changes only for the two carried order bugs (C2, C3).
+
+### Richard's answers (2026-10-10)
+
+- Panel on the **left, under the time controls**.
+- **Construction frames and reserved-site outlines** hide behind buildings; **health bars stay drawn on top**.
+- The construction hover readout shows **received of wanted** ("mass 0.5 / 20 per s").
+- **Greybox (`?greybox=1`)**: asked what it is; removal waits for his answer (item G). If he has not signed off when the author starts, G is out of scope for this run.
+
+### The panel (`game/src/ui/sandboxPanel.ts`, new)
+
+- Shown only when the world's scenario is `sandbox` (from the snapshot, so a loaded sandbox save shows it and a map 1 save hides it). In the sandbox the DEBUG spawn box (top right) is hidden; the Spawn tab replaces it. In map 1 nothing changes.
+- Five tabs: **Build, Spawn, Tune, Economy, Stats**. The active tab is marked by a leading "▸", bold text and an outline, never colour alone. A collapse button ("–" / "+") shrinks the panel to its tab row.
+- Pointer events on the panel never reach the map: a click, drag or wheel over the panel selects nothing, sends no order and does not move the camera. Keyboard shortcuts keep working; typing in the count field does not trigger them.
+- Refusals: every command the panel sends shows the worker's refusal reason as a toast (the existing `.toast.bad`, dashed border).
+- Updates from snapshots at most 4 times a second; values shown come from the snapshot (`__game.tuning`, `unlimited`, `counters`, `runs`), so a `resetSandbox` or a loaded save is reflected without the panel holding its own copy.
+
+**Build tab**
+- Wall-run depth 1–4 (four buttons, the chosen one marked as above). The wall drag uses it (main.ts:653 hard-codes depth 1 today); the drag preview (W25) shows the chosen depth.
+- **Gate tool**: armed by its button (label shows "armed — click a finished wall"), a left click on a finished straight wall sends `gate` for the selected builders (all builders when none selected), axis from the wall's run direction. Esc or a right click disarms. Shift keeps it armed after a placement, as build mode does.
+- **Runs**: the active wall runs (id, tiles done/total, builders), each with × → `cancelRun`.
+- Buildings themselves stay in the bottom build bar; this tab does not duplicate it.
+
+**Spawn tab**
+- One button per alien kind with its icon shape and name; count 1–50 (−/+ buttons and a number field).
+- **Place**: armed by its button ("armed — click the map"); a left click on the ground sends `spawnAt` at that tile. Shift keeps it armed; Esc or a right click disarms.
+- **Start wave** (1–20) → `startWave`; **Clear aliens**, **Clear wrecks**.
+- **Show routes** toggle, default off (Richard asked for no routes in 2a): when on, the route from each recent spawn origin (`originRoutes`) is drawn as a dashed ground line with the kind's icon at its origin.
+
+**Tune tab**
+- Target (Buildings / Aliens / Units) and kind. For each supported field (run 1 list) a slider from 0.1× to 10× on a logarithmic scale with steps of 0.1 near 1, showing the multiplier and the effective value in display units (hit points, damage per shot, tiles, seconds, m/s, build power).
+- The command is sent when the slider is released or the value committed (not per pixel moved). **Reset kind** and **Reset all** → `tuneReset`.
+
+**Economy tab**
+- **Free spending** toggle with the words ON / OFF → `setUnlimited`.
+- Per resource: pool, income and spending per second (from the snapshot), and the count of each producing building kind. No new snapshot fields: a per-source breakdown is only shown if the snapshot already carries it.
+- **Grant all research** → `grantResearch all`. **Reset sandbox** and **Full reset** (each asks "click again to confirm" within 3 s) → `resetSandbox`.
+
+**Stats tab**
+- Two tables from `counters`: per building and unit kind — shots, hit points removed, kills; per alien kind — spawned, killed, hit points removed from walls and gates, from other buildings, from units. "Absorbed by shields" as its own row. **Reset stats** → `resetStats`.
+- Numbers right-aligned with thousands separators; a kind with all zeros is shown dimmed and with a "–" in place of each zero (not by colour alone).
+
+### Carried fixes
+
+- **C1 — picking through a building.** A click whose ray reaches a building before it reaches a unit's or alien's pick cylinder selects the building, not the unit behind it. Building volumes: footprint × the kind's drawn height (from the model bounds, as pickVolumes does for units). Box selection is unchanged.
+- **C2 — unshifted single build on the unit's own reserved site.** An unshifted `build` on a site the issuing units already have reserved (and nobody else holds) is accepted: the queue becomes that one order on the same site (same building id, not removed and re-reserved); other unstarted sites only they held are removed, as W25 does.
+- **C3 — full run table.** An unshifted `buildRun` is accepted when the table is full if the replacement frees at least one slot (a run held only by the issuing builders and not started). The table never exceeds 32; if no slot would be freed, the refusal stays.
+- C2 and C3 change only cases that are refused today. The fingerprint comparison with `60ebba6` must stay IDENTICAL; if it does not, the author stops and reports.
+
+### Overlays and readout (Richard's answers)
+
+- **D1** Construction frames and reserved-site outlines test depth against buildings and terrain (polygon offset so they do not flicker against the ground); a turret in front hides them. Health bars stay on top.
+- **D2** The W28 readout shows "received / wanted per s" for each resource with a cost: wanted is the rate at full supply, from the site kind's cost and build time and the build power of the builders working on it this snapshot (their `work` id, kind build power × the `buildRate` tune multiplier). With no builder working on it: "no builder". The starved check in check-queue keeps its rule (received > 0 and ≤ income) and adds received ≤ wanted.
+
+### Benchmark report (Codex 18, the remainder)
+
+- check-render's benchmark report adds, per pose: the device pixel ratio, the drawing-buffer size, and the worker's tick time over the measured window (median and max, from `__game.tickSamples`).
+- Gate added: worker median tick under 50 ms at the game camera (half of the 100 ms tick). Max is reported only. The 2b frame-rate gates are unchanged.
+
+### G — greybox removal (only if Richard signs off before the author starts)
+
+Remove the `?greybox=1` switch, the greybox branch of the adapter and the W13 greybox renderer files no other code imports; `__game.renderer` keeps reporting `models`. If not signed off: untouched.
+
+### Browser check — `game/scripts/check-panel.mjs` (new)
+
+Builds (or `--no-build`) and serves this tree with `vite preview` on strict port 8825, agent-browser session `w3panel` at 1440 × 900, `?sandbox=1`. Real mouse clicks and drags (CDP) and real keys for everything below; `__game` is read only to check results, never to cause them (setup excepted where listed). Always stops the server and closes only its own session.
+
+1. The panel is shown in the sandbox and absent at `/` (map 1); the DEBUG spawn box is hidden in the sandbox.
+2. Each tab opens by a click; the active one carries "▸".
+3. Economy: free spending turned ON by a click → `__game.unlimited` true.
+4. Build: depth 2 chosen; a real wall drag with two engineers lays a closed rectangular enclosure on clear ground (the fixture uses a funded, rock-free area chosen by the script from the terrain and named in its output); one gun turret placed inside by the build bar with a real click.
+5. Build: gate tool armed; a click on a finished straight side → a gate is built there (`__game` building list); Esc disarms (button text back to its idle label).
+6. Spawn: rusher × 8 chosen by clicks, Place armed, a click outside the enclosure → 8 aliens within 6 tiles of the clicked tile; they reach the gate or wall and the turret fires. Stats: the gun turret row's kills > 0 within 60 s at speed 3, and the DOM table equals `__game.counters` for that row.
+7. Tune: the gun turret damage slider dragged with the mouse to 2× → `__game.tuning` shows 2 (± one step); the label's effective damage doubles. Reset kind → 1.
+8. A click and a drag over the panel select nothing and send no command (selection and queues unchanged; `__game.rejected` and the command count unchanged).
+9. C1 with real clicks: an engineer standing directly behind a turret from the camera; a click on the turret's centre selects the turret; a click on the engineer's visible part selects the engineer.
+10. D1: with the camera placed so a turret stands in front of a reserved outline and a construction frame, the hidden parts are not drawn (read from the scene via `inspectNextFrame`, and a screenshot).
+11. Screenshots to the art-reference folder: `w24r3-panel-build.png`, `-spawn.png`, `-tune.png`, `-economy.png`, `-stats.png`, `w24r3-overlays-occluded.png`.
+
+### Run 3 acceptance criteria (tests in `game/test/w24r3-*.test.ts`, written first and red before the change)
+
+1. Panel visibility follows the snapshot scenario (sandbox shown, map 1 hidden, a loaded save of each kind switches it).
+2. Each control sends exactly the command and arguments listed above (a fake command sink), including depth on the wall drag, axis on the gate, count bounds 1–50 and the slider's logarithmic mapping and commit-on-release.
+3. Tune labels: effective values in display units for one field of each target.
+4. Stats table rows equal `counters` for a scripted fight (from the run 1 stats fixture).
+5. C1, C2, C3 as stated, through the real picking and simulation code; C3 also: no slot freed → refused, nothing created.
+6. D1: frames and outlines are depth-tested materials; health bars are not.
+7. D2: received / wanted for the W28 fixture (one engineer, build power 5) and with two builders; "no builder" when none.
+8. Benchmark: the report carries DPR, buffer size and worker tick median and max per pose; a window with median worker tick ≥ 50 ms fails the gate (pure test of the judge, as `benchGate` is tested).
+9. If G: `?greybox=1` loads the models view and nothing imports the removed files.
+10. All existing tests pass.
+
+### Verify command — run 3 (frozen)
+
+```
+bash -c 'cd ~/Projects/worktrees/bulwark-w24/game && npm ci --no-audit --no-fund >/dev/null && \
+npx vitest run "test/w24r3-" && npm test && npm run build && \
+(cd ../look && npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit) && \
+node scripts/fingerprint-compare.mjs 60ebba6 --strip-queue && \
+node scripts/check-render.mjs --no-build --shots "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Rick'"'"'s World/Resources/Bulwark Art Reference" && \
+node scripts/check-queue.mjs --no-build && \
+node scripts/check-panel.mjs --no-build --shots "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Rick'"'"'s World/Resources/Bulwark Art Reference"'
+```
+
+Red at `bf63d02`: there are no `w24r3-` tests and no `check-panel.mjs`, so it fails; at the tests-first commit the new tests fail.
+
+### After the Verify passes
+
+`/simplify`, then a post-build `/adversarial-review`, then Richard's go to push. The pull request into `main` follows this run. The verified build is republished to the fixed public address: `npx vite build --base ./ --outDir /tmp/bulwark-site --emptyOutDir && node ~/report-publish/publish-site.mjs /tmp/bulwark-site --name bulwark`.
+
+### Out of scope (run 3)
+
+New simulation features; new snapshot fields beyond what D2 can derive; waves, research and win/lose changes; mobile and touch; Safari and Firefox; the look of the models.
 
 ## Key decisions and tradeoffs
 
