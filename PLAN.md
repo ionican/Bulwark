@@ -333,7 +333,7 @@ Richard tests the four mechanics in the Goal from a panel instead of console cal
 - Panel on the **left, under the time controls**.
 - **Construction frames and reserved-site outlines** hide behind buildings; **health bars stay drawn on top**.
 - The construction hover readout shows **received of wanted** ("mass 0.5 / 20 per s").
-- **Greybox (`?greybox=1`)**: removal (item G) waits for his sign-off. If he has not signed off when the author starts, G is out of scope.
+- **Greybox (`?greybox=1`)**: Richard signed off the models look and asked for the greybox view to be removed ("oh yes - remove"). Item G is in scope.
 
 ### One active tool (Codex R1-4)
 
@@ -410,9 +410,9 @@ The map has exactly one active tool at a time: `select` (default), `build` (a bu
 - check-render starts the recorder at the start of each measured window and stops it at the end. Per pose it reports: `window.devicePixelRatio`, the renderer's pixel ratio, the drawing-buffer size, and the worker statistics.
 - **Gate**: at the game camera, median per-tick step time under 50 ms (half of the 100 ms tick). The window fails if it holds fewer than 5 messages per second of window with ticks run, or any value is missing or not finite. Max and encoding are reported only. The 2b frame-rate gates are unchanged.
 
-### G — greybox removal (only if Richard signs off before the author starts)
+### G — greybox removal (signed off by Richard, 2026-10-10)
 
-Remove the `?greybox=1` switch, the greybox branch of the adapter and the W13 greybox renderer files nothing else imports. `__game.renderMode` (new, replacing the internal `renderMode`) reports `models`. If not signed off: untouched.
+Remove the `?greybox=1` switch, the greybox branch of the adapter and the W13 greybox renderer files nothing else imports. `__game.renderMode` (new, replacing the internal `renderMode`) reports `models`.
 
 ### Browser check — `game/scripts/check-panel.mjs` (new)
 
@@ -444,7 +444,7 @@ Builds (or `--no-build`) and serves this tree with `vite preview` on strict port
 8. D1: frames and outlines use their own depth-tested materials; health bars do not.
 9. D2: received / wanted from real one- and two-engineer worlds, with Field Engineering and with a `buildRate` tune; "no builder" when none; the inequality only across stable intervals.
 10. Benchmark: the judge fails a window with median ≥ 50 ms, too few messages, or missing or non-finite values, and passes 49 ms; the recorder keeps more than 100 messages in a window.
-11. If G: `?greybox=1` loads the models view, `__game.renderMode` is `models`, and nothing imports the removed files.
+11. G: `?greybox=1` loads the models view, `__game.renderMode` is `models`, and nothing imports the removed files.
 12. All existing tests pass (updated where D2 changes text, each update listed).
 
 ### Verify command — run 3 (frozen)
