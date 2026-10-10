@@ -368,3 +368,55 @@ VERDICT: REVISE
 ### Claude's response
 
 All 17 accepted; none rejected. Folded into the run 3 section: one active tool with defined transitions (4); captured-drag cancel and a focus policy (5, 6); Stats from `statsReport` with the panel's drawn tick, compared while paused (7); a window recorder for worker messages, per-tick step time defined, encoding separate, device and renderer pixel ratios (8, 9); gate sent with no axis (10); depth through planning, submission and the preview cache (11); state-aware building pick volumes (12); dedicated overlay materials, a real upgrade frame and a pixel-pair occlusion check (13); wanted rate from the simulation's own multipliers, `work` decoded as id + 1, the inequality only on stable intervals, real-world fixtures and the listed text updates (14, 15); four queued drags, completion and contact assertions, Escape while genuinely armed (16); tier-1 labels, speed in tiles/s, waves 1–20 as indices 0–19, parts without a rate (17); `__game.renderMode` for G; C2 one shared predicate through to the build-bar click (2); C3 planned without mutation and checked against both tables, state unchanged on refusal (1); new C2/C3 determinism and save-continuation tests alongside the unchanged baseline fingerprint (3). Round 2 run because 1 and 2 changed the simulation design.
+
+## Run 3 — Round 2 — Codex (same thread; first attempt timed out at 15 min, re-run with a narrower brief)
+
+Run 3 still needs revision. I reviewed commits `3bff4e0` and `965b46c`; no files changed. “Addressed” below means addressed by the revised plan.
+
+| Prior finding | Assessment |
+|---|---|
+| 1 — C3 atomic replacement | **Partly:** transaction specified, but release eligibility must preserve the existing gate exception. |
+| 2 — C2 through real controls | **Partly:** shared predicate and click path specified, but positive ownership is missing. |
+| 3 — C2/C3 determinism | **Addressed:** separate full-snapshot and save-continuation coverage specified. |
+| 4 — Armed-tool lifecycle | **Partly:** exclusivity specified, but blanket right-click cancellation conflicts with ordinary orders. |
+| 5 — Captured drags | **Addressed:** map-to-panel release explicitly cancels the gesture. |
+| 6 — Keyboard focus | **Addressed:** Escape precedence, editable controls and Space behaviour specified. |
+| 7 — Stats source/time | **Addressed:** correct report source and matching displayed tick specified. |
+| 8 — Worker measurement window | **Partly:** recorder replaces the rolling buffer, but freshness and tick weighting remain unresolved. |
+| 9 — Timing/DPR meanings | **Addressed:** batch-average timing, separate encoding and both pixel ratios defined. |
+| 10 — Gate axis | **Addressed:** omitted so the existing predicate chooses it. |
+| 11 — Depth preview/cache | **Addressed:** both hard-coded paths and cache invalidation covered. |
+| 12 — Invisible pick volumes | **Partly:** states distinguished, but terrain placement and construction height still disagree with rendering. |
+| 13 — Overlay verification | **Partly:** materials and real upgrade fixture fixed; pixel-pair test remains invalid. |
+| 14 — Wanted-rate multipliers/interval | **Addressed:** full multipliers and stable-interval comparison specified. |
+| 15 — D2 synthetic fixtures/text | **Addressed:** real engineer worlds and existing text updates specified. |
+| 16 — Enclosure/contact assertions | **Addressed:** queued sides, turret-first construction, completion, contact and genuinely armed cancellation specified. |
+| 17 — Display conventions | **Addressed:** tier, speed, wave indexing, slider quantisation and parts conventions specified. |
+
+The remaining P1 issues in the changed contracts are:
+
+1. **C2 accepts unowned sites under its written predicate.** “Every unit holding it is among `ids`” is true when nobody holds it. A read-only probe confirmed that a reserved site survives its owner’s death with zero holders. The existing ownership rule requires a replaced queue to hold the site. ([queue.ts:119](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/queue.ts:119))  
+   **Fix:** Require at least one live issuing builder to hold the matching site, exclude other live holders, and restrict reuse to unshifted commands.
+
+2. **C3’s release rule omits reserved gates.** Being exclusively held and unstarted does not make a site removable: orphan cleanup deliberately retains gate sites because conversion already removed their walls. Counting one as released can falsely pass building capacity; deleting it destroys the converted walls. My probe confirmed that an exclusively held, unstarted gate survives queue removal. ([queue.ts:64](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/queue.ts:64))  
+   **Fix:** Share the existing cleanup eligibility predicate, exclude gates and reused sites from capacity credit, and test a full building table with a retained gate.
+
+3. **The worker median can pass while most ticks exceed 50 ms.** The proposed median gives each message equal weight despite different batch sizes. Executed arithmetic: 51 one-tick batches at 1 ms plus 50 three-tick batches averaging 60 ms gives **101 messages**, a **1 ms message median**, and a **60 ms tick-weighted median**—passing the proposed 20-second message-count requirement. ([PLAN.md:409](/Users/codepanda/Projects/worktrees/bulwark-w24/PLAN.md:409))  
+   **Fix:** Weight batch means by `ticksRun`, or collect individual tick timings; add this mixed-batch negative test.
+
+4. **The recorder still cannot establish freshness or exact window membership.** Messages arriving between `start()` and `stop()` can describe worker batches completed before the window. No timestamp/identity validation is specified, and acceptance criterion 10 only checks counts and numeric values. The existing measurement excludes five seconds of warm-up and performs `renderCost` afterwards. ([check-render.mjs:448](/Users/codepanda/Projects/worktrees/bulwark-w24/game/scripts/check-render.mjs:448))  
+   **Fix:** Record world/tick identities and worker batch timestamps, define boundary handling, and reject stale or duplicate samples while excluding warm-up and subsequent cost measurements.
+
+5. **The tool contract can remove ordinary right-click orders.** `select` is an active tool, yet the revised rule says right click cancels the active tool with no command. Today, right click in selection mode sends move, assist or reclaim orders. ([main.ts:614](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:614))  
+   **Fix:** Scope cancellation to non-selection tools and explicitly retain selection-mode orders and camera panning.
+
+6. **D1’s specified browser check cannot work with the named hook.** `hideModelMaterials` hides every entity material, including reserved outlines; it cannot hide one occluding turret. Furthermore, raw pixel differences caused by removing the turret do not prove overlay depth testing. The hook also contradicts the new blanket read-only `__game` contract. ([main.ts:1621](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:1621), [models.ts:526](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/models.ts:526))  
+   **Fix:** Permit narrowly scoped diagnostic rendering controls, compare overlay-only pixel contributions, and require a forced-depth-off negative to fail.
+
+The frozen command’s initial red condition remains valid: the test filter exits **1**, `"No test files found"`. The full command was not run because it writes files. Criterion 6 also needs a narrower refusal oracle: apply-time rejection consumes the queued command, records its log entry and advances the tick, so whole-save byte equality cannot hold.
+
+VERDICT: REVISE
+
+### Claude's response
+
+All six accepted and folded in: C2 needs an issuing holder and no outside live holder, unshifted only (R2-1); C3 shares the orphan-cleanup eligibility predicate, so gates are never released, and credits capacity only for sites actually removed (R2-2); tick-weighted median with the mixed-batch negative (R2-3); batches carry tick range, epoch and clock stamps, the recorder keeps only batches inside the window and reports drops (R2-4); right click cancels only non-select tools (R2-5); D1 measures the overlay's own pixel contribution with diagnostic hooks and a depth-off negative (R2-6); refusal oracle is a twin world without the command (note); C1 pick heights come from the renderer's own placement functions (12). No round 3: these are precise contract corrections, not a design change, and the build is followed by its own adversarial review (proportionate review rule). Plan locked.
