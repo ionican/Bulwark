@@ -1,13 +1,10 @@
-// The game's scene for each render mode (W24 run 2a).
-//
-//   models   (default) W17 lighting and haze (workshop/render/lighting.ts: low warm sun with one
-//            shadow map fitted near the camera, the Poly Haven HDRI as image-based light, sky dome),
-//            W17's terrain material on the game's own ground (groundView.ts), the model renderer
-//            (models.ts) and W13's overlays (entities.ts, models off); W21's post stack in the adapter.
-//   greybox  (`?greybox=1`) W13's renderer as it was: Lambert lights, the canvas-textured ground,
-//            greybox models. Kept for comparison until the look is signed off; removed in run 3.
+// The game's scene (W24 run 2a): W17 lighting and haze (workshop/render/lighting.ts: low warm sun
+// with one shadow map fitted near the camera, the Poly Haven HDRI as image-based light, sky dome),
+// W17's terrain material on the game's own ground (groundView.ts), the model renderer (models.ts)
+// and W13's overlays (entities.ts, models off); W21's post stack in the adapter. W24 run 3 removed
+// the comparison view W13's renderer used to provide (Richard signed off the models look).
 
-import { AmbientLight, Color, DirectionalLight, HemisphereLight, Scene, type PerspectiveCamera } from 'three';
+import { Scene, type PerspectiveCamera } from 'three';
 import type { Terrain } from '../sim/terrain.ts';
 import type { RenderAdapter } from './adapter.ts';
 import { EntityRenderer, type Capacity, type FrameInput } from './entities.ts';
@@ -28,7 +25,7 @@ const _target = new Vector3();
 export interface GameView {
   readonly scene: Scene;
   readonly entities: EntityRenderer;
-  readonly models: ModelRenderer | null;
+  readonly models: ModelRenderer;
   readonly terrainView: TerrainView;
   readonly ground: GroundMeshes | null;
   readonly pave: PaveMap | null;
@@ -52,7 +49,7 @@ export interface WarmupReport {
   passes: string[];
 }
 
-/** The report when no warm-up ran (the greybox view, ?warmup=0, or before the first frame). */
+/** The report when no warm-up ran (?warmup=0, or before the first frame). */
 export const NO_WARMUP: Readonly<WarmupReport> = Object.freeze({ ran: false, meshes: 0, compileMs: 0, frameMs: 0, passes: [] });
 
 export async function createView(
@@ -63,33 +60,6 @@ export async function createView(
   progress: (text: string) => void,
 ): Promise<GameView> {
   const scene = new Scene();
-  if (adapter.mode === 'greybox') {
-    scene.background = new Color('#1d1916');
-    scene.add(new HemisphereLight('#ffe9d2', '#3a2a20', 1.9));
-    scene.add(new AmbientLight('#ffffff', 0.25));
-    const sun = new DirectionalLight('#fff0dc', 2.2);
-    sun.position.set(-40, 90, -30);
-    scene.add(sun);
-    const terrainView = buildTerrainView(terrain);
-    scene.add(terrainView.group);
-    const entities = new EntityRenderer(scene, terrain, capacity, { models: true });
-    adapter.attach(scene, camera);
-    return {
-      scene,
-      entities,
-      models: null,
-      terrainView,
-      ground: null,
-      pave: null,
-      lighting: null,
-      update(f, _d, wppAt, overview) {
-        entities.update(f);
-        terrainView.update(wppAt, overview, f.yaw);
-      },
-      warmUp: async () => NO_WARMUP,
-    };
-  }
-
   const r = adapter.renderer;
   const bank = new TextureBank();
   bank.anisotropy = Math.min(16, r.capabilities.getMaxAnisotropy());

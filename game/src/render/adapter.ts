@@ -2,7 +2,7 @@
 // lifecycle (PLAN "Render adapter"):
 //
 //   create      the renderer, sRGB output; three's own tone mapping off (the post stack tone-maps)
-//   attach      scene and camera; in model mode builds W21's StressPost stack on them (render pass,
+//   attach      scene and camera; builds W21's StressPost stack on them (render pass,
 //               N8AO ambient occlusion, bloom on luminance above 1, ACES filmic, SMAA)
 //   quality     'medium' (default: device pixel ratio capped at 1, 2048² shadow map, half-resolution
 //               ambient occlusion) or 'high' (W21's QUALITY table, workshop/stress/post.ts)
@@ -10,17 +10,15 @@
 //   render      one frame; CPU milliseconds per pass recorded in `timing` (the composer's passes
 //               are wrapped once, so each pass's own render call is timed)
 //
-// `?greybox=1` (W13's renderer, kept for comparison until the look is signed off) uses the same
-// adapter in greybox mode: no composer, three's renderer draws the scene directly.
+// W24 run 3 removed the second render mode: there is one view, the models view, always composed.
 
 import { NoToneMapping, SRGBColorSpace, WebGLRenderer, type Camera, type PerspectiveCamera, type Scene } from 'three';
 import { QUALITY, StressPost, type QualitySpec } from './workshop/stress/post.ts';
 
 export type Quality = 'medium' | 'high';
-export type RenderMode = 'models' | 'greybox';
 
 export interface PassTiming {
-  /** CPU ms per pass in the last frame, by pass name (composer passes, or 'scene' in greybox). */
+  /** CPU ms per pass in the last frame, by pass name (the composer's passes). */
   passes: Record<string, number>;
   /** CPU ms of the whole render call. */
   renderMs: number;
@@ -35,11 +33,10 @@ export interface PassTiming {
 export interface RenderAdapter {
   readonly canvas: HTMLCanvasElement;
   readonly renderer: WebGLRenderer;
-  readonly mode: RenderMode;
   readonly quality: Quality;
   readonly spec: QualitySpec;
   readonly timing: PassTiming;
-  /** The post stack (model mode, after attach), or null. */
+  /** The post stack (after attach), or null before it. */
   readonly post: StressPost | null;
   attach(scene: Scene, camera: PerspectiveCamera): void;
   setSize(width: number, height: number): void;
@@ -54,8 +51,8 @@ export interface RenderAdapter {
   describe(): string;
 }
 
-export function createRenderer(mode: RenderMode, quality: Quality = 'medium'): RenderAdapter {
-  const r = new WebGLRenderer({ antialias: mode === 'greybox', powerPreference: 'high-performance', stencil: false, depth: true });
+export function createRenderer(quality: Quality = 'medium'): RenderAdapter {
+  const r = new WebGLRenderer({ antialias: false, powerPreference: 'high-performance', stencil: false, depth: true });
   r.outputColorSpace = SRGBColorSpace;
   r.toneMapping = NoToneMapping;
   r.info.autoReset = false;
@@ -74,7 +71,7 @@ export function createRenderer(mode: RenderMode, quality: Quality = 'medium'): R
   let cssH = 1;
   const listeners: Array<(q: Quality, spec: QualitySpec) => void> = [];
   const timing: PassTiming = { passes: {}, renderMs: 0, submitted: {} };
-  const dpr = () => Math.min(window.devicePixelRatio || 1, mode === 'greybox' ? 2 : QUALITY[q].maxDpr);
+  const dpr = () => Math.min(window.devicePixelRatio || 1, QUALITY[q].maxDpr);
 
   const applyQuality = () => {
     const spec = QUALITY[q];
@@ -90,7 +87,6 @@ export function createRenderer(mode: RenderMode, quality: Quality = 'medium'): R
   const adapter: RenderAdapter = {
     canvas: r.domElement,
     renderer: r,
-    mode,
     get quality() {
       return q;
     },
@@ -104,7 +100,7 @@ export function createRenderer(mode: RenderMode, quality: Quality = 'medium'): R
     attach(s, c) {
       scene = s;
       camera = c;
-      if (mode === 'models') {
+      {
         post = new StressPost(r, s, c, Math.max(1, cssW), Math.max(1, cssH));
         // W21's order (stress/post.ts): scene, ambient occlusion, bloom + tone map, tone map only
         // (when bloom is off), SMAA. Named, and each pass's own render call timed (CPU).

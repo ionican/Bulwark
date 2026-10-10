@@ -12,7 +12,7 @@ export interface HudStats {
   distance: number;
   renderer: string;
   scenario: string;
-  /** Render mode and quality, e.g. "models · medium" or "greybox". */
+  /** The view and its quality, e.g. "models · medium". */
   view: string;
 }
 
