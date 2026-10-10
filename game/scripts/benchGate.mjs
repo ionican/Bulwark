@@ -58,3 +58,19 @@ export function judgeSamples(window, { zoomOut, aliens, turrets, buildingKinds, 
   }
   return problems;
 }
+
+// W24 run 3 (criterion 10): the worker timing window's verdict (src/workerWindow.ts report). The
+// game camera's window fails a tick-weighted median of 50 ms or more per tick (the 20 Hz budget),
+// fewer than 8 ticks per second of window, or any figure missing or not finite.
+const WORKER_KEYS = ['medianTickMs', 'maxTickMs', 'encodeMedianMs', 'ticks', 'seconds'];
+
+/** Problems with a worker timing report (empty: it passes). */
+export function judgeWorkerWindow(report) {
+  if (!report || typeof report !== 'object') return ['no worker timing report'];
+  const problems = [];
+  for (const k of WORKER_KEYS) if (!Number.isFinite(report[k])) problems.push(`worker window: ${k} missing or not finite (${report[k]})`);
+  if (problems.length) return problems;
+  if (report.medianTickMs >= 50) problems.push(`worker window: median ${report.medianTickMs.toFixed(2)} ms per tick (≥ 50 ms)`);
+  if (report.ticks < 8 * report.seconds) problems.push(`worker window: ${report.ticks} ticks in ${report.seconds.toFixed(1)} s (fewer than 8 per second)`);
+  return problems;
+}

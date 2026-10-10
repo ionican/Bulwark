@@ -25,9 +25,28 @@ export interface RunnerInfo {
   checkpoints: Array<{ wave: number; tick: number }>;
 }
 
+/**
+ * Run 3: the timing of the batch of ticks a snapshot follows (not in the snapshot bytes; no effect
+ * on world state). `stepMs`: wall ms stepping the batch's `ticksRun` ticks; `encodeMs`: encoding
+ * the snapshot; `firstTick`..`lastTick`: the ticks run (lastTick < firstTick when none ran);
+ * `epoch`: the runner's world epoch; `startedAt`, `endedAt`: the worker clock at the batch's start
+ * and once the snapshot was encoded, as performance.timeOrigin + performance.now() (ms since the
+ * Unix epoch), so the page can put them on its own clock.
+ */
+export interface WorkerBatchTiming {
+  stepMs: number;
+  ticksRun: number;
+  encodeMs: number;
+  firstTick: number;
+  lastTick: number;
+  epoch: number;
+  startedAt: number;
+  endedAt: number;
+}
+
 export type FromWorker =
-  /** `buffer` is transferred. `tickMs` is wall time for the last step plus encode (not in the snapshot bytes). */
-  | { type: 'snapshot'; buffer: ArrayBuffer; tickMs: number; ticksRun: number; runner: RunnerInfo }
+  /** `buffer` is transferred. `tickMs` is wall ms per tick of the last batch's step (encoding not included). */
+  | { type: 'snapshot'; buffer: ArrayBuffer; tickMs: number; ticksRun: number; runner: RunnerInfo; timing: WorkerBatchTiming }
   | { type: 'rejected'; reason: string; cmd: Command; ref?: number }
   /**
    * A command with a `ref` was applied at its tick (`tick`). `detail`: what it did (buildRun: tiles

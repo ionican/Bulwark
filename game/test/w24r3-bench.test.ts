@@ -72,7 +72,7 @@ describe('run 3 criterion 10: the judge', () => {
       expect(judgeWorkerWindow({ ...ok, [key]: Number.NaN }).join(' '), key).toMatch(new RegExp(key));
       const missing: Record<string, unknown> = { ...ok };
       delete missing[key];
-      expect(judgeWorkerWindow(missing as typeof ok).join(' '), key).toMatch(new RegExp(key));
+      expect(judgeWorkerWindow(missing as unknown as typeof ok).join(' '), key).toMatch(new RegExp(key));
     }
     expect(judgeWorkerWindow(null as unknown as typeof ok).length).toBeGreaterThan(0);
   });

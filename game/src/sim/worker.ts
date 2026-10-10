@@ -17,9 +17,15 @@ function post(msg: FromWorker, transfer: Transferable[] = []) {
   self.postMessage(msg, { transfer });
 }
 
-function sendSnapshot(tickMs: number, ticksRun: number) {
+/**
+ * Posts the snapshot after a batch: `t0` the worker clock when the batch started, `stepMs` its
+ * stepping time, `firstTick` the world's tick before it (run 3 timing window, protocol.ts).
+ */
+function sendSnapshot(tickMs: number, ticksRun: number, t0 = performance.now(), stepMs = 0, firstTick = runner?.world.tick ?? 0) {
   if (!runner) return;
+  const e0 = performance.now();
   const buffer = encodeSnapshot(runner.world, spare.pop());
+  const end = performance.now();
   post(
     {
       type: 'snapshot',
@@ -27,6 +33,16 @@ function sendSnapshot(tickMs: number, ticksRun: number) {
       tickMs,
       ticksRun,
       runner: { speed: runner.speed, paused: runner.paused, world: runner.worldEpoch, checkpoints: runner.checkpoints.map((c) => ({ wave: c.wave, tick: c.tick })) },
+      timing: {
+        stepMs,
+        ticksRun,
+        encodeMs: end - e0,
+        firstTick,
+        lastTick: firstTick + ticksRun - 1,
+        epoch: runner.worldEpoch,
+        startedAt: performance.timeOrigin + t0,
+        endedAt: performance.timeOrigin + end,
+      },
     },
     [buffer],
   );
@@ -35,15 +51,17 @@ function sendSnapshot(tickMs: number, ticksRun: number) {
 function loop() {
   if (!runner) return;
   const t0 = performance.now();
+  const firstTick = runner.world.tick;
   const { ran, error } = runner.advanceSafe(t0);
+  const stepMs = performance.now() - t0;
   if (error) {
     // A tick failed: say so (console and the page), and keep the clock running.
     console.error('simulation tick failed', error);
     post({ type: 'error', message: `Simulation tick ${runner.world.tick} failed: ${error.split('\n')[0]}` });
   }
-  const tickMs = ran > 0 ? (performance.now() - t0) / ran : 0;
+  const tickMs = ran > 0 ? stepMs / ran : 0;
   // While paused, keep sending (cheaply, 4 per second) so orders given show up in the HUD.
-  if (ran > 0 || runner.paused || runner.world.outcome !== 0) sendSnapshot(tickMs, ran);
+  if (ran > 0 || runner.paused || runner.world.outcome !== 0) sendSnapshot(tickMs, ran, t0, stepMs, firstTick);
   const wait = runner.paused || runner.world.outcome !== 0 ? 250 : runner.delay(performance.now());
   timer = setTimeout(loop, wait);
 }

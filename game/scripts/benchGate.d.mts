@@ -13,3 +13,16 @@ export function judgeSamples(
   window: BenchSample[],
   opts: { zoomOut: boolean; aliens: string[]; turrets: string[]; buildingKinds: string[]; minAlive?: number; doors?: boolean },
 ): string[];
+
+export interface WorkerWindowReport {
+  kept: number;
+  ticks: number;
+  seconds: number;
+  medianTickMs: number;
+  maxTickMs: number;
+  encodeMedianMs: number;
+  encodeMaxMs: number;
+  dropped: { beforeStart: number; afterStop: number; epoch: number; repeated: number };
+}
+
+export function judgeWorkerWindow(report: WorkerWindowReport | null): string[];
