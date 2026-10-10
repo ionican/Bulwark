@@ -288,3 +288,83 @@ Richard: wireframe preview "could do with less detail … an outline and basic �
 ## Run 3 plan (2026-10-10)
 
 Drafted by Claude (Opus 5.5) via `/spec` after run 2b closed at `bf63d02`. Richard's answers the same day: panel on the left under the time controls; construction frames and reserved outlines depth-tested, health bars on top; readout shows received of wanted. Greybox removal (item G) waits for his sign-off; he asked what the greybox renderer is. MAX_ROUNDS = 1 (one plan review, per the proportionate-review rule); a second round only if round 1 finds a structural flaw.
+
+## Run 3 — Round 1 — Codex (GPT-6.1 Sol · xhigh, thread 01a125ac-b29b-7201-ae5a-eaa1472bf60b)
+
+Run 3 needs revision. The main blockers are C3’s replacement transaction, incorrect assumptions about the debug hooks, and checks that can pass without proving the intended behaviour. Only the Run 3 section was reviewed; no files changed.
+
+1. **[P1] C3 needs an atomic replacement procedure.** `createRun` still refuses a full table, while orphan cleanup happens after command application. Moving cleanup earlier deletes sites recorded in `plan.reuse`: my read-only probe planned four reusable sites and found none remaining after early cleanup. Building capacity must also be checked before destructive changes. ([world.ts:433](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/world.ts:433), [runs.ts:180](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/runs.ts:180), [queue.ts:94](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/queue.ts:94))  
+   **Fix:** Specify a mutation-free replacement plan that preserves reused sites, checks both capacities, and commits only after apply-time revalidation; refusal must preserve queues, paths, buildings and counters.
+
+2. **[P1] C2’s simulation fix remains inaccessible through real building controls.** `placeBuild` returns before sending a command whenever `canPlaceOn` sees occupancy; the reserved site therefore remains unclickable through the build tool even after validation accepts it. The reuse exception also needs exact kind, anchor and direction matching. ([main.ts:497](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:497), [validate.ts:55](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/validate.ts:55))  
+   **Fix:** Share an exact own-reserved-site predicate between placement preview, real-click submission, validation and application, then test C2 with an actual build-bar click.
+
+3. **[P1] The existing fingerprint does not establish determinism for C2/C3.** Its scripts neither rebuild an owned reserved site nor fill the run table. Identical hashes can coexist with defects in either new branch; the comparison also strips snapshot queues and order IDs. ([fingerprint.test.ts:99](/Users/codepanda/Projects/worktrees/bulwark-w24/game/scripts/fingerprint.test.ts:99), [fingerprint-compare.mjs:9](/Users/codepanda/Projects/worktrees/bulwark-w24/game/scripts/fingerprint-compare.mjs:9))  
+   **Fix:** Keep the baseline comparison unchanged and add separate repeated-run/save-continuation tests covering C2/C3, shared ownership, overlapping reuse, and commands invalidated before application, comparing full snapshots and saves.
+
+4. **[P1] Armed tools have no defined precedence or lifecycle.** Existing click handling prioritises build mode, then upgrade mode, then selection; gesture mode is chosen at pointer-down. Adding independent gate/spawn flags leaves conflicts with build-bar buttons, shortcuts, Shift release, an active drag, and loading map 1 while armed. ([main.ts:588](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:588), [input.ts:64](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/input.ts:64))  
+   **Fix:** Define one mutually exclusive active tool, with explicit gesture behaviour and cancellation on tool changes, Escape, right click, Shift release where applicable, and world/scenario changes.
+
+5. **[P2] Panel event isolation misses captured drags.** The canvas captures pointers. A drag beginning on the map continues delivering events to the canvas when it crosses the panel; stopping propagation on the panel cannot intercept those events. Browser item 8 only tests gestures beginning over the panel. ([main.ts:665](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:665))  
+   **Fix:** Cancel or suppress captured map gestures when they enter the panel, and test map-to-panel release as well as panel-to-map dragging and wheel input.
+
+6. **[P2] Keyboard focus can defeat cancellation or activate two actions.** The global handler ignores every `INPUT`, including Escape on the count/range controls, but does not ignore `SELECT`. Space on a focused button can trigger the game’s pause handler and the button’s native activation. ([main.ts:746](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:746))  
+   **Fix:** Specify a focus policy, process Escape before editable-control filtering, and prevent native button activation when Space is handled as a game shortcut.
+
+7. **[P1] The Stats contract names the wrong hook and compares different snapshot times.** `__game.counters` contains aggregate totals, not per-kind rows; those are in `__game.stats().shooters` and `.aliens`. A table refreshed at 4 Hz can also legitimately differ from the newest worker snapshot during combat. ([main.ts:1399](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:1399), [main.ts:1413](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:1413))  
+   **Fix:** Use `statsReport(snapshot.stats)` and `__game.stats()`, expose the displayed snapshot tick, and pause or compare matching ticks when asserting DOM equality.
+
+8. **[P1] The proposed worker benchmark cannot obtain its measurement window from `tickSamples`.** That hook returns a count; median/max use a rolling buffer capped at 100 messages. Reading it after the 20-second window loses earlier samples and may include subsequent rendering-cost measurements. Empty telemetry currently yields zero. ([main.ts:278](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:278), [main.ts:1302](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:1302), [check-render.mjs:453](/Users/codepanda/Projects/worktrees/bulwark-w24/game/scripts/check-render.mjs:453))  
+   **Fix:** Add explicit window-scoped telemetry with sample identities/counts, and reject missing, empty, stale or non-finite measurements.
+
+9. **[P2] Existing timing and DPR hooks have different meanings from the report.** `tickMs` is measured before snapshot encoding and averages a batch of ticks, so its maximum is not the slowest individual tick. `viewport.pixelRatio` is the renderer’s capped ratio, not necessarily device DPR. ([worker.ts:44](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/worker.ts:44), [adapter.ts:77](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/adapter.ts:77))  
+   **Fix:** Define and measure the worker statistic precisely, report encoding separately where needed, and report both device DPR and renderer pixel ratio.
+
+10. **[P2] Gate axis cannot come from persisted “run direction”.** Runs retain sites and skip counts, not axis; completed runs disappear, and run walls are placed with default direction. A vertical run therefore supplies no reliable stored direction. The existing gate predicate already chooses an axis. ([runs.ts:33](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/runs.ts:33), [runs.ts:185](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/runs.ts:185), [gate.ts:82](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/gate.ts:82))  
+   **Fix:** Omit the optional axis and use the existing predicate, or share that predicate with a snapshot-backed preview; test both axes with real clicks.
+
+11. **[P2] Depth must reach the preview and invalidate its cache.** There are two hard-coded depth-1 paths: command submission and `planDrag`; the preview cache has no depth key. Changing depth while paused can otherwise leave a stale preview. ([main.ts:549](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:549), [dragPlan.ts:139](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/dragPlan.ts:139))  
+   **Fix:** Pass depth through planning and submission, include it in cache invalidation, and assert preview/created-tile equality for depths 2–4 on both axes.
+
+12. **[P2] C1’s full-height footprint boxes introduce invisible occluders.** Reserved sites draw only outlines; started models are cut by progress; gates contain a visible corridor. Giving all of these a complete building’s solid box can prevent selecting a visibly exposed unit. Building bases also use the footprint’s terrain height range. ([models.ts:778](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/models.ts:778), [models.ts:798](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/models.ts:798), [materials.ts:69](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/materials.ts:69))  
+   **Fix:** Define state-aware building pick volumes, including gate openings and actual terrain placement, and test exposed units/aliens beside reserved, partial and complete buildings.
+
+13. **[P2] D1’s fixture and observation method are insufficient.** In the models view, construction frames mark upgrades only. Frames and greybox outlines also share the strategic-icon material. `inspectNextFrame` reports submitted instances and material names; it cannot establish which fragments failed depth testing. ([entities.ts:251](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/entities.ts:251), [entities.ts:416](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/entities.ts:416), [inspect.ts:24](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/inspect.ts:24))  
+   **Fix:** Give frames/outlines dedicated materials, create an actual upgrade frame, assert non-zero overlay instances, and verify occlusion with paired rendered images or pixel checks.
+
+14. **[P1] D2 omits research and mixes time intervals.** Engineers receive a 1.5× Field Engineering multiplier. My executed probe produced **10 mass/s received**, while the plan’s formula wanted **6.667 mass/s**. Also, received averages the snapshot interval, while wanted uses current builders; their inequality need not hold across builder/tuning changes. ([tuning.ts:151](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/tuning.ts:151), [siteReadout.ts:76](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/siteReadout.ts:76))  
+   **Fix:** Derive wanted with the full research/tuning multiplier and `siteWork`, decode `work` as `id + 1`, and apply received ≤ wanted only to stable-builder/tuning intervals with numeric tolerance.
+
+15. **[P2] Reusing W28’s synthetic fixture will not test actual builder demand.** It manually changes progress and builder counts without adding matching working units. Existing tests and browser checks also require the old literal intake strings, including the stopped-site check. ([w28-readout.test.ts:25](/Users/codepanda/Projects/worktrees/bulwark-w24/game/test/w28-readout.test.ts:25), [check-queue.mjs:568](/Users/codepanda/Projects/worktrees/bulwark-w24/game/scripts/check-queue.mjs:568))  
+   **Fix:** Generate D2 demand fixtures by stepping real one/two-builder worlds, and explicitly list the old text assertions to update while preserving their numeric checks.
+
+16. **[P2] The enclosure fixture and success assertions are underspecified.** Four unshifted drags replace earlier unfinished sides; a finished enclosure can leave builders unable to reach the turret interior. A gate’s presence does not prove completion, and turret kills do not prove aliens contacted a wall or gate. Escape tested after an unshifted placement may merely confirm an already-disarmed tool. ([world.ts:516](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/world.ts:516), [units.ts:119](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/units.ts:119))  
+   **Fix:** Specify four queued drags, enclosure dimensions and builder access; assert complete closed sides, a complete gate, observed wall/gate contact, and Escape/right-click cancellation while genuinely armed.
+
+17. **[P2] Tune and Economy need explicit display conventions.** A kind has no single effective building HP/damage across tiers and gate depths. Speed is stored in tiles per tick. Parts have a pool and cumulative made/used counters, but no income/spending rate fields equivalent to the other resources. ([tuning.ts:164](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/tuning.ts:164), [kinds.ts:4](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/kinds.ts:4), [snapshot.ts:67](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/snapshot.ts:67))  
+   **Fix:** Label the displayed tier/depth, define slider quantisation and speed conversion, map displayed waves 1–20 to indices 0–19, and derive parts rates from snapshot pairs or explicitly omit them.
+
+The frozen command **would fail on the unbuilt change**. I ran its test filter using the installed Vitest with an in-memory config loader and cache disabled: exit **1**, `"No test files found"`. That proves the initial red condition, not the quality of future assertions.
+
+| Acceptance criterion | Does it discriminate? |
+|---|---|
+| 1 — visibility/load | Yes, provided it exercises real snapshot/save transitions. |
+| 2 — controls | Partial: a fake sink misses host gesture integration and local controls such as routes/collapse; add focus, refusal and reset-confirmation checks. |
+| 3 — tune labels | Partial: one field per target misses tier/depth, research and conversion errors. |
+| 4 — stats | Incorrect oracle as written; use per-kind stats and matching ticks. |
+| 5 — C1/C2/C3 | Positives discriminate; add ownership negatives, preserved reuse IDs and completely unchanged state on refusal. |
+| 6 — D1 | Material flags discriminate, but do not prove visible occlusion or that a frame exists. |
+| 7 — D2 | Partial: add research, tuning, real working-unit fixtures and interval transitions. |
+| 8 — benchmark | Partial: a pure judge test does not prove live measurement wiring; test missing telemetry and the 50 ms boundary. |
+| 9 — optional G | Use `__game.renderMode`; `__game.renderer` reports backend/GPU, not `"models"`. ([main.ts:1326](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:1326)) |
+| 10 — existing tests | Regression protection only; it should already pass on the unbuilt tree. |
+
+The full frozen command was not run because installation, builds and screenshots write files. The four relevant existing Vitest suites could not execute because their temporary-directory creation failed with `EPERM`; that is an execution restriction, not a product test failure. Read-only simulation probes ran successfully, and final diff/status checks were clean.
+
+Finally, `/simplify` and review fixes occur after Verify: repeat Verify after the last edit before publishing.
+
+VERDICT: REVISE
+
+### Claude's response
+
+All 17 accepted; none rejected. Folded into the run 3 section: one active tool with defined transitions (4); captured-drag cancel and a focus policy (5, 6); Stats from `statsReport` with the panel's drawn tick, compared while paused (7); a window recorder for worker messages, per-tick step time defined, encoding separate, device and renderer pixel ratios (8, 9); gate sent with no axis (10); depth through planning, submission and the preview cache (11); state-aware building pick volumes (12); dedicated overlay materials, a real upgrade frame and a pixel-pair occlusion check (13); wanted rate from the simulation's own multipliers, `work` decoded as id + 1, the inequality only on stable intervals, real-world fixtures and the listed text updates (14, 15); four queued drags, completion and contact assertions, Escape while genuinely armed (16); tier-1 labels, speed in tiles/s, waves 1–20 as indices 0–19, parts without a rate (17); `__game.renderMode` for G; C2 one shared predicate through to the build-bar click (2); C3 planned without mutation and checked against both tables, state unchanged on refusal (1); new C2/C3 determinism and save-continuation tests alongside the unchanged baseline fingerprint (3). Round 2 run because 1 and 2 changed the simulation design.

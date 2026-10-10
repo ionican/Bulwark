@@ -324,99 +324,128 @@ Tests in `game/test/w27-*.test.ts`. The frozen Verify's vitest line gains the `"
 - **Terrain:** the playable map keeps the game's own gently rolling ground (the simulation does not use height, and buildings can go anywhere); the red-canyon look comes from W17 textures, lighting, haze, terraced outcrops on rock tiles and canyon scenery beyond the map edge. Making map 1 itself a canyon would change the playable map and needs a design decision first.
 - **Turret mapping** as in the inventory; changing it later is a one-line edit.
 
-## Run 3 — sandbox panel, real controls, carried fixes and the rest of the benchmark (planned 2026-10-10 after run 2b closed at `bf63d02`)
+## Run 3 — sandbox panel, real controls, carried fixes and the rest of the benchmark (planned 2026-10-10 after run 2b closed at `bf63d02`; revised after Codex round 1, see `PLAN-REVIEW-LOG.md`)
 
-Richard tests the four mechanics in the Goal from a panel instead of console calls. Everything the panel does goes through the existing sandbox commands and the `window.__game` hooks; the simulation changes only for the two carried order bugs (C2, C3).
+Richard tests the four mechanics in the Goal from a panel instead of console calls. Everything the panel does goes through the existing sandbox commands and `window.__game` hooks. The simulation changes only for the two carried order bugs (C2, C3); `game/src/sim/worker.ts` also gains timing fields (no effect on world state).
 
 ### Richard's answers (2026-10-10)
 
 - Panel on the **left, under the time controls**.
 - **Construction frames and reserved-site outlines** hide behind buildings; **health bars stay drawn on top**.
 - The construction hover readout shows **received of wanted** ("mass 0.5 / 20 per s").
-- **Greybox (`?greybox=1`)**: asked what it is; removal waits for his answer (item G). If he has not signed off when the author starts, G is out of scope for this run.
+- **Greybox (`?greybox=1`)**: removal (item G) waits for his sign-off. If he has not signed off when the author starts, G is out of scope.
+
+### One active tool (Codex R1-4)
+
+The map has exactly one active tool at a time: `select` (default), `build` (a building kind from the build bar), `wall` (wall drag), `upgrade`, `gate` or `spawn`. Choosing any tool (button or shortcut) ends the previous one. The gesture is decided at pointer-down from the active tool, as today.
+
+- `gate` and `spawn`: a left click acts; Shift held keeps the tool after the action; releasing Shift after at least one Shift-held action returns to `select` (as build mode does); without Shift, one action returns to `select`.
+- Escape and right click cancel the active tool and any drag in progress (no command sent).
+- A world change (load, reset, scenario switch) returns to `select`; a tool that the new scenario does not allow (gate and spawn outside the sandbox) cannot be active.
+- The panel shows which tool is active in words ("Tool: spawn rusher × 8 — click the map"), and its button carries the active marker.
+
+### Input isolation and focus (Codex R1-5, R1-6)
+
+- Pointer-down, click, wheel and context menu over the panel never reach the map.
+- A map gesture that started on the canvas and is released over the panel (the canvas holds pointer capture) is cancelled: no command, no selection change; the drag preview disappears.
+- Focus: Escape is handled first, before the editable-control filter, so it cancels the active tool even with focus in the count field or a slider. Inside a number field, letters and digits go to the field, not to shortcuts. `SELECT` elements are treated like inputs. Panel buttons do not keep focus after a click (blur on pointer-up), and Space handled as pause calls `preventDefault`, so Space never both pauses and presses a button.
 
 ### The panel (`game/src/ui/sandboxPanel.ts`, new)
 
-- Shown only when the world's scenario is `sandbox` (from the snapshot, so a loaded sandbox save shows it and a map 1 save hides it). In the sandbox the DEBUG spawn box (top right) is hidden; the Spawn tab replaces it. In map 1 nothing changes.
+- Shown only when the snapshot's scenario is `sandbox` (a loaded sandbox save shows it, a map 1 save hides it). In the sandbox the DEBUG spawn box (top right) is hidden; in map 1 nothing changes.
 - Five tabs: **Build, Spawn, Tune, Economy, Stats**. The active tab is marked by a leading "▸", bold text and an outline, never colour alone. A collapse button ("–" / "+") shrinks the panel to its tab row.
-- Pointer events on the panel never reach the map: a click, drag or wheel over the panel selects nothing, sends no order and does not move the camera. Keyboard shortcuts keep working; typing in the count field does not trigger them.
-- Refusals: every command the panel sends shows the worker's refusal reason as a toast (the existing `.toast.bad`, dashed border).
-- Updates from snapshots at most 4 times a second; values shown come from the snapshot (`__game.tuning`, `unlimited`, `counters`, `runs`), so a `resetSandbox` or a loaded save is reflected without the panel holding its own copy.
+- Every command the panel sends shows the worker's refusal reason as a toast (`.toast.bad`, dashed border).
+- The panel redraws from snapshots at most 4 times a second and records the snapshot tick it last drew (`__game.sandboxPanel.tick`). Values come from the snapshot, so `resetSandbox` and loaded saves are reflected without the panel keeping its own copy.
 
 **Build tab**
-- Wall-run depth 1–4 (four buttons, the chosen one marked as above). The wall drag uses it (main.ts:653 hard-codes depth 1 today); the drag preview (W25) shows the chosen depth.
-- **Gate tool**: armed by its button (label shows "armed — click a finished wall"), a left click on a finished straight wall sends `gate` for the selected builders (all builders when none selected), axis from the wall's run direction. Esc or a right click disarms. Shift keeps it armed after a placement, as build mode does.
+- Wall-run depth 1–4 (four buttons, the chosen one marked). The depth reaches both paths that hard-code 1 today: command submission (main.ts ~653) and `planDrag` (dragPlan.ts ~139); the drag-preview cache is keyed on depth, so changing depth while paused redraws the preview (Codex R1-11).
+- **Gate tool**: a left click on a finished straight wall sends `gate` for the selected builders (all builders when none are selected) **without an axis**: the simulation's predicate chooses it (gate.ts ~82; Codex R1-10).
 - **Runs**: the active wall runs (id, tiles done/total, builders), each with × → `cancelRun`.
-- Buildings themselves stay in the bottom build bar; this tab does not duplicate it.
+- Buildings stay in the bottom build bar; this tab does not duplicate it.
 
 **Spawn tab**
-- One button per alien kind with its icon shape and name; count 1–50 (−/+ buttons and a number field).
-- **Place**: armed by its button ("armed — click the map"); a left click on the ground sends `spawnAt` at that tile. Shift keeps it armed; Esc or a right click disarms.
-- **Start wave** (1–20) → `startWave`; **Clear aliens**, **Clear wrecks**.
-- **Show routes** toggle, default off (Richard asked for no routes in 2a): when on, the route from each recent spawn origin (`originRoutes`) is drawn as a dashed ground line with the kind's icon at its origin.
+- One button per alien kind with its icon shape and name; count 1–50 (−/+ buttons and a number field, clamped).
+- **Place** makes `spawn` the active tool; a left click on the ground sends `spawnAt` at that tile.
+- **Start wave** 1–20 shown, sent as index 0–19 → `startWave`; **Clear aliens**, **Clear wrecks**.
+- **Show routes** toggle, default off (Richard asked for no routes in 2a): when on, each route in `originRoutes` is drawn as a dashed ground line with the kind's icon at its origin.
 
-**Tune tab**
-- Target (Buildings / Aliens / Units) and kind. For each supported field (run 1 list) a slider from 0.1× to 10× on a logarithmic scale with steps of 0.1 near 1, showing the multiplier and the effective value in display units (hit points, damage per shot, tiles, seconds, m/s, build power).
-- The command is sent when the slider is released or the value committed (not per pixel moved). **Reset kind** and **Reset all** → `tuneReset`.
+**Tune tab** (display conventions, Codex R1-17)
+- Target (Buildings / Aliens / Units) and kind. For each supported field (run 1 list) a slider from 0.1× to 10×: logarithmic position, value quantised to 0.1 between 0.1 and 2, 0.5 between 2 and 10.
+- Next to the multiplier, the effective value **for tier 1, with research as currently granted**, labelled "tier 1" (and "per tile" for wall hit points, so gate depth does not apply). Units: hit points; damage per shot; range in tiles; fire interval in seconds; speed in tiles per second (stored tiles per tick × 10); build power.
+- The command is sent on release or commit, not per pixel. **Reset kind** and **Reset all** → `tuneReset`.
 
 **Economy tab**
 - **Free spending** toggle with the words ON / OFF → `setUnlimited`.
-- Per resource: pool, income and spending per second (from the snapshot), and the count of each producing building kind. No new snapshot fields: a per-source breakdown is only shown if the snapshot already carries it.
-- **Grant all research** → `grantResearch all`. **Reset sandbox** and **Full reset** (each asks "click again to confirm" within 3 s) → `resetSandbox`.
+- Mass, energy and rare: pool, income and spending per second, from the snapshot fields the resource readout uses. Parts: pool, made and used totals; no rate is shown (the snapshot has none).
+- Count of each producing building kind (complete only).
+- **Grant all research** → `grantResearch all`. **Reset sandbox** and **Full reset**, each needing a second click within 3 s ("click again to confirm") → `resetSandbox`.
 
-**Stats tab**
-- Two tables from `counters`: per building and unit kind — shots, hit points removed, kills; per alien kind — spawned, killed, hit points removed from walls and gates, from other buildings, from units. "Absorbed by shields" as its own row. **Reset stats** → `resetStats`.
-- Numbers right-aligned with thousands separators; a kind with all zeros is shown dimmed and with a "–" in place of each zero (not by colour alone).
+**Stats tab** (Codex R1-7)
+- Two tables from `statsReport(snapshot.stats)` — the same function behind `__game.stats()`: `.shooters` (per building and unit kind: shots, hit points removed, kills) and `.aliens` (per alien kind: spawned, killed, hit points removed from walls and gates, from other buildings, from units); "absorbed by shields" as its own row. **Reset stats** → `resetStats`.
+- Numbers right-aligned with thousands separators; an all-zero row shows "–" for each zero and is dimmed (not by colour alone).
 
 ### Carried fixes
 
-- **C1 — picking through a building.** A click whose ray reaches a building before it reaches a unit's or alien's pick cylinder selects the building, not the unit behind it. Building volumes: footprint × the kind's drawn height (from the model bounds, as pickVolumes does for units). Box selection is unchanged.
-- **C2 — unshifted single build on the unit's own reserved site.** An unshifted `build` on a site the issuing units already have reserved (and nobody else holds) is accepted: the queue becomes that one order on the same site (same building id, not removed and re-reserved); other unstarted sites only they held are removed, as W25 does.
-- **C3 — full run table.** An unshifted `buildRun` is accepted when the table is full if the replacement frees at least one slot (a run held only by the issuing builders and not started). The table never exceeds 32; if no slot would be freed, the refusal stays.
-- C2 and C3 change only cases that are refused today. The fingerprint comparison with `60ebba6` must stay IDENTICAL; if it does not, the author stops and reports.
+- **C1 — picking through a building** (Codex R1-12). A click whose ray reaches a building's pick volume before a unit's or alien's cylinder selects the building. Volumes depend on state:
+  - reserved sites: no volume (they draw only outlines);
+  - started sites: footprint × drawn height × progress;
+  - complete buildings: footprint × drawn height (from model bounds, as pickVolumes does for units), base at the footprint's lowest terrain height;
+  - gates: the two side columns only; the corridor column has no volume.
+  Box selection is unchanged.
+- **C2 — unshifted single build on the unit's own reserved site** (Codex R1-2). One predicate, `ownReservedSite(view, ids, kind, anchor, dir)` — true when a reserved (not started) site of exactly that kind, anchor and direction exists and every unit holding it is among `ids` — is used by the placement preview (shows it allowed), the real build-bar click (`placeBuild` sends the command instead of returning at `canPlaceOn`), validation, and application. Accepted: the queue becomes that one order on the same building id (not removed and re-reserved); other unstarted sites only those units held are removed, as W25 does. A site held by any other unit stays refused.
+- **C3 — full run table, atomic replacement** (Codex R1-1). An unshifted `buildRun` with a full table is planned without mutation first: compute the runs and sites the replacement would release (held only by the issuing builders, not started), the sites the new run reuses (`plan.reuse` keeps them), and check **both** the run table and the building table after release. If either still has no room, refuse with the reason and change nothing (queues, paths, buildings, runs, counters identical). Otherwise apply in one step at apply time, revalidating first. The table never exceeds 32.
+- **Determinism for C2 and C3** (Codex R1-3): the baseline fingerprint comparison with `60ebba6` stays as it is (must remain IDENTICAL: it does not exercise these paths). New tests in `w24r3-determinism.test.ts` run scripts that exercise C2, C3, shared ownership (a site held by two units, one issuing), an overlapping reuse, and a command made invalid between issue and apply; each script runs twice and once with save at its midpoint and load, comparing full snapshot hashes (queues and order ids included) and save bytes every 50 ticks.
 
 ### Overlays and readout (Richard's answers)
 
-- **D1** Construction frames and reserved-site outlines test depth against buildings and terrain (polygon offset so they do not flicker against the ground); a turret in front hides them. Health bars stay on top.
-- **D2** The W28 readout shows "received / wanted per s" for each resource with a cost: wanted is the rate at full supply, from the site kind's cost and build time and the build power of the builders working on it this snapshot (their `work` id, kind build power × the `buildRate` tune multiplier). With no builder working on it: "no builder". The starved check in check-queue keeps its rule (received > 0 and ≤ income) and adds received ≤ wanted.
+- **D1** (Codex R1-13). Construction frames and reserved-site outlines get their own materials (not the shared strategic-icon material), depth-tested with a polygon offset so they do not flicker against the ground. Health bars stay on top. The check creates a real upgrade frame (an upgrade order on a built turret) and a reserved outline, asserts both have non-zero drawn instances, and proves occlusion by pixels: two renders of the same frame, one with the occluding turret's materials hidden (the 2b hide hook), differ inside the overlay's screen rectangle where the turret covers it, and match outside it.
+- **D2** (Codex R1-14, R1-15). The W28 readout shows "received / wanted per s" for each resource with a cost. Wanted is the rate at full supply: the site kind's cost × the summed effective build power of the units working on it ÷ its build time, with the full multiplier the simulation uses (kind build power × tier × research such as Field Engineering's 1.5× × the `buildRate` tune), taken from the same simulation function (`siteWork` / tuning.ts) rather than re-derived; working units are those whose `work` field decodes (`id + 1`) to the site. With none: "no builder". Received keeps W28's snapshot-pair average.
+  - The received ≤ wanted check applies only across intervals where the builders and tuning did not change, with a tolerance of 1%.
+  - Fixtures step real worlds with one and with two engineers (with and without Field Engineering) — not W28's synthetic progress edits.
+  - Existing assertions on the old text to update, numeric checks kept: `test/w28-readout.test.ts` string expectations, and check-queue.mjs's starved and stopped-site checks (~568).
 
-### Benchmark report (Codex 18, the remainder)
+### Benchmark report (Codex 18 remainder; R1-8, R1-9)
 
-- check-render's benchmark report adds, per pose: the device pixel ratio, the drawing-buffer size, and the worker's tick time over the measured window (median and max, from `__game.tickSamples`).
-- Gate added: worker median tick under 50 ms at the game camera (half of the 100 ms tick). Max is reported only. The 2b frame-rate gates are unchanged.
+- **Worker timing window.** `worker.ts` adds to each snapshot message the step time of the batch, the ticks it ran, and the snapshot encoding time. The main thread gains a window recorder, `__game.workerWindow.start()` / `.stop()`, that keeps every message between the two calls (unbounded within the window, independent of the rolling 100-sample buffer). The statistic: per-tick step time = batch step time ÷ ticks in the batch, its median and its maximum over the window; encoding time reported separately.
+- check-render starts the recorder at the start of each measured window and stops it at the end. Per pose it reports: `window.devicePixelRatio`, the renderer's pixel ratio, the drawing-buffer size, and the worker statistics.
+- **Gate**: at the game camera, median per-tick step time under 50 ms (half of the 100 ms tick). The window fails if it holds fewer than 5 messages per second of window with ticks run, or any value is missing or not finite. Max and encoding are reported only. The 2b frame-rate gates are unchanged.
 
 ### G — greybox removal (only if Richard signs off before the author starts)
 
-Remove the `?greybox=1` switch, the greybox branch of the adapter and the W13 greybox renderer files no other code imports; `__game.renderer` keeps reporting `models`. If not signed off: untouched.
+Remove the `?greybox=1` switch, the greybox branch of the adapter and the W13 greybox renderer files nothing else imports. `__game.renderMode` (new, replacing the internal `renderMode`) reports `models`. If not signed off: untouched.
 
 ### Browser check — `game/scripts/check-panel.mjs` (new)
 
-Builds (or `--no-build`) and serves this tree with `vite preview` on strict port 8825, agent-browser session `w3panel` at 1440 × 900, `?sandbox=1`. Real mouse clicks and drags (CDP) and real keys for everything below; `__game` is read only to check results, never to cause them (setup excepted where listed). Always stops the server and closes only its own session.
+Builds (or `--no-build`) and serves this tree with `vite preview` on strict port 8825, agent-browser session `w3panel` at 1440 × 900, `?sandbox=1`. Real mouse clicks and drags (CDP) and real keys for every action; `__game` is read only to check results, never to cause them. Always stops its server and closes only its own session.
 
 1. The panel is shown in the sandbox and absent at `/` (map 1); the DEBUG spawn box is hidden in the sandbox.
-2. Each tab opens by a click; the active one carries "▸".
+2. Each tab opens by a click; the active tab carries "▸"; collapse and expand work.
 3. Economy: free spending turned ON by a click → `__game.unlimited` true.
-4. Build: depth 2 chosen; a real wall drag with two engineers lays a closed rectangular enclosure on clear ground (the fixture uses a funded, rock-free area chosen by the script from the terrain and named in its output); one gun turret placed inside by the build bar with a real click.
-5. Build: gate tool armed; a click on a finished straight side → a gate is built there (`__game` building list); Esc disarms (button text back to its idle label).
-6. Spawn: rusher × 8 chosen by clicks, Place armed, a click outside the enclosure → 8 aliens within 6 tiles of the clicked tile; they reach the gate or wall and the turret fires. Stats: the gun turret row's kills > 0 within 60 s at speed 3, and the DOM table equals `__game.counters` for that row.
-7. Tune: the gun turret damage slider dragged with the mouse to 2× → `__game.tuning` shows 2 (± one step); the label's effective damage doubles. Reset kind → 1.
-8. A click and a drag over the panel select nothing and send no command (selection and queues unchanged; `__game.rejected` and the command count unchanged).
-9. C1 with real clicks: an engineer standing directly behind a turret from the camera; a click on the turret's centre selects the turret; a click on the engineer's visible part selects the engineer.
-10. D1: with the camera placed so a turret stands in front of a reserved outline and a construction frame, the hidden parts are not drawn (read from the scene via `inspectNextFrame`, and a screenshot).
-11. Screenshots to the art-reference folder: `w24r3-panel-build.png`, `-spawn.png`, `-tune.png`, `-economy.png`, `-stats.png`, `w24r3-overlays-occluded.png`.
+4. **Fixture** (Codex R1-16): the script picks a clear, rock-free 11 × 9 tile rectangle on flat ground at least 12 tiles from the base and from every entry, and prints it. First the gun turret is placed in its centre by the build bar (a real click). Then depth 1 is chosen and the four sides are laid by **four Shift-held drags** (queued, so none replaces another) with two engineers standing outside the rectangle. Wait (speed 3) until every wall tile of the four sides is complete (`progress` 1, no gaps).
+5. Gate: the gate tool armed by its button, a Shift-held click on the side facing the spawn point → a gate order; still armed (Shift held), Escape → tool back to `select` (button text back to idle, `__game` tool `select`). Wait until the gate is complete (`progress` 1).
+6. Spawn: rusher chosen, count 8 typed, Place, a click 10 tiles outside the gate side → 8 aliens within 6 tiles of the clicked tile. Within 60 s at speed 3: `stats().aliens.rusher` hit points removed from walls and gates > 0 (contact), and the gun turret's kills > 0. Then pause; the Stats tab's gun turret row and rusher row equal `__game.stats()` at the panel's recorded tick.
+7. Tune: gun turret damage slider dragged with the mouse to 2× → `__game.tuning` shows 2 (± one step); the label's effective damage doubles. Reset kind → 1.
+8. Isolation: a click, a drag and a wheel over the panel change nothing (selection, queues, camera, `__game.rejected` and the command count unchanged); a wall drag started on the map and released over the panel creates nothing.
+9. Focus: with the count field focused and spawn armed, Escape disarms; Space with a panel button just clicked pauses once and does not press the button.
+10. C1: an engineer moved directly behind a complete turret from the camera; a click on the turret's centre selects the turret; a click on the engineer's visible part selects the engineer; an engineer beside a reserved site and beside a gate's corridor is selectable.
+11. C2: an engineer with a reserved turret site; an unshifted build-bar click on exactly that site is accepted (same building id, queue length 1).
+12. D1: the pixel-pair check above, for a reserved outline and an upgrade frame behind a turret.
+13. Screenshots to the art-reference folder: `w24r3-panel-build.png`, `-spawn.png`, `-tune.png`, `-economy.png`, `-stats.png`, `w24r3-overlays-occluded.png`.
 
 ### Run 3 acceptance criteria (tests in `game/test/w24r3-*.test.ts`, written first and red before the change)
 
-1. Panel visibility follows the snapshot scenario (sandbox shown, map 1 hidden, a loaded save of each kind switches it).
-2. Each control sends exactly the command and arguments listed above (a fake command sink), including depth on the wall drag, axis on the gate, count bounds 1–50 and the slider's logarithmic mapping and commit-on-release.
-3. Tune labels: effective values in display units for one field of each target.
-4. Stats table rows equal `counters` for a scripted fight (from the run 1 stats fixture).
-5. C1, C2, C3 as stated, through the real picking and simulation code; C3 also: no slot freed → refused, nothing created.
-6. D1: frames and outlines are depth-tested materials; health bars are not.
-7. D2: received / wanted for the W28 fixture (one engineer, build power 5) and with two builders; "no builder" when none.
-8. Benchmark: the report carries DPR, buffer size and worker tick median and max per pose; a window with median worker tick ≥ 50 ms fails the gate (pure test of the judge, as `benchGate` is tested).
-9. If G: `?greybox=1` loads the models view and nothing imports the removed files.
-10. All existing tests pass.
+1. Panel visibility follows the snapshot scenario through real save and load transitions in both directions.
+2. Controls send exactly the commands and arguments listed (fake command sink), including depth on drag submission and preview, no axis on gate, count clamped to 1–50, wave 1–20 → index 0–19, slider mapping and quantisation, commit on release, two-click reset confirmation, refusal toasts, routes toggle and collapse.
+3. Tool state machine: every transition above (tool change, Shift release, Escape, right click, world change, scenario not allowing the tool).
+4. Tune labels: effective values for every supported field of one kind per target, including a research multiplier and the speed conversion.
+5. Stats tables equal `statsReport` for a scripted fight (run 1's stats fixture).
+6. C1, C2, C3 through the real picking and simulation code, with negatives: C2 refused when another unit holds the site and when kind, anchor or direction differ; C3 refused when no slot would be freed or the building table would overflow, with world state byte-identical after refusal; reused site ids kept.
+7. Determinism and save continuation for C2/C3 as specified.
+8. D1: frames and outlines use their own depth-tested materials; health bars do not.
+9. D2: received / wanted from real one- and two-engineer worlds, with Field Engineering and with a `buildRate` tune; "no builder" when none; the inequality only across stable intervals.
+10. Benchmark: the judge fails a window with median ≥ 50 ms, too few messages, or missing or non-finite values, and passes 49 ms; the recorder keeps more than 100 messages in a window.
+11. If G: `?greybox=1` loads the models view, `__game.renderMode` is `models`, and nothing imports the removed files.
+12. All existing tests pass (updated where D2 changes text, each update listed).
 
 ### Verify command — run 3 (frozen)
 
@@ -430,15 +459,15 @@ node scripts/check-queue.mjs --no-build && \
 node scripts/check-panel.mjs --no-build --shots "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Rick'"'"'s World/Resources/Bulwark Art Reference"'
 ```
 
-Red at `bf63d02`: there are no `w24r3-` tests and no `check-panel.mjs`, so it fails; at the tests-first commit the new tests fail.
+Red at `13f0fe2`: no `w24r3-` tests exist (Codex ran the filter: exit 1, "No test files found") and there is no `check-panel.mjs`. At the tests-first commit the new tests fail.
 
 ### After the Verify passes
 
-`/simplify`, then a post-build `/adversarial-review`, then Richard's go to push. The pull request into `main` follows this run. The verified build is republished to the fixed public address: `npx vite build --base ./ --outDir /tmp/bulwark-site --emptyOutDir && node ~/report-publish/publish-site.mjs /tmp/bulwark-site --name bulwark`.
+`/simplify`, then a post-build `/adversarial-review`, re-running the Verify after the last edit. Then Richard's go to push; the pull request into `main` follows this run. The verified build is republished to the fixed public address: `npx vite build --base ./ --outDir /tmp/bulwark-site --emptyOutDir && node ~/report-publish/publish-site.mjs /tmp/bulwark-site --name bulwark`.
 
 ### Out of scope (run 3)
 
-New simulation features; new snapshot fields beyond what D2 can derive; waves, research and win/lose changes; mobile and touch; Safari and Firefox; the look of the models.
+New simulation features; new snapshot fields beyond the worker timing fields; waves, research and win/lose changes; mobile and touch; Safari and Firefox; the look of the models.
 
 ## Key decisions and tradeoffs
 
