@@ -420,3 +420,13 @@ VERDICT: REVISE
 ### Claude's response
 
 All six accepted and folded in: C2 needs an issuing holder and no outside live holder, unshifted only (R2-1); C3 shares the orphan-cleanup eligibility predicate, so gates are never released, and credits capacity only for sites actually removed (R2-2); tick-weighted median with the mixed-batch negative (R2-3); batches carry tick range, epoch and clock stamps, the recorder keeps only batches inside the window and reports drops (R2-4); right click cancels only non-select tools (R2-5); D1 measures the overlay's own pixel contribution with diagnostic hooks and a depth-off negative (R2-6); refusal oracle is a twin world without the command (note); C1 pick heights come from the renderer's own placement functions (12). No round 3: these are precise contract corrections, not a design change, and the build is followed by its own adversarial review (proportionate review rule). Plan locked.
+
+## Act 3 — Build (run 3, 2026-10-10)
+
+Author: Opus 5.5 · high, one run, no rework. 8 commits 2ba0dcf..1383535, 40 files, +4,426 / −177.
+
+- Red at the tests-first commit 2ba0dcf (run by Claude in a separate worktree): 10 of 10 files and 25 of 37 tests failed — three on missing modules (tools.ts, sandboxPanel.ts, workerWindow.ts), the rest on behaviour (C2 queue length 2 ≠ 1, C3 "the run table is full", unit picked through a turret, overlay depthTest false, ?greybox still read). Three failures are only "not a function" (worldSiteSource, buildHeight, DragPlanCache).
+- Frozen Verify run by Claude at 1383535: exit 0. w24r3 72/72, npm test 514/514, build and look tsc pass, fingerprint vs 60ebba6 IDENTICAL, check-render / check-queue / check-panel all passed. Worker window 20.01 s, 200 ticks, tick-weighted step median 0.20 ms; DPR 1, renderer pixel ratio 1. D1: zero overlay contribution inside the occluding turret, non-zero outside, non-zero with depth test off, for both construction-frame and reserved-outline.
+- Simulation diff confined to queue.ts, validate.ts, world.ts (C2, C3) and protocol.ts, worker.ts (timing). look/ and model/ untouched.
+- Deviations accepted: w28-readout strings and check-queue text moved to the D2 wording; sim/tuning.ts added to PURE_SIM (its value imports are kinds.ts and balance.ts only); check-panel sends the wheel over CDP because agent-browser 0.37.1 sends it at (0, 0); commit 2a9b51e does not type-check alone.
+- Next: /simplify, re-run Verify, /adversarial-review.
