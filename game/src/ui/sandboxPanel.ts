@@ -38,6 +38,7 @@ import { SCENARIO_NAMES } from '../sim/world.ts';
 import { snapshotRules } from '../snapshotRules.ts';
 import { RESOURCE_NAMES } from '../render/waiting.ts';
 import { clampInt, clampSpawnCount, type ToolName } from '../tools.ts';
+import { FocusReturn, type Focusable } from './focusReturn.ts';
 import { alienIconSvg } from './panels.ts';
 
 export const PANEL_TABS = ['build', 'spawn', 'tune', 'economy', 'stats'] as const;
@@ -371,6 +372,8 @@ export class SandboxPanel {
   private readonly els: ReturnType<SandboxPanel['lookUp']>;
   /** The tune field rows of the current target and kind (tuneKey), by field. */
   private readonly fieldEls = new Map<string, { slider: HTMLInputElement; mult: HTMLElement; val: HTMLElement }>();
+  /** Gives keyboard focus back after a Tune control is used with the pointer (Codex review 2). */
+  private readonly focus = new FocusReturn();
 
   constructor(sink: PanelSink, now: () => number = () => performance.now()) {
     const style = document.createElement('style');
@@ -411,6 +414,10 @@ export class SandboxPanel {
     this.el.addEventListener('click', (e) => this.onClick(e));
     this.el.addEventListener('input', (e) => this.onInput(e));
     this.el.addEventListener('change', (e) => this.onChange(e));
+    this.el.addEventListener('pointerdown', (e) => this.focus.pointerDown(e.target as Focusable | null));
+    this.el.addEventListener('keydown', () => this.focus.keyDown());
+    // capture: a release outside the panel (a slider dragged past its end) counts too
+    window.addEventListener('pointerup', () => this.focus.pointerUp(), true);
     document.body.appendChild(this.el);
     this.els = this.lookUp();
     // under the time-controls box: placed again whenever that box changes size (its status line
@@ -759,6 +766,7 @@ export class SandboxPanel {
       this.model.setCount(t.value);
       t.value = String(this.model.count);
     } else if (t.dataset.sbx === 'tune-kind') this.model.setTuneKind(Math.max(0, TUNE_KINDS[this.model.tuneTarget].indexOf(t.value as never)));
+    this.focus.changed(t);
     this.dirty = true;
   }
 }

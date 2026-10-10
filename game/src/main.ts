@@ -21,6 +21,7 @@ import { DragPreview, inspectDrag } from './render/dragPreview.ts';
 import { DragPlanCache, beltLineTiles, dragLabel, snapshotSiteSource, type DragPlan, type DragView } from './dragPlan.ts';
 import { Tools, gateCommand, runCommand, spawnAtCommand, toolLabel } from './tools.ts';
 import { SandboxPanel, debugSpawnVisible, multToSlider } from './ui/sandboxPanel.ts';
+import { editingTarget } from './ui/focusReturn.ts';
 import { OVERLAY_NAMES, hideOverlay, overlayMeshes, setOverlayDepthTest } from './render/debugRender.ts';
 import { RouteView } from './render/routeView.ts';
 import { WorkerWindow } from './workerWindow.ts';
@@ -519,14 +520,9 @@ function buildTool(): { kind: number; dir: number } | null {
  */
 let shiftHeld = false;
 
-/** The build bar or a key picks a building kind (null: back to select). Needs builders selected. */
-function setBuildMode(kind: BuildingKind | null) {
-  if (kind === null || !selectedBuilders().length) {
-    // as before run 3: the build and upgrade tools close (an armed gate or spawn tool stays)
-    if (buildTool() || tools.name === 'upgrade') tools.choose('select');
-    return;
-  }
-  tools.choose('build', B[kind]);
+/** The build bar or a key picks a building kind; with no builders selected the map returns to select. */
+function setBuildMode(kind: BuildingKind) {
+  tools.chooseForBuilders('build', selectedBuilders().length > 0, B[kind]);
 }
 
 /** Footprint origin under a ground point, centred on the cursor. */
@@ -828,8 +824,7 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   // letters and digits typed into a field or a list go to it, not to shortcuts
-  const tag = (e.target as HTMLElement)?.tagName;
-  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+  if (editingTarget(e.target as HTMLElement | null)) return;
   const k = e.key.toLowerCase();
   if (e.code === 'Space' || e.key === ' ') {
     e.preventDefault();
@@ -876,7 +871,7 @@ window.addEventListener('blur', () => {
 });
 
 function startUpgrade() {
-  tools.choose(selectedEngineers().length > 0 ? 'upgrade' : 'select');
+  tools.chooseForBuilders('upgrade', selectedEngineers().length > 0);
 }
 function dropTurret() {
   for (const id of selectedEngineers()) command({ t: 'dropTurret', id });
