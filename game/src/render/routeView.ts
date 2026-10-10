@@ -1,7 +1,7 @@
 // W24 run 3: the Spawn tab's "Show routes" toggle (default off; Richard asked for no routes in 2a).
 // When on, each route in the snapshot's originRoutes (the predicted path from each recent sandbox
 // spawn origin, tile cells z × width + x) is drawn as a dashed line just above the ground, with the
-// alien kind's icon shape at its origin. Rebuilt only when the routes change, checked once per snapshot.
+// alien kind's icon shape at its origin. Rebuilt only when a route changes (any cell: Codex review 3), checked once per snapshot.
 
 import { BufferGeometry, Float32BufferAttribute, Group, Line, LineDashedMaterial, Mesh, MeshBasicMaterial, type Scene } from 'three';
 import type { Snapshot } from '../sim/snapshot.ts';
@@ -15,7 +15,8 @@ export class RouteView {
   private readonly iconMat = new MeshBasicMaterial({ vertexColors: true, depthTest: false });
   /** Built on the first update with the routes on (most games never show them). */
   private icons: ReturnType<typeof alienIconGeometries> | null = null;
-  private key = '';
+  /** The routes last drawn (copies): compared in full, every cell, with each new snapshot's. */
+  private drawn: Array<{ x: number; z: number; kind: number; category: number; cells: Uint16Array }> = [];
   /** The snapshot the key was last made from: the routes change only with the snapshot. */
   private snap: Snapshot | null = null;
 
@@ -34,9 +35,8 @@ export class RouteView {
     if (!on || !s || s === this.snap) return;
     this.snap = s;
     const routes = s.originRoutes;
-    const key = routes.map((r) => `${r.x},${r.z},${r.kind},${r.category},${r.cells.length},${r.cells[r.cells.length - 1] ?? -1}`).join(';');
-    if (key === this.key) return;
-    this.key = key;
+    if (sameRoutes(routes, this.drawn)) return;
+    this.drawn = routes.map((r) => ({ x: r.x, z: r.z, kind: r.kind, category: r.category, cells: r.cells.slice() }));
     for (const c of [...this.group.children]) {
       c.removeFromParent();
       if (c instanceof Line) c.geometry.dispose();
@@ -72,4 +72,16 @@ export class RouteView {
       }
     }
   }
+}
+
+/** True when `a` and `b` are the same routes: origin, kind, category and every cell, in order. */
+function sameRoutes(a: Snapshot['originRoutes'], b: Snapshot['originRoutes']): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const p = a[i]!;
+    const q = b[i]!;
+    if (p.x !== q.x || p.z !== q.z || p.kind !== q.kind || p.category !== q.category || p.cells.length !== q.cells.length) return false;
+    for (let k = 0; k < p.cells.length; k++) if (p.cells[k] !== q.cells[k]) return false;
+  }
+  return true;
 }
