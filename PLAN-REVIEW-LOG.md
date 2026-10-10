@@ -430,3 +430,10 @@ Author: Opus 5.5 · high, one run, no rework. 8 commits 2ba0dcf..1383535, 40 fil
 - Simulation diff confined to queue.ts, validate.ts, world.ts (C2, C3) and protocol.ts, worker.ts (timing). look/ and model/ untouched.
 - Deviations accepted: w28-readout strings and check-queue text moved to the D2 wording; sim/tuning.ts added to PURE_SIM (its value imports are kinds.ts and balance.ts only); check-panel sends the wheel over CDP because agent-browser 0.37.1 sends it at (0, 0); commit 2a9b51e does not type-check alone.
 - Next: /simplify, re-run Verify, /adversarial-review.
+
+### /simplify and adversarial review (run 3)
+
+- /simplify: four read-only reviewers (reuse, simplification, efficiency, altitude; about 74 findings). 15 deduplicated, behaviour-preserving items applied by the author in 4c6ab4f..5a322a3 (+459 / −926): per-frame work cut, greybox leftovers removed, one copy of each repeated rule and type. Three greybox-only tests deleted; the 1,536-reserved-tile draw test is covered by w24r2a-capacity's full-table (4,096) reserved-outline check. Claude's Verify at 5a322a3: rc 0, 511 tests, fingerprint IDENTICAL.
+- Adversarial review (Codex GPT-6.1 Sol · xhigh, thread 01a12661-b2fc-76e1-a8d2-f6ad77e39c83): needs-attention, three medium — a build shortcut with no builders left gate/spawn armed; Tune controls kept focus and swallowed Space and tool keys; equal-length reroutes left the shown route stale (key from 98f5d4d, not the simplify pass). No C2/C3 failure reproduced.
+- Fixes: red tests 03b759d (finding 3 a real assertion failure; findings 1 and 2 red only on a missing method/module in unit tests, with check-panel's real-click step failing "paused false → false; focus after the drag INPUT" on the red build), fixes 4e17d55, 00781d1, de0ab9c. Claude's Verify at de0ab9c: rc 0, w24r3 85/85, npm test 525/525, fingerprint IDENTICAL, check-render / check-queue / check-panel all passed.
+- Open: the Tune kind list keeps focus if opened with the pointer and closed without a change.
