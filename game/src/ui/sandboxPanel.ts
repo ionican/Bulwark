@@ -413,8 +413,11 @@ export class SandboxPanel {
     this.el.addEventListener('change', (e) => this.onChange(e));
     document.body.appendChild(this.el);
     this.els = this.lookUp();
-    // the time-controls box above moves only with the window
+    // under the time-controls box: placed again whenever that box changes size (its status line
+    // fills in and wraps after the first frames) or the window does, not on every redraw
     this.layout();
+    const timec = document.querySelector('.timec');
+    if (timec) new ResizeObserver(() => this.layout()).observe(timec);
     window.addEventListener('resize', () => this.layout());
   }
 
@@ -478,7 +481,7 @@ export class SandboxPanel {
     this.tick = s.tick;
   }
 
-  /** Under the time controls: run at construction, when the panel is shown, and on resize. */
+  /** Under the time controls: at construction, when the panel is shown, and when the box or the window resizes. */
   private layout(): void {
     const t = document.querySelector('.timec');
     const top = t && `${Math.round(t.getBoundingClientRect().bottom + 8)}px`;
