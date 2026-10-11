@@ -1,6 +1,7 @@
 // W29 (PLAN-W29 item 13 and Risks): every extractor in the scripted map 1 plans has a belt that is a
 // connected directed chain from a cell whose back faces the extractor to a cell pointing into the
-// core, queued at the extractor's priority (its minute, after it in the plan). The map 1 outcomes
+// core, queued at the extractor's priority (its minute, after it in the plan); a line may join an
+// earlier extractor's line from behind or the side. The map 1 outcomes
 // with belts are test/fullmap.test.ts.
 
 import { describe, expect, it } from 'vitest';
@@ -42,8 +43,11 @@ function chains(plan: PlanStep[]): string[] {
         problems.push(`extractor at ${tx},${ty}: the chain breaks at ${x},${z}`);
         return;
       }
+      // queued with this extractor (after it, same minute), or part of an earlier extractor's line
+      // that this one joins (queued no later): the core has 12 input cells and map 1 has 11
+      // extractors, several of them on the same side
       const bs = plan[b.i]!;
-      if (bs.min !== s.min || b.i < i) problems.push(`extractor at ${tx},${ty} (minute ${s.min}, step ${i}): belt ${x},${z} is minute ${bs.min}, step ${b.i}`);
+      if (b.i > i ? bs.min !== s.min : bs.min > s.min) problems.push(`extractor at ${tx},${ty} (minute ${s.min}, step ${i}): belt ${x},${z} is minute ${bs.min}, step ${b.i}`);
       if (seen.has(`${x},${z}`)) {
         problems.push(`extractor at ${tx},${ty}: the chain loops at ${x},${z}`);
         return;

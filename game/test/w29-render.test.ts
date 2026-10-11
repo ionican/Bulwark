@@ -15,12 +15,15 @@ import { itemGeometries } from '../src/render/geometry.ts';
 import { EntityRenderer } from '../src/render/entities.ts';
 import { Animator } from '../src/render/anim.ts';
 import { entitiesOf, inspectScene } from '../src/render/inspect.ts';
-import { CoreOverlay, inspectCore } from '../src/render/coreView.ts';
-import { buildingReadout } from '../src/render/buildingReadout.ts';
 import { economyText, type EconomyReadout } from '../src/ui/hud.ts';
 import { CAPACITY } from '../src/sim/world.ts';
 import { camera, draw, mobile, renderer, snapshotOf, terrain } from './w24r2a-fixtures.ts';
 import { beltLine, slot, steps } from './w29-fixtures.ts';
+
+// the two new modules are loaded per test, so the rest of this file runs (and fails on its
+// assertions) before they exist
+const coreView = () => import('../src/render/coreView.ts');
+const readouts = async () => (await import('../src/render/buildingReadout.ts')).buildingReadout;
 
 const positions = (g: BufferGeometry) => Array.from(g.getAttribute('position').array as ArrayLike<number>);
 const sameShape = (a: BufferGeometry, b: BufferGeometry) => {
@@ -76,7 +79,8 @@ describe('W29 the core drawn', () => {
     }
   });
 
-  it('a disabled core carries a hazard marker with the word DISABLED; an enabled one none', () => {
+  it('a disabled core carries a hazard marker with the word DISABLED; an enabled one none', async () => {
+    const { CoreOverlay, inspectCore } = await coreView();
     const w = createWorld(1, 'sandbox');
     const sc = new Scene();
     const o = new CoreOverlay(sc, terrain);
@@ -118,7 +122,8 @@ describe('W29 extractor motion', () => {
 });
 
 describe('W29 hover readouts and the resource readout', () => {
-  it('an extractor shows its buffer against its cap, and "full — not digging" when full', () => {
+  it('an extractor shows its buffer against its cap, and "full — not digging" when full', async () => {
+    const buildingReadout = await readouts();
     const { w, extractor } = beltLine(10, { belt: false });
     steps(w, 100);
     let lines = buildingReadout(snapshotOf(w), extractor, false)!.lines;
@@ -131,7 +136,8 @@ describe('W29 hover readouts and the resource readout', () => {
     expect(lines).toContain('full — not digging');
   });
 
-  it('the core shows hp, delivered mass and rare, and "disabled" at 0 hp', () => {
+  it('the core shows hp, delivered mass and rare, and "disabled" at 0 hp', async () => {
+    const buildingReadout = await readouts();
     const { w, core } = beltLine(10);
     steps(w, 100);
     let lines = buildingReadout(snapshotOf(w), core, false)!.lines;
@@ -144,7 +150,8 @@ describe('W29 hover readouts and the resource readout', () => {
     expect(lines.join('\n')).toMatch(/DISABLED/);
   });
 
-  it('a damaged building with builders selected says right-click repairs it; undamaged, no readout', () => {
+  it('a damaged building with builders selected says right-click repairs it; undamaged, no readout', async () => {
+    const buildingReadout = await readouts();
     const w = createWorld(1, 'sandbox');
     const gun = w.placeBuilding(B.gun, 48, 56, true);
     expect(buildingReadout(snapshotOf(w), gun, true)).toBeNull();
