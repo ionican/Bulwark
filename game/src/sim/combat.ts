@@ -12,7 +12,7 @@
 // fire interval include the sandbox tuning multipliers (tuning.ts); a projectile keeps the damage
 // it was fired with. Unlimited spending (sandbox) fires the heavy cannon without parts.
 
-import { BF_ACTIVE, BF_COMPLETE, BF_FIRING, BF_STARVED, T_ALIEN, T_BUILDING, T_NONE, T_UNIT } from './schema.ts';
+import { BF_ACTIVE, BF_COMPLETE, BF_DISABLED, BF_FIRING, BF_STARVED, T_ALIEN, T_BUILDING, T_NONE, T_UNIT } from './schema.ts';
 import { B, P_ALIEN, P_SHELL, SHIELD, TICK_SECONDS, U, WRECK_DECAY_PER_SECOND, alienInfo, buildingInfo, unitInfo, type Weapon } from './kinds.ts';
 import { turretDamage, turretInterval, turretRange } from './tuning.ts';
 import { recordAbsorbed, recordAlienDamage, recordHitOnAlien, recordShot } from './stats.ts';
@@ -221,6 +221,10 @@ function absorb(w: World, x: number, z: number, dmg: number): number {
 
 export function damageBuilding(w: World, s: number, dmg: number, srcType = T_NONE, srcKind = 0): void {
   const c = w.buildings.cols;
+  // W29 item 7: the one place the core's rule lives. A disabled core ignores every hit (shots in
+  // flight included); otherwise its hp clamps at 0, where it is disabled, never removed.
+  const core = c.kind[s] === B.core;
+  if (core && c.flags[s]! & BF_DISABLED) return;
   const wall = buildingInfo(c.kind[s]!).role === 'wall';
   if (!wall) {
     const [x, z] = centreOf(w, s);
@@ -230,7 +234,8 @@ export function damageBuilding(w: World, s: number, dmg: number, srcType = T_NON
   }
   if (dmg <= 0) return;
   const before = c.hp[s]!;
-  c.hp[s] = before - dmg;
+  c.hp[s] = core ? Math.max(0, before - dmg) : before - dmg;
+  if (core && c.hp[s]! <= 0) c.flags[s] = c.flags[s]! | BF_DISABLED;
   if (before > 0) recordAlienDamage(w, srcType, srcKind, wall ? 'wall' : 'building', Math.min(before, dmg));
   w.costDrift = true;
 }

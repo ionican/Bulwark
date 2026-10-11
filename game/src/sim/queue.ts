@@ -39,7 +39,7 @@
 
 import { B, buildingFootprint } from './kinds.ts';
 import { newSites, runById, runCapacityProblem, type RunCommand, type RunPlan } from './runs.ts';
-import { BF_COMPLETE, Q_BUILD, Q_MOVE, Q_PRODUCE, Q_RECLAIM, Q_RUN, isReserved } from './schema.ts';
+import { BF_COMPLETE, Q_BUILD, Q_MOVE, Q_PRODUCE, Q_RECLAIM, Q_REPAIR, Q_RUN, isReserved } from './schema.ts';
 import type { Order } from './units.ts';
 import type { World } from './world.ts';
 
@@ -56,6 +56,8 @@ export function orderKind(o: Order): number {
       return Q_PRODUCE;
     case 'reclaim':
       return Q_RECLAIM;
+    case 'repair':
+      return Q_REPAIR;
   }
 }
 
@@ -304,6 +306,7 @@ export function orderPosition(w: World, unitSlot: number, o: Order): [number, nu
     case 'move':
       return [o.x, o.z];
     case 'build':
+    case 'repair':
       return centre(w, o.id) ?? [-1, -1];
     case 'run': {
       const claimed = o.site >= 0 ? centre(w, o.site) : null;
@@ -326,5 +329,5 @@ export function orderPosition(w: World, unitSlot: number, o: Order): [number, nu
 
 /** The snapshot's target id of an order: building or wreck id, a run's claimed tile, -1 otherwise. */
 export function orderTarget(o: Order): number {
-  return o.t === 'build' || o.t === 'reclaim' ? o.id : o.t === 'run' ? o.site : -1;
+  return o.t === 'build' || o.t === 'reclaim' || o.t === 'repair' ? o.id : o.t === 'run' ? o.site : -1;
 }

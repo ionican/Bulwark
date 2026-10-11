@@ -8,6 +8,9 @@
 // Wall run (W24, runs.ts): one order per builder; it claims the next unclaimed tile of the run in
 // build order, builds it like a build order, then claims the next, until none is left unclaimed.
 // Speed and build power include the sandbox tuning multipliers (tuning.ts).
+// W29 repair: a builder walks into build range of a complete, damaged building and adds its build
+// power to the building's repair power (world.ts repairPower, applied by economy.ts stepRepair);
+// the order ends when the building is at full hit points or gone.
 
 import { BF_COMPLETE, BF_UPGRADING, US_BUILDING, US_IDLE, US_MOVING, US_RECLAIMING, US_UNLOADING, US_WAITING } from './schema.ts';
 import { B, CARRY_CAPACITY, RECLAIM_RATE, TICK_SECONDS, U, unitInfo } from './kinds.ts';
@@ -29,7 +32,9 @@ export type OrderSpec =
   /** Commander only: produce an engineer (progress 0..1). */
   | { t: 'produce'; progress: number }
   /** phase 0 collecting, 1 delivering; (x, z) where the last wreck was. */
-  | { t: 'reclaim'; id: number; phase: number; x: number; z: number };
+  | { t: 'reclaim'; id: number; phase: number; x: number; z: number }
+  /** W29: repair building `id` to full hit points. */
+  | { t: 'repair'; id: number };
 
 /**
  * A queued order. `oid` (W25c) is its id: given once from the world's counter (world.ts
@@ -116,7 +121,7 @@ function stepTo(w: World, s: number, x: number, z: number): boolean {
  * Builder s works on site slot b (id `id`): adds its build power when in range, otherwise walks
  * there. Returns false when the site cannot be reached (the caller drops the order).
  */
-function workOnSite(w: World, s: number, b: number, id: number, range: number, buildRate: number): boolean {
+function workOnSite(w: World, s: number, b: number, id: number, range: number, buildRate: number, repair = false): boolean {
   const c = w.units.cols;
   const W = w.terrain.w;
   // Footprint centre, inline (combat.ts centreOf allocates; this runs per builder per tick).
@@ -126,8 +131,11 @@ function workOnSite(w: World, s: number, b: number, id: number, range: number, b
   if (distToBuilding(w, b, c.x[s]!, c.z[s]!) <= range) {
     c.state[s] = US_BUILDING;
     c.work[s] = id + 1;
-    w.buildPower[b] = w.buildPower[b]! + buildRate;
-    w.builderCount[b] = Math.min(255, w.builderCount[b]! + 1);
+    if (repair) w.repairPower[b] = w.repairPower[b]! + buildRate;
+    else {
+      w.buildPower[b] = w.buildPower[b]! + buildRate;
+      w.builderCount[b] = Math.min(255, w.builderCount[b]! + 1);
+    }
     const dx = bx - c.x[s]!;
     const dz = bz - c.z[s]!;
     const d = Math.sqrt(dx * dx + dz * dz);
@@ -240,6 +248,17 @@ export function stepUnits(w: World): void {
         continue;
       }
       if (!workOnSite(w, s, b, order.id, info.buildRange, buildRate)) orders.shift();
+      continue;
+    }
+    if (order.t === 'repair') {
+      const b = w.buildings.slotForId(order.id);
+      const bc = w.buildings.cols;
+      if (b < 0 || !(bc.flags[b]! & BF_COMPLETE) || bc.hp[b]! >= bc.maxHp[b]!) {
+        orders.shift();
+        w.paths[s] = null;
+        continue;
+      }
+      if (!workOnSite(w, s, b, order.id, info.buildRange, buildRate, true)) orders.shift();
       continue;
     }
     if (order.t === 'run') {

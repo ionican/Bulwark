@@ -6,7 +6,7 @@
 
 import { map1 } from '../../../model/data/map1.ts';
 import type { BuildingDef, WeaponDef } from '../../../model/src/types.ts';
-import { BUILD_RATE, HEAVY_T2, RARE_EXTRACTOR_OUTPUT, gateStats } from './balance.ts';
+import { BELT_COST_MASS, BUILD_RATE, CORE_HP, CORE_REPAIR_TIME, HEAVY_T2, RARE_EXTRACTOR_OUTPUT, gateStats } from './balance.ts';
 
 export const METRES_PER_TILE = 2;
 export const TICK_HZ = 10;
@@ -45,12 +45,17 @@ export const BUILDING_KINDS = [
   'merger',
   // W24: appended (the order is part of the snapshot format).
   'gate',
+  // W29: appended.
+  'core',
 ] as const;
 export type BuildingKind = (typeof BUILDING_KINDS)[number];
 export const B = Object.fromEntries(BUILDING_KINDS.map((k, i) => [k, i])) as Record<BuildingKind, number>;
 
-/** What an alien target category sees a building as. */
-export type BuildingRole = 'economy' | 'chain' | 'wall' | 'defence' | 'floor';
+/**
+ * What an alien target category sees a building as. 'core' (W29) is no category's goal: aliens
+ * attack it only in passing (aliens.ts).
+ */
+export type BuildingRole = 'economy' | 'chain' | 'wall' | 'defence' | 'floor' | 'core';
 
 export interface Weapon {
   /** Tiles. */
@@ -108,7 +113,10 @@ export const ITEM_SALVAGE = 1;
 export const ITEM_SCRAP = 2;
 export const ITEM_ALLOY = 3;
 export const ITEM_PART = 4;
-export const ITEM_NAMES = ['', 'salvage', 'scrap', 'alloy', 'part'] as const;
+// W29: mined resources on belts, one unit each (appended).
+export const ITEM_MASS = 5;
+export const ITEM_RARE = 6;
+export const ITEM_NAMES = ['', 'salvage', 'scrap', 'alloy', 'part', 'mass', 'rare'] as const;
 
 function weapon(w: WeaponDef, shot: number, shotSpeed: number): Weapon {
   return {
@@ -155,7 +163,7 @@ const INFO: Record<BuildingKind, BuildingInfo> = {
   shield: { label: bd.shield.label, fw: 2, fh: 2, hp: bd.shield.hp, cost: costOf(bd.shield), buildTime: bd.shield.buildTime, role: 'defence', key: '6' },
   tempTurret: { label: 'Temporary turret', fw: 1, fh: 1, hp: map1.tempTurret.hp, cost: [0, 0, 0], buildTime: 1, role: 'defence', weapon: weapon(map1.tempTurret.weapon, P_BULLET, 30), key: '' },
   // Belt pieces: not in W12. First-pass numbers; cheap so a chain is a layout question, not a cost one.
-  belt: { label: 'Conveyor belt', fw: 1, fh: 1, hp: 100, cost: [2, 0, 0], buildTime: 4, role: 'floor', key: 'b' },
+  belt: { label: 'Conveyor belt', fw: 1, fh: 1, hp: 100, cost: [BELT_COST_MASS, 0, 0], buildTime: 4, role: 'floor', key: 'b' },
   splitter: { label: 'Splitter', fw: 1, fh: 1, hp: 150, cost: [10, 20, 0], buildTime: 10, role: 'floor', key: 'v' },
   merger: { label: 'Merger', fw: 1, fh: 1, hp: 150, cost: [10, 20, 0], buildTime: 10, role: 'floor', key: 'n' },
   // W24 gate: converted from finished walls only (gate.ts), never placed from the build bar. Its
@@ -172,6 +180,9 @@ const INFO: Record<BuildingKind, BuildingInfo> = {
     tiers: tiersOf(bd.wall),
     key: '',
   },
+  // W29: placed complete by createWorld on map 1 and in the sandbox; never built, reclaimed or
+  // upgraded. buildTime is the repair time (repair restores maxHp per construction time).
+  core: { label: 'Core', fw: 3, fh: 3, hp: CORE_HP, cost: [0, 0, 0], buildTime: CORE_REPAIR_TIME, role: 'core', key: '' },
 };
 /**
  * Every kind's fixed properties. `size` is W13's square footprint side, kept only because look/

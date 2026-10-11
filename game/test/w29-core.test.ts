@@ -66,6 +66,8 @@ describe('W29 the core on map 1 and in the sandbox', () => {
       expect(w.walk[cell]).toBe(0);
     }
     for (let cat = 0; cat < 4; cat++) w.rebuildField(cat);
+    // routes are traced when fields are rebuilt within a step (two a tick); trace all four now
+    w.computeRoutes();
     for (const r of w.routes) for (const cell of r.cells) expect(cells.includes(cell), `route ${r.category} from entry ${r.entry}`).toBe(false);
     // the commander's field still reaches the commander from both entries
     for (const r of w.routes.filter((q) => q.category === 0)) expect(r.cells.length).toBeGreaterThan(30);

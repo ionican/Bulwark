@@ -8,9 +8,14 @@
 // W24: the first tick build power reaches a site it becomes started (world.ts startSite). With the
 // sandbox's unlimited spending on, construction, upgrades, research, engineers and energy upkeep
 // progress at full supply and draw nothing; income is unchanged.
+// W29: with belts on (World.belts) a complete extractor digs into its own buffer (the stock
+// column) up to EXTRACTOR_BUFFER_SECONDS of output and stops when full (BF_IDLE); conveyor.ts puts
+// the buffer on a belt one item at a time and the core adds what it takes to the pool. The mass and
+// rare income rates are then what the core took over the last 10 s, plus the commander's income.
+// Repair (stepRepair) adds hit points free, from repair power the units delivered this tick.
 
-import { BF_ACTIVE, BF_COMPLETE, BF_STARTED, BF_STARVED, BF_UPGRADING } from './schema.ts';
-import { B, COMMANDER_INCOME, SHIELD, TICK_SECONDS, buildingInfo, type Cost } from './kinds.ts';
+import { BF_ACTIVE, BF_COMPLETE, BF_DISABLED, BF_IDLE, BF_STARTED, BF_STARVED, BF_UPGRADING } from './schema.ts';
+import { B, COMMANDER_INCOME, SHIELD, TICK_SECONDS, buildingInfo, siteWork, type Cost } from './kinds.ts';
 import { ENGINEER_BUILD_TIME, ENGINEER_COST, RESEARCH } from './balance.ts';
 import { map1 } from '../../../model/data/map1.ts';
 
@@ -36,11 +41,22 @@ export function stepEconomyIncome(w: World): void {
   let m = 0;
   let e = 0;
   let r = 0;
+  const belts = w.belts;
   for (let s = 0; s < b.highWater; s++) {
     if (!b.alive[s] || !(c.flags[s]! & BF_COMPLETE)) continue;
     const kind = c.kind[s]!;
     const inc = buildingInfo(kind).income;
     if (!inc) continue;
+    if (belts && (kind === B.massExtractor || kind === B.rareExtractor)) {
+      // Dig into the buffer up to its cap; what was actually added (after the f32 store) is counted.
+      const cap = w.extractorCap(kind);
+      const before = c.stock[s]!;
+      c.stock[s] = Math.min(cap, before + w.extractorRate(kind) * DT);
+      const k = kind === B.massExtractor ? 0 : 1;
+      if (c.stock[s]! > before) w.dug[k] = w.dug[k]! + (c.stock[s]! - before);
+      c.flags[s] = c.stock[s]! >= cap ? c.flags[s]! | BF_IDLE : c.flags[s]! & ~BF_IDLE;
+      continue;
+    }
     m += kind === B.massExtractor ? inc[0] * w.extractorOutput() : inc[0];
     e += inc[1];
     r += inc[2];
@@ -50,9 +66,23 @@ export function stepEconomyIncome(w: World): void {
     e += COMMANDER_INCOME[1];
     r += COMMANDER_INCOME[2];
   }
+  // The pool gains m, e, r per second here; with belts the rates also count the deliveries of the
+  // last 10 s (already in the pool, added by the core as they came).
   w.incomeRate[0] = m;
   w.incomeRate[1] = e;
   w.incomeRate[2] = r;
+  if (belts) {
+    const ring = w.deliveryRing;
+    let dm = 0;
+    let dr = 0;
+    for (let i = 0; i < ring.length; i += 2) {
+      dm += ring[i]!;
+      dr += ring[i + 1]!;
+    }
+    const secs = (ring.length / 2) * DT;
+    w.incomeRate[0] = m + dm / secs;
+    w.incomeRate[2] = r + dr / secs;
+  }
   w.pool[0] = w.pool[0]! + m * DT;
   w.pool[1] = w.pool[1]! + e * DT;
   w.pool[2] = w.pool[2]! + r * DT;
@@ -196,6 +226,29 @@ export function stepConstruction(w: World): void {
     }
     for (let k = 0; k < 3; k++) if (w.pool[k]! < 0 && w.pool[k]! > -1e-9) w.pool[k] = 0;
     j.done(done, f);
+  }
+}
+
+/**
+ * W29 repair: each building given repair power this tick gains buildPower × maxHp ÷ repairTime per
+ * second, free, where repairTime is its own construction time (siteWork without the upgrade, so a
+ * gate's footprint counts and an upgrade under way does not change it; the core's is
+ * CORE_REPAIR_TIME). A core repaired to full is enabled again.
+ */
+export function stepRepair(w: World): void {
+  const b = w.buildings;
+  const c = b.cols;
+  const p = w.repairPower;
+  for (let s = 0; s < b.highWater; s++) {
+    const bp = p[s]!;
+    if (bp <= 0) continue;
+    p[s] = 0;
+    if (!b.alive[s] || !(c.flags[s]! & BF_COMPLETE)) continue;
+    const time = siteWork(c.kind[s]!, false, c.tier[s]!, c.fw[s]!, c.fh[s]!).time;
+    const max = c.maxHp[s]!;
+    c.hp[s] = Math.min(max, c.hp[s]! + (bp * max * DT) / time);
+    if (c.hp[s]! >= max && c.flags[s]! & BF_DISABLED) c.flags[s] = c.flags[s]! & ~BF_DISABLED;
+    w.costDrift = true;
   }
 }
 

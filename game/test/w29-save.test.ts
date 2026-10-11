@@ -16,6 +16,8 @@ import type { World } from '../src/sim/world.ts';
 import { itemsOnBelts } from './w29-fixtures.ts';
 
 const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
+/** The save's bytes as a plain Uint8Array (a Node Buffer's slice() shares memory, which deserializeWorld does not expect). */
+const saveBytes = (name: string) => new Uint8Array(readFileSync(fixture(name)));
 const snapOf = (w: World) => snapshotBytes(encodeSnapshot(w)).slice();
 const same = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
 
@@ -58,7 +60,7 @@ describe('W29 saves', () => {
   it('a populated d82db0b save loads as an instant-economy world with the same per-kind statistics', () => {
     const ref = JSON.parse(readFileSync(fixture('d82db0b-map1.json'), 'utf8'));
     expect([ref.saveVersion, ref.stateFormat]).toEqual([3, 6]);
-    const w = deserializeWorld(readFileSync(fixture('d82db0b-map1.save')));
+    const w = deserializeWorld(saveBytes('d82db0b-map1.save'));
     expect(w.belts).toBe(false);
     expect(w.coreId).toBe(-1);
     expect(w.tick).toBe(ref.tick);
@@ -80,7 +82,7 @@ describe('W29 saves', () => {
   });
 
   it('the d82db0b save runs on deterministically (straight on, and through a save and load half-way)', () => {
-    const bytes = readFileSync(fixture('d82db0b-map1.save'));
+    const bytes = saveBytes('d82db0b-map1.save');
     const a = deserializeWorld(bytes);
     let b = deserializeWorld(bytes);
     for (let t = 0; t < 300; t++) {

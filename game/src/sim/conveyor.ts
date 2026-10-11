@@ -9,13 +9,20 @@
 // and puts its output on a belt whose back faces it. The depot does the same with salvage the
 // engineers delivered. The assembler's parts go straight into the shared parts stock.
 // Belts are processed downstream first, so a moving queue advances together in one tick.
+// W29: with belts on, an extractor puts its buffer on a belt whose back faces it, one mass or rare
+// item per tick while the buffer holds at least 1 (the depot's rule). The core takes mass and rare
+// items from a belt pointing into any of its perimeter cells (each belt tile moves at most one item
+// a tick, so one item per input cell per tick) and adds each to the pool; it refuses every other
+// item, and everything while disabled, so the belt backs up.
 
-import { BF_ACTIVE, BF_COMPLETE, BF_STARVED } from './schema.ts';
-import { B, BELT_TILES_PER_SECOND, ITEM_NONE, ITEM_PART, ITEM_SALVAGE, TICK_SECONDS, buildingInfo, isBelt } from './kinds.ts';
+import { BF_ACTIVE, BF_COMPLETE, BF_DISABLED, BF_STARVED } from './schema.ts';
+import { B, BELT_TILES_PER_SECOND, ITEM_MASS, ITEM_NONE, ITEM_PART, ITEM_RARE, ITEM_SALVAGE, TICK_SECONDS, buildingInfo, isBelt } from './kinds.ts';
 import type { World } from './world.ts';
 
 const DT = TICK_SECONDS;
 const SPEED = BELT_TILES_PER_SECOND * DT;
+/** An extractor buffer this close to 1 holds a whole item (f32 sums of 0.1 land either side of 1). */
+const WHOLE = 1 - 1e-4;
 /** Belt direction 0..3: +x, +z, -x, -z. */
 export const BDX = [1, 0, -1, 0] as const;
 export const BDZ = [0, 1, 0, -1] as const;
@@ -89,6 +96,16 @@ function offer(w: World, srcCell: number, cell: number, item: number, carry: num
   if (t < 0 || !isComplete(w, t)) return false;
   const c = w.buildings.cols;
   const kind = c.kind[t]!;
+  if (kind === B.core) {
+    if (c.flags[t]! & BF_DISABLED || (item !== ITEM_MASS && item !== ITEM_RARE)) return false;
+    const k = item === ITEM_MASS ? 0 : 1;
+    const res = item === ITEM_MASS ? 0 : 2;
+    w.pool[res] = w.pool[res]! + 1;
+    w.delivered[k] = w.delivered[k]! + 1;
+    const r = w.deliveryCursor * 2 + k;
+    w.deliveryRing[r] = w.deliveryRing[r]! + 1;
+    return true;
+  }
   if (isBelt(kind)) {
     if (c.item[t] !== ITEM_NONE) return false;
     const side = sideOf(w, t, srcCell);
@@ -148,10 +165,20 @@ export function stepConveyors(w: World): void {
   const b = w.buildings;
   const c = b.cols;
   const u = w.upkeep;
-  // Machines and depots.
+  const belts = w.belts;
+  // This tick's slot of the delivery ring (the income rates' window), written by the core.
+  if (belts) {
+    w.deliveryRing[w.deliveryCursor * 2] = 0;
+    w.deliveryRing[w.deliveryCursor * 2 + 1] = 0;
+  }
+  // Machines, depots and (belts on) extractors.
   for (let s = 0; s < b.highWater; s++) {
     if (!b.alive[s] || !isComplete(w, s)) continue;
     const kind = c.kind[s]!;
+    if (belts && (kind === B.massExtractor || kind === B.rareExtractor)) {
+      if (c.stock[s]! >= WHOLE && output(w, s, kind === B.massExtractor ? ITEM_MASS : ITEM_RARE)) c.stock[s] = c.stock[s]! - 1;
+      continue;
+    }
     if (kind === B.depot) {
       if (c.stock[s]! >= 1 && output(w, s, ITEM_SALVAGE)) c.stock[s] = c.stock[s]! - 1;
       continue;
@@ -198,4 +225,5 @@ export function stepConveyors(w: World): void {
       c.itemPos[s] = 0;
     }
   }
+  if (belts) w.deliveryCursor = (w.deliveryCursor + 1) % (w.deliveryRing.length / 2);
 }

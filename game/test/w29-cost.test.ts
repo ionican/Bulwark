@@ -28,7 +28,8 @@ describe('W29 belt cost', () => {
       for (let t = 0; t < 30; t++) w.step();
       const s = w.buildings.slotForId(w.buildings.id(0));
       expect(w.buildings.cols.progress[s]).toBe(1);
-      expect(w.spentTotal[0]).toBeCloseTo(0.5, 9);
+      // progress is stored as f32, so the drain over a build is the cost to about 1e-8 (economy.ts PROGRESS_SNAP)
+      expect(w.spentTotal[0]).toBeCloseTo(0.5, 6);
       expect(w.spentTotal[1]).toBe(0);
     });
   }

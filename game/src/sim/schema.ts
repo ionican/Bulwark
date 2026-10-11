@@ -32,7 +32,7 @@ export const BUILDING_FIELDS = [
   { name: 'inBuf', type: 'u8' },
   { name: 'outBuf', type: 'u8' },
   { name: 'work', type: 'f32' },
-  /** Depot: salvage held. */
+  /** Depot: salvage held. W29 extractors with belts on: their buffer (mass or rare dug, not yet on a belt). */
   { name: 'stock', type: 'f32' },
   /** Turrets: alien id of the current target + 1 (0 = none). */
   { name: 'target', type: 'u32' },
@@ -60,6 +60,13 @@ export const BF_ACTIVE = 16;
  * flow costs at its current hit points. A complete building has BF_COMPLETE (and BF_STARTED).
  */
 export const BF_STARTED = 32;
+/** W29: the core at 0 hp: it stays, refuses items and is no alien's target until repaired to full. */
+export const BF_DISABLED = 64;
+/**
+ * W29: a complete extractor with belts on whose buffer is full, so it is not digging this tick (the
+ * renderer stops its digging motion by it).
+ */
+export const BF_IDLE = 128;
 
 /** True for a site no build power has reached yet (W24 construction state "reserved"). */
 export const isReserved = (flags: number): boolean => (flags & (BF_STARTED | BF_COMPLETE)) === 0;
@@ -85,7 +92,15 @@ export const ALIEN_FIELDS = [
   /** Stress scene only: wander goal. */
   { name: 'goalX', type: 'f32', snap: false },
   { name: 'goalZ', type: 'f32', snap: false },
+  /** W29: the core pass (PASS_*), and the tick the attack in passing ends. */
+  { name: 'pass', type: 'u8', snap: false },
+  { name: 'passUntil', type: 'i32', snap: false },
 ] as const satisfies readonly FieldSpec[];
+
+/** W29 core pass states (aliens.ts): not started, attacking the core until passUntil, spent. */
+export const PASS_NONE = 0;
+export const PASS_ATTACKING = 1;
+export const PASS_SPENT = 2;
 
 export const AS_MOVING = 0;
 export const AS_ATTACKING = 1;
@@ -138,6 +153,8 @@ export const Q_BUILD = 1;
 export const Q_RUN = 2;
 export const Q_PRODUCE = 3;
 export const Q_RECLAIM = 4;
+/** W29: repair a damaged building. */
+export const Q_REPAIR = 5;
 
 export const WRECK_FIELDS = [
   { name: 'kind', type: 'u8' },

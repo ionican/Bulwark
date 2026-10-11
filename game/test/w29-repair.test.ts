@@ -103,7 +103,9 @@ describe('W29 repair', () => {
     const spent0 = w.spentTotal[0]!;
     const p0 = c.progress[s]!;
     const during = gain(w, s, 10);
-    expect(during).toBeCloseTo(before, 6);
+    // hit points are f32: the per-tick gain carries their rounding (about 1e-6 at these values)
+    expect(during).toBeCloseTo(before, 4);
+    expect(during).toBeCloseTo(oracle, 3);
     expect(c.progress[s]!).toBeGreaterThan(p0);
     expect(w.spentTotal[0]!).toBeGreaterThan(spent0);
   });

@@ -16,6 +16,9 @@
 // make it their goal and shoot it, as in W13), then started (blocks units and aliens, flow cost at
 // its current hit points), then complete. Any unit or alien
 // on a tile the tick it becomes started is moved to the nearest free passable tile (startSite).
+// W29: with `belts` on, extractors fill their own buffers and their output reaches the pool only
+// when the core takes it off a belt (economy.ts, conveyor.ts); after construction, repair power is
+// applied (economy.ts stepRepair). The core is never removed: at 0 hp it is disabled (combat.ts).
 
 import {
   ALIEN_FIELDS,
@@ -53,13 +56,15 @@ import { TILE_GROUND, TILE_MASS, TILE_RARE, TILE_ROCK, map1Terrain, tileAt, type
 import { FlowField } from './flowfield.ts';
 import { Pathfinder } from './pathfind.ts';
 import type { Command, StampedCommand } from './commands.ts';
-import { stepEconomyIncome, stepUpkeep, stepConstruction } from './economy.ts';
+import { stepEconomyIncome, stepUpkeep, stepConstruction, stepRepair } from './economy.ts';
 import { stepConveyors } from './conveyor.ts';
 import { acquireTargets, fireTurrets, stepProjectiles, stepShieldsAndTimers, AlienGrid } from './combat.ts';
 import { stepAliens } from './aliens.ts';
 import { stepUnits, type Order, type OrderSpec } from './units.ts';
 import { dequeueIndex, dropOrphans, ownReservedSite, replacementProblem, worldSiteSource } from './queue.ts';
 import { validateCommand, upgradeProblem } from './validate.ts';
+import { damageBuilding } from './combat.ts';
+import { EXTRACTOR_BUFFER_SECONDS } from './balance.ts';
 import { COMMANDER_WRECK_SALVAGE, RESEARCH, RESEARCH_INDEX, SANDBOX_RESPAWN_TICKS, callEarlyBonus, EXTRACTOR_BOOST, FIELD_ENG_TURRET_COOLDOWN } from './balance.ts';
 import { map1 } from '../../../model/data/map1.ts';
 import { START_ENGINEERS, TICK_HZ, siteWork } from './kinds.ts';
@@ -75,6 +80,9 @@ import { WRECK_COMMANDER, applySpawnAt, clearAliens, clearWrecks, originRoutes, 
 export const MAX_ORDERS = 64;
 
 export const CAPACITY = { buildings: 4096, aliens: 4096, units: 256, wrecks: 4096, projectiles: 4096 } as const;
+
+/** W29: ticks of deliveries the mass and rare income rates average over (10 s). */
+export const DELIVERY_WINDOW = 100;
 
 /** Resolved goal set of a flow field. */
 export const GOAL_TURRETS = 0;
@@ -251,6 +259,26 @@ export class World {
   buildingsLost = 0;
   unitsLost = 0;
 
+  // ---- W29: belts and the core ----
+  /** Extractor output reaches the pool by belt through the core (map 1, the sandbox); false: straight to the pool. */
+  belts = false;
+  /** The core's building id, -1 when there is none. */
+  coreId = -1;
+  /** Mass and rare the core has taken off belts. */
+  readonly delivered = new Float64Array(2);
+  /** Mass and rare dug into extractor buffers (belts on). */
+  readonly dug = new Float64Array(2);
+  /** Exact cumulative spending per resource: every tick's spendTick added up. */
+  readonly spentTotal = new Float64Array(3);
+  /**
+   * Mass and rare the core took in each of the last DELIVERY_WINDOW ticks (pairs), and the pair
+   * this tick writes. The income rates are their sum ÷ 10 s; saved, so a load gives the same rates.
+   */
+  readonly deliveryRing = new Float64Array(DELIVERY_WINDOW * 2);
+  deliveryCursor = 0;
+  /** Repair power delivered to each building slot this tick (units.ts), applied by economy.ts stepRepair. */
+  readonly repairPower: Float64Array;
+
   // ---- research ----
   /** Bit i set: RESEARCH[i] done. Never cleared within a map. */
   researchDone = 0;
@@ -263,8 +291,11 @@ export class World {
   /** Supply ratio the current research got last tick. */
   researchEff = 1;
 
-  /** `waves: false` gives a world with no wave schedule (test maps, the sandbox). */
-  constructor(seed: number, terrain: Terrain = map1Terrain(), opts: { waves?: boolean } = {}) {
+  /**
+   * `waves: false` gives a world with no wave schedule (test maps, the sandbox). `belts` (W29,
+   * default false): extractor output travels by belt to the core instead of straight to the pool.
+   */
+  constructor(seed: number, terrain: Terrain = map1Terrain(), opts: { waves?: boolean; belts?: boolean } = {}) {
     this.seed = seed >>> 0;
     this.rng = new Rng(this.seed);
     this.terrain = terrain;
@@ -278,6 +309,8 @@ export class World {
     this.pathfinder = new Pathfinder(terrain.w, terrain.h);
     this.buildPower = new Float64Array(CAPACITY.buildings);
     this.builderCount = new Uint8Array(CAPACITY.buildings);
+    this.repairPower = new Float64Array(CAPACITY.buildings);
+    this.belts = opts.belts ?? false;
     this.alienGrid = new AlienGrid(terrain.w, terrain.h, CAPACITY.aliens);
     this.pool.set(START_STOCK);
     this.waveTicks = opts.waves === false ? new Int32Array(0) : Int32Array.from(map1.waves.map((wv) => Math.round(wv.at * TICK_HZ)));
@@ -355,13 +388,17 @@ export class World {
     stepConveyors(this);
     stepUnits(this);
     stepConstruction(this);
+    stepRepair(this);
     stepRuns(this);
     fireTurrets(this);
     stepProjectiles(this);
     stepAliens(this);
     this.removeDead();
     stepShieldsAndTimers(this);
-    for (let k = 0; k < 3; k++) this.spendRate[k] = this.spendRate[k]! * 0.9 + this.spendTick[k]! * 10 * 0.1;
+    for (let k = 0; k < 3; k++) {
+      this.spendRate[k] = this.spendRate[k]! * 0.9 + this.spendTick[k]! * 10 * 0.1;
+      this.spentTotal[k] = this.spentTotal[k]! + this.spendTick[k]!;
+    }
     // Win: every wave has arrived and been destroyed (map 1 is survive-only).
     if (this.outcome === 0 && this.waveTicks.length > 0 && this.nextWave >= this.waveTicks.length && this.pendingSpawns === 0 && this.aliens.count === 0) {
       this.outcome = 2;
@@ -596,6 +633,18 @@ export class World {
       case 'resetSandbox':
         this.resetSandbox(cmd.full ?? false);
         break;
+      case 'repair': {
+        if (this.buildings.slotForId(cmd.target) >= 0) this.orderAll(cmd.ids, () => ({ t: 'repair', id: cmd.target }), cmd.queue);
+        break;
+      }
+      case 'damage': {
+        const b = this.buildings.slotForId(cmd.target);
+        if (b >= 0) damageBuilding(this, b, cmd.amount);
+        break;
+      }
+      case 'fillBuffers':
+        this.fillBuffers();
+        break;
     }
   }
 
@@ -609,6 +658,29 @@ export class World {
     const [tx, ty, fw, fh, dir] = gateFootprint(check);
     for (const [x, z] of check.tiles) this.removeBuilding(this.occupancy[z * this.terrain.w + x]! - 1);
     return this.placeBuilding(B.gate, tx, ty, false, dir, fw, fh);
+  }
+
+  /** Sandbox debug (W29): every complete extractor's buffer to its cap (economy.ts extractorCap). */
+  fillBuffers(): void {
+    const c = this.buildings.cols;
+    for (let s = 0; s < this.buildings.highWater; s++) {
+      if (!this.buildings.alive[s] || !(c.flags[s]! & BF_COMPLETE)) continue;
+      const cap = this.extractorCap(c.kind[s]!);
+      if (cap > 0) c.stock[s] = cap;
+    }
+  }
+
+  /** W29: what an extractor of `kind` digs per second (with research), 0 for any other kind. */
+  extractorRate(kind: number): number {
+    const inc = buildingInfo(kind).income;
+    if (kind === B.massExtractor) return inc![0] * this.extractorOutput();
+    if (kind === B.rareExtractor) return inc![2];
+    return 0;
+  }
+
+  /** W29: an extractor's buffer cap, EXTRACTOR_BUFFER_SECONDS of its output (0 for other kinds). */
+  extractorCap(kind: number): number {
+    return EXTRACTOR_BUFFER_SECONDS * this.extractorRate(kind);
   }
 
   /** Commander and the map 1 starting engineers at the base (map 1 and the sandbox). */
@@ -708,6 +780,7 @@ export class World {
     c.flags[slot] = complete ? BF_COMPLETE | BF_STARTED : 0;
     c.moved[slot] = -1;
     if (kind === B.tempTurret) c.life[slot] = 30;
+    if (kind === B.core) this.coreId = b.id(slot);
     const w = this.terrain.w;
     for (let j = 0; j < h0; j++) for (let i = 0; i < w0; i++) this.occupancy[(ty + j) * w + tx + i] = slot + 1;
     this.structureChanged();
@@ -716,6 +789,7 @@ export class World {
 
   removeBuilding(slot: number): void {
     const c = this.buildings.cols;
+    if (this.buildings.id(slot) === this.coreId) this.coreId = -1;
     const fw = c.fw[slot]!;
     const fh = c.fh[slot]!;
     const w = this.terrain.w;
@@ -926,6 +1000,15 @@ export class World {
         continue;
       }
       const kind = bc.kind[occ]!;
+      if (kind === B.core) {
+        // W29 item 3a: impassable like rock in every grid, enabled or disabled, so routes go round
+        // it and no alien tries to break through it (it is attacked only in passing: aliens.ts).
+        this.cost[i] = -1;
+        this.costBypass[i] = -1;
+        this.open[i] = 0;
+        this.walk[i] = 0;
+        continue;
+      }
       if (kind === B.gate) {
         // Every gate tile is wall to aliens, at the gate's hit points ÷ depth, so the gate's
         // breaking cost is charged once along a route (gate.ts). Units: the centre column only,
@@ -1092,6 +1175,8 @@ export class World {
     const bc = b.cols;
     for (let s = 0; s < b.highWater; s++) {
       if (!b.alive[s] || bc.hp[s]! > 0) continue;
+      // W29: the core is disabled at 0 hp, never removed (combat.ts damageBuilding).
+      if (bc.kind[s] === B.core) continue;
       if (this.debug.indestructible) {
         bc.hp[s] = 1;
         continue;

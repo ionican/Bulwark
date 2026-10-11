@@ -116,6 +116,24 @@ export const SPAWN_AT_MAX = 50;
 /** Deepest wall run, in rows (validate.ts buildRun; the Build tab's depth buttons). */
 export const MAX_RUN_DEPTH = 4;
 
+// ---- belts and the core (W29) ---------------------------------------------------------------
+/** Mass per belt tile (Richard's 0.5, PLAN W29 item 6; was 2). Splitter and merger keep their cost. */
+export const BELT_COST_MASS = 0.5;
+/** An extractor's buffer holds this many seconds of its output, then stops digging (W29 model). */
+export const EXTRACTOR_BUFFER_SECONDS = 180;
+/** Core hit points (W29 model). At 0 it is disabled, not destroyed. */
+export const CORE_HP = 4000;
+/** Seconds an alien attacks the core in passing before it moves on (W29 model). */
+export const CORE_PASS_SECONDS = 5;
+/** Build-power-seconds to repair the core from 0 (first pass: the commander alone takes 25 s). */
+export const CORE_REPAIR_TIME = 200;
+/**
+ * The core's anchor tile relative to the map's base (first pass): on map 1, tiles x 61–63, z 63–65,
+ * centre (62.5, 64.5), 2 tiles west of the commander's start (64.5, 64.5); clear of the start units
+ * and of every footprint in test/plans.ts (the area cannon at 59,62, the shields at 63,61 and 60,66).
+ */
+export const CORE_OFFSET: readonly [number, number] = [-3, -1];
+
 // ---- adjustments to W12 numbers ------------------------------------------------------------
 // Each is listed in the README with its reason. Nothing else in the game changes a W12 number.
 
