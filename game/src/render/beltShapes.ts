@@ -10,9 +10,12 @@
 // "Right" is the right of the flow: direction (d + 1) mod 4, the model's +z side (models.ts turns
 // the +x model by BELT_YAW). Splitters and mergers keep their own models. Rows are keyed per tile,
 // and the shapes are worked out again only when the key changes (a belt laid, removed, turned).
+// "Behind" counts a building too: a complete building that puts items on belts (kinds.ts
+// outputsToBelts: an extractor with belts on, a depot, a chain machine) feeds each cell of its
+// outputRing whose belt points away from it, as conveyor.ts does.
 
-import { B, BDX as DX, BDZ as DZ, outputDirs } from '../sim/kinds.ts';
-import { BF_COMPLETE, BF_STARTED } from '../sim/schema.ts';
+import { B, BDX as DX, BDZ as DZ, outputDirs, outputRing, outputsToBelts } from '../sim/kinds.ts';
+import { BF_COMPLETE, BF_STARTED, G_BELTS } from '../sim/schema.ts';
 import type { Snapshot } from '../sim/snapshot.ts';
 
 export const BELT_STRAIGHT = 0;
@@ -37,7 +40,10 @@ const KIND_SPLITTER = 2;
 const KIND_MERGER = 3;
 
 export class BeltShapes {
-  /** Per tile: 0 none, else kind code | dir << 2. */
+  /**
+   * Per tile: bits 0–1 the belt piece's kind code (0 none), bits 2–3 its direction, bits 4–7 the
+   * away directions a building outputs into this cell with (bit 4 + a: direction a).
+   */
   private key: Uint8Array;
   private next: Uint8Array;
   private readonly shape: Uint8Array;
@@ -73,15 +79,23 @@ export class BeltShapes {
     const k = this.next;
     k.fill(0);
     const c = s.buildings.cols;
+    const belts = s.globals[G_BELTS] === 1;
     for (let r = 0; r < s.buildings.count; r++) {
       const kind = c.kind[r]!;
       const code = kind === B.belt ? KIND_BELT : kind === B.splitter ? KIND_SPLITTER : kind === B.merger ? KIND_MERGER : 0;
+      if (!code) {
+        if (!(c.flags[r]! & BF_COMPLETE) || !outputsToBelts(kind, belts)) continue;
+        for (const [x, z, away] of outputRing(c.tx[r]!, c.ty[r]!, c.fw[r]!, c.fh[r]!))
+          if (x >= 0 && z >= 0 && x < this.w && z < this.h) k[z * this.w + x] = k[z * this.w + x]! | (1 << (4 + away));
+        continue;
+      }
       // a reserved site has nothing drawn yet (models.ts draws its outline only)
-      if (!code || !(c.flags[r]! & (BF_STARTED | BF_COMPLETE))) continue;
+      if (!(c.flags[r]! & (BF_STARTED | BF_COMPLETE))) continue;
       const x = c.tx[r]!;
       const z = c.ty[r]!;
       if (x < 0 || z < 0 || x >= this.w || z >= this.h) continue;
-      k[z * this.w + x] = code | ((c.dir[r]! & 3) << 2);
+      const i = z * this.w + x;
+      k[i] = (k[i]! & 0xf0) | code | ((c.dir[r]! & 3) << 2);
     }
     let same = true;
     for (let i = 0; i < k.length && same; i++) if (k[i] !== this.key[i]) same = false;
@@ -95,7 +109,7 @@ export class BeltShapes {
   /** Does the piece at (x, z) put items into its neighbour in direction `toward` (from the piece)? */
   private feeds(x: number, z: number, toward: number): boolean {
     if (x < 0 || z < 0 || x >= this.w || z >= this.h) return false;
-    const k = this.key[z * this.w + x]!;
+    const k = this.key[z * this.w + x]! & 0x0f;
     if (!k) return false;
     const kind = (k & 3) === KIND_SPLITTER ? B.splitter : (k & 3) === KIND_MERGER ? B.merger : B.belt;
     return outputDirs(kind, k >> 2).includes(toward);
@@ -107,12 +121,13 @@ export class BeltShapes {
     for (let i = 0; i < this.key.length; i++) {
       const k = this.key[i]!;
       if ((k & 3) !== KIND_BELT) continue;
-      const d = k >> 2;
+      const d = (k >> 2) & 3;
       const x = i % W;
       const z = (i - x) / W;
       /** The neighbour on side `s` of this tile feeds it. */
       const from = (s: number) => this.feeds(x + DX[s]!, z + DZ[s]!, (s + 2) % 4);
-      const back = from((d + 2) % 4);
+      // behind: a belt piece, or a building outputting into this cell along d
+      const back = from((d + 2) % 4) || (k & (1 << (4 + d))) !== 0;
       const right = from((d + 1) % 4);
       const left = from((d + 3) % 4);
       if (!back && right !== left) this.shape[i] = right ? BELT_CORNER_R : BELT_CORNER_L;

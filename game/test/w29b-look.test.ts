@@ -8,7 +8,8 @@ import { describe, expect, it } from 'vitest';
 import { Box3, InstancedMesh, Matrix4, Scene, Vector3, type BufferGeometry } from 'three';
 import { createWorld } from '../src/sim/scenarios.ts';
 import type { World } from '../src/sim/world.ts';
-import { B, ITEM_MASS, ITEM_RARE } from '../src/sim/kinds.ts';
+import { B, ITEM_MASS, ITEM_PART, ITEM_RARE, buildingInfo, outputsToBelts } from '../src/sim/kinds.ts';
+import { flatWorld } from './fixtures.ts';
 import { CAPACITY } from '../src/sim/world.ts';
 import { EntityRenderer } from '../src/render/entities.ts';
 import { BeltShapes } from '../src/render/beltShapes.ts';
@@ -268,3 +269,24 @@ describe('W29b belt items on the belt', () => {
 function groundTop(x: number, z: number): number {
   return footprintRange(terrain, x, z, 1, 1).top;
 }
+
+describe('kinds.ts outputsToBelts names the buildings conveyor.ts puts items on belts from', () => {
+  it('a depot and the item-making machines do; the assembler (parts go to the pool) and a turret do not', () => {
+    // the assembler's finished part goes to w.parts, never its out buffer (conveyor.ts), so it never
+    // reaches a belt; a stocked out buffer below is only for the kinds that can have one
+    expect(buildingInfo(B.assembler).machine!.output).toBe(ITEM_PART);
+    expect(outputsToBelts(B.assembler, true)).toBe(false);
+    for (const kind of [B.depot, B.shredder, B.smelter, B.gun]) {
+      const w = flatWorld(30, 30);
+      const id = w.placeBuilding(kind, 10, 10, true);
+      expect(id, `${kind} placed`).toBeGreaterThanOrEqual(0);
+      const s = slot(w, id);
+      const c = w.buildings.cols;
+      c.stock[s] = 1;
+      c.outBuf[s] = 1;
+      const [belt] = lay(w, [[10 + c.fw[s]!, 10, 0]]);
+      w.step();
+      expect(c.item[slot(w, belt!)] !== 0, `kind ${kind}: an item on the belt`).toBe(outputsToBelts(kind, w.belts));
+    }
+  });
+});

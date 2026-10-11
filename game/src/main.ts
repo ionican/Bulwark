@@ -821,8 +821,8 @@ canvas.addEventListener(
 );
 
 /**
- * Right click with units selected: reclaim a wreck, help an unfinished site (or an upgrade under
- * way), repair a complete damaged building (W29), or move.
+ * Right click with units selected: reclaim a wreck, repair a complete damaged building (W29, even
+ * while upgrading), help an unfinished site or an upgrade under way (src/rightClick.ts), or move.
  */
 function rightClick(x: number, y: number, queue: boolean) {
   const ids = selectedBuilders();

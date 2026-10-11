@@ -252,6 +252,35 @@ export function outputDirs(kind: number, dir: number): readonly number[] {
   return kind === B.splitter ? [(dir + 1) & 3, (dir + 3) & 3] : [dir & 3];
 }
 
+/**
+ * Whether a complete building of `kind` puts items on belts (conveyor.ts stepConveyors): a depot
+ * (salvage), a chain machine whose output is an item (the assembler's parts go to the pool, not a
+ * belt) and, with belts on (World.belts), an extractor. Each puts them only on a belt in its
+ * outputRing whose direction is the cell's away direction (its back faces the building).
+ */
+export function outputsToBelts(kind: number, belts: boolean): boolean {
+  if (kind === B.depot) return true;
+  if (isExtractor(kind)) return belts;
+  const m = buildingInfo(kind).machine;
+  return m !== undefined && m.output !== ITEM_PART;
+}
+
+/**
+ * The cells a building with footprint fw × fh at (tx, ty) puts items into, each with the direction
+ * pointing away from the footprint, in conveyor.ts's round-robin order (for a square footprint
+ * W13's: east, south, west, north for each i). Cells may lie off the map.
+ */
+export function outputRing(tx: number, ty: number, fw: number, fh: number): Array<[number, number, number]> {
+  const ring: Array<[number, number, number]> = [];
+  for (let i = 0; i < Math.max(fw, fh); i++) {
+    if (i < fh) ring.push([tx + fw, ty + i, 0]);
+    if (i < fw) ring.push([tx + i, ty + fh, 1]);
+    if (i < fh) ring.push([tx - 1, ty + i, 2]);
+    if (i < fw) ring.push([tx + i, ty - 1, 3]);
+  }
+  return ring;
+}
+
 // ---- Aliens --------------------------------------------------------------------------------
 
 // Target categories: one flow field each.

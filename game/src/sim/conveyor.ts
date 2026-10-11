@@ -16,7 +16,7 @@
 // item, and everything while disabled, so the belt backs up.
 
 import { BF_ACTIVE, BF_COMPLETE, BF_DISABLED, BF_STARVED } from './schema.ts';
-import { B, BDX, BDZ, BELT_TILES_PER_SECOND, ITEM_MASS, ITEM_NONE, ITEM_PART, ITEM_RARE, ITEM_SALVAGE, TICK_SECONDS, buildingInfo, isBelt, isExtractor, outputDirs } from './kinds.ts';
+import { B, BDX, BDZ, BELT_TILES_PER_SECOND, ITEM_MASS, ITEM_NONE, ITEM_PART, ITEM_RARE, ITEM_SALVAGE, TICK_SECONDS, buildingInfo, isBelt, isExtractor, outputDirs, outputRing } from './kinds.ts';
 import type { World } from './world.ts';
 
 const DT = TICK_SECONDS;
@@ -133,15 +133,8 @@ function output(w: World, s: number, item: number): boolean {
   const tx = c.tx[s]!;
   const ty = c.ty[s]!;
   const W = w.terrain.w;
-  // Perimeter cells with the direction pointing away from the footprint (for a square footprint
-  // the same order as W13's: east, south, west, north for each i).
-  const ring: Array<[number, number, number]> = [];
-  for (let i = 0; i < Math.max(fw, fh); i++) {
-    if (i < fh) ring.push([tx + fw, ty + i, 0]);
-    if (i < fw) ring.push([tx + i, ty + fh, 1]);
-    if (i < fh) ring.push([tx - 1, ty + i, 2]);
-    if (i < fw) ring.push([tx + i, ty - 1, 3]);
-  }
+  // perimeter cells with the direction pointing away from the footprint (kinds.ts, shared with the belt shapes)
+  const ring = outputRing(tx, ty, fw, fh);
   const n = ring.length;
   for (let k = 0; k < n; k++) {
     const [x, z, away] = ring[(c.rr[s]! + k) % n]!;
@@ -168,7 +161,7 @@ export function stepConveyors(w: World): void {
     w.deliveryRing[w.deliveryCursor * 2] = 0;
     w.deliveryRing[w.deliveryCursor * 2 + 1] = 0;
   }
-  // Machines, depots and (belts on) extractors.
+  // Machines, depots and (belts on) extractors: the buildings kinds.ts outputsToBelts names.
   for (let s = 0; s < b.highWater; s++) {
     if (!b.alive[s] || !isComplete(w, s)) continue;
     const kind = c.kind[s]!;
