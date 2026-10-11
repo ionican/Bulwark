@@ -15,7 +15,8 @@
 // Repair (stepRepair) adds hit points free, from repair power the units delivered this tick.
 
 import { BF_ACTIVE, BF_COMPLETE, BF_DISABLED, BF_IDLE, BF_STARTED, BF_STARVED, BF_UPGRADING } from './schema.ts';
-import { B, COMMANDER_INCOME, SHIELD, TICK_SECONDS, buildingInfo, siteWork, type Cost } from './kinds.ts';
+import { B, COMMANDER_INCOME, SHIELD, TICK_SECONDS, buildingInfo, isExtractor, siteWork, type Cost } from './kinds.ts';
+import { extractorCap, extractorRate } from './tuning.ts';
 import { ENGINEER_BUILD_TIME, ENGINEER_COST, RESEARCH } from './balance.ts';
 import { map1 } from '../../../model/data/map1.ts';
 
@@ -42,22 +43,24 @@ export function stepEconomyIncome(w: World): void {
   let e = 0;
   let r = 0;
   const belts = w.belts;
+  // Extractor rates and buffer caps, [mass, rare]: research changes them only between ticks.
+  const rate = [extractorRate(w, B.massExtractor), extractorRate(w, B.rareExtractor)];
+  const cap = [extractorCap(w, B.massExtractor), extractorCap(w, B.rareExtractor)];
   for (let s = 0; s < b.highWater; s++) {
     if (!b.alive[s] || !(c.flags[s]! & BF_COMPLETE)) continue;
     const kind = c.kind[s]!;
     const inc = buildingInfo(kind).income;
     if (!inc) continue;
-    if (belts && (kind === B.massExtractor || kind === B.rareExtractor)) {
+    if (belts && isExtractor(kind)) {
       // Dig into the buffer up to its cap; what was actually added (after the f32 store) is counted.
-      const cap = w.extractorCap(kind);
-      const before = c.stock[s]!;
-      c.stock[s] = Math.min(cap, before + w.extractorRate(kind) * DT);
       const k = kind === B.massExtractor ? 0 : 1;
+      const before = c.stock[s]!;
+      c.stock[s] = Math.min(cap[k]!, before + rate[k]! * DT);
       if (c.stock[s]! > before) w.dug[k] = w.dug[k]! + (c.stock[s]! - before);
-      c.flags[s] = c.stock[s]! >= cap ? c.flags[s]! | BF_IDLE : c.flags[s]! & ~BF_IDLE;
+      c.flags[s] = c.stock[s]! >= cap[k]! ? c.flags[s]! | BF_IDLE : c.flags[s]! & ~BF_IDLE;
       continue;
     }
-    m += kind === B.massExtractor ? inc[0] * w.extractorOutput() : inc[0];
+    m += kind === B.massExtractor ? rate[0]! : inc[0];
     e += inc[1];
     r += inc[2];
   }

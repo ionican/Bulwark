@@ -14,19 +14,18 @@
 //     alloy or parts on the line, and the core refuses those, which stops the line.
 // Routes are planned in the order given and each one keeps off the tiles of the earlier ones.
 
-import { B, BELT_TILES_PER_SECOND, TICK_SECONDS, buildingInfo } from '../src/sim/kinds.ts';
-import { EXTRACTOR_BOOST } from '../src/sim/balance.ts';
+import { B, BDX as DX, BDZ as DZ, BELT_TILES_PER_SECOND, TICK_SECONDS, buildingInfo } from '../src/sim/kinds.ts';
+import { Tuning, extractorRate } from '../src/sim/tuning.ts';
 import type { World } from '../src/sim/world.ts';
 
 /** One belt tile: x, z and the direction it carries (0 +x, 1 +z, 2 −x, 3 −z). */
 export type BeltTile = [number, number, number];
 
-const DX = [1, 0, -1, 0];
-const DZ = [0, 1, 0, -1];
 /** Items a belt line moves per second: an item crosses a tile in whole ticks (conveyor.ts). */
 const LINE_CAPACITY = 1 / (Math.ceil(1 / (BELT_TILES_PER_SECOND * TICK_SECONDS) - 1e-9) * TICK_SECONDS);
 /** An extractor's output at its best (mass with the extractors research). */
-const peakRate = (kind: number) => (kind === B.massExtractor ? buildingInfo(kind).income![0] * EXTRACTOR_BOOST : buildingInfo(kind).income![2]);
+const PEAK = { tuning: new Tuning(), researched: () => true };
+const peakRate = (kind: number) => extractorRate(PEAK, kind);
 
 export interface RouteOptions {
   /** Buildings still to be built, as [kind, tx, ty]: routes keep off their footprints (and off the cells beside chain buildings). */

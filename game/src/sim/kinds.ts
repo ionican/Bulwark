@@ -216,6 +216,8 @@ export const RECLAIM_RATE = map1.engineer.reclaimRate;
 export const CARRY_CAPACITY = 20;
 export const START_ENGINEERS = map1.engineer.startCount;
 export const isBelt = (kind: number): boolean => kind === B.belt || kind === B.splitter || kind === B.merger;
+/** A mass or rare extractor (W29: with belts on, it digs into its own buffer). */
+export const isExtractor = (kind: number): boolean => kind === B.massExtractor || kind === B.rareExtractor;
 
 /** Belt direction 0..3: +x, +z, −x, −z (a tile step per direction). */
 export const BDX = [1, 0, -1, 0] as const;

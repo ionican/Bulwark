@@ -58,17 +58,15 @@ import { Pathfinder } from './pathfind.ts';
 import type { Command, StampedCommand } from './commands.ts';
 import { stepEconomyIncome, stepUpkeep, stepConstruction, stepRepair } from './economy.ts';
 import { stepConveyors } from './conveyor.ts';
-import { acquireTargets, fireTurrets, stepProjectiles, stepShieldsAndTimers, AlienGrid } from './combat.ts';
+import { acquireTargets, damageBuilding, fireTurrets, stepProjectiles, stepShieldsAndTimers, AlienGrid } from './combat.ts';
 import { stepAliens } from './aliens.ts';
 import { stepUnits, type Order, type OrderSpec } from './units.ts';
 import { dequeueIndex, dropOrphans, ownReservedSite, replacementProblem, worldSiteSource } from './queue.ts';
 import { validateCommand, upgradeProblem } from './validate.ts';
-import { damageBuilding } from './combat.ts';
-import { EXTRACTOR_BUFFER_SECONDS } from './balance.ts';
-import { COMMANDER_WRECK_SALVAGE, RESEARCH, RESEARCH_INDEX, SANDBOX_RESPAWN_TICKS, callEarlyBonus, EXTRACTOR_BOOST, FIELD_ENG_TURRET_COOLDOWN } from './balance.ts';
+import { COMMANDER_WRECK_SALVAGE, RESEARCH, RESEARCH_INDEX, SANDBOX_RESPAWN_TICKS, callEarlyBonus, FIELD_ENG_TURRET_COOLDOWN } from './balance.ts';
 import { map1 } from '../../../model/data/map1.ts';
 import { START_ENGINEERS, TICK_HZ, siteWork } from './kinds.ts';
-import { TB_HP, Tuning, alienMaxHp, resetTune, setTune, tuneFieldIndex, unitMaxHp } from './tuning.ts';
+import { TB_HP, Tuning, alienMaxHp, extractorCap, resetTune, setTune, tuneFieldIndex, unitMaxHp } from './tuning.ts';
 import { visitRings } from './grid.ts';
 import { createWorld } from './scenarios.ts';
 import { STAT_COUNT, recordKilled, recordSpawned } from './stats.ts';
@@ -454,11 +452,6 @@ export class World {
     this.skippedTicks += skipped;
   }
 
-  /** Mass extractor output per second (research can raise it). */
-  extractorOutput(): number {
-    return this.researched('extractors') ? EXTRACTOR_BOOST : 1;
-  }
-
   // ---- commands ----------------------------------------------------------------------------
 
   /**
@@ -660,27 +653,14 @@ export class World {
     return this.placeBuilding(B.gate, tx, ty, false, dir, fw, fh);
   }
 
-  /** Sandbox debug (W29): every complete extractor's buffer to its cap (economy.ts extractorCap). */
+  /** Sandbox debug (W29): every complete extractor's buffer to its cap (tuning.ts extractorCap). */
   fillBuffers(): void {
     const c = this.buildings.cols;
     for (let s = 0; s < this.buildings.highWater; s++) {
       if (!this.buildings.alive[s] || !(c.flags[s]! & BF_COMPLETE)) continue;
-      const cap = this.extractorCap(c.kind[s]!);
+      const cap = extractorCap(this, c.kind[s]!);
       if (cap > 0) c.stock[s] = cap;
     }
-  }
-
-  /** W29: what an extractor of `kind` digs per second (with research), 0 for any other kind. */
-  extractorRate(kind: number): number {
-    const inc = buildingInfo(kind).income;
-    if (kind === B.massExtractor) return inc![0] * this.extractorOutput();
-    if (kind === B.rareExtractor) return inc![2];
-    return 0;
-  }
-
-  /** W29: an extractor's buffer cap, EXTRACTOR_BUFFER_SECONDS of its output (0 for other kinds). */
-  extractorCap(kind: number): number {
-    return EXTRACTOR_BUFFER_SECONDS * this.extractorRate(kind);
   }
 
   /** Commander and the map 1 starting engineers at the base (map 1 and the sandbox). */

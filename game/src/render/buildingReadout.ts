@@ -8,10 +8,11 @@
 //
 // An undamaged building that is neither an extractor (belts on) nor the core has no readout.
 
-import { B, buildingInfo } from '../sim/kinds.ts';
-import { BF_COMPLETE, BF_DISABLED, BF_IDLE, BF_UPGRADING, G_BELTS, G_CORE_MASS, G_CORE_RARE, G_RESEARCH_DONE } from '../sim/schema.ts';
-import { EXTRACTOR_BOOST, EXTRACTOR_BUFFER_SECONDS, researchBit } from '../sim/balance.ts';
+import { B, buildingInfo, isExtractor } from '../sim/kinds.ts';
+import { BF_COMPLETE, BF_DISABLED, BF_IDLE, BF_UPGRADING, G_BELTS, G_CORE_MASS, G_CORE_RARE } from '../sim/schema.ts';
+import { extractorCap } from '../sim/tuning.ts';
 import type { Snapshot } from '../sim/snapshot.ts';
+import { snapshotRules } from '../snapshotRules.ts';
 
 export interface BuildingReadout {
   id: number;
@@ -42,12 +43,9 @@ export function buildingReadout(s: Snapshot, id: number, builders: boolean): Bui
   if (kind === B.core) {
     lines.push(hpLine, `delivered mass ${g[G_CORE_MASS]} · rare ${g[G_CORE_RARE]}`);
     if (flags & BF_DISABLED) lines.push('DISABLED — takes nothing until repaired to full');
-  } else if (g[G_BELTS] === 1 && (kind === B.massExtractor || kind === B.rareExtractor)) {
-    const mass = kind === B.massExtractor;
-    const boosted = mass && (g[G_RESEARCH_DONE]! & researchBit('extractors')) !== 0;
-    const rate = mass ? info.income![0] * (boosted ? EXTRACTOR_BOOST : 1) : info.income![2];
+  } else if (g[G_BELTS] === 1 && isExtractor(kind)) {
     // whole items: the buffer is an f32 sum of tenths, so 9.99999 is 10
-    lines.push(`buffer ${Math.floor(c.stock[r]! + 1e-3)} / ${EXTRACTOR_BUFFER_SECONDS * rate} ${mass ? 'mass' : 'rare'}`);
+    lines.push(`buffer ${Math.floor(c.stock[r]! + 1e-3)} / ${extractorCap(snapshotRules(s), kind)} ${kind === B.massExtractor ? 'mass' : 'rare'}`);
     if (flags & BF_IDLE) lines.push('full — not digging');
     if (damaged) lines.push(hpLine);
   } else if (damaged) lines.push(hpLine);

@@ -16,7 +16,7 @@
 // item, and everything while disabled, so the belt backs up.
 
 import { BF_ACTIVE, BF_COMPLETE, BF_DISABLED, BF_STARVED } from './schema.ts';
-import { B, BDX, BDZ, BELT_TILES_PER_SECOND, ITEM_MASS, ITEM_NONE, ITEM_PART, ITEM_RARE, ITEM_SALVAGE, TICK_SECONDS, buildingInfo, isBelt, outputDirs } from './kinds.ts';
+import { B, BDX, BDZ, BELT_TILES_PER_SECOND, ITEM_MASS, ITEM_NONE, ITEM_PART, ITEM_RARE, ITEM_SALVAGE, TICK_SECONDS, buildingInfo, isBelt, isExtractor, outputDirs } from './kinds.ts';
 import type { World } from './world.ts';
 
 const DT = TICK_SECONDS;
@@ -172,7 +172,7 @@ export function stepConveyors(w: World): void {
   for (let s = 0; s < b.highWater; s++) {
     if (!b.alive[s] || !isComplete(w, s)) continue;
     const kind = c.kind[s]!;
-    if (belts && (kind === B.massExtractor || kind === B.rareExtractor)) {
+    if (belts && isExtractor(kind)) {
       if (c.stock[s]! >= WHOLE && output(w, s, kind === B.massExtractor ? ITEM_MASS : ITEM_RARE)) c.stock[s] = c.stock[s]! - 1;
       continue;
     }
