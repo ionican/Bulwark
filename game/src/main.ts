@@ -24,12 +24,12 @@ import { DragPlanCache, beltLineTiles, dragLabel, paintsRow, placeableOn, planDr
 import { Tools, gateCommand, runCommand, spawnAtCommand, toolLabel } from './tools.ts';
 import { SandboxPanel, debugSpawnVisible, multToSlider } from './ui/sandboxPanel.ts';
 import { editingTarget } from './ui/focusReturn.ts';
-import { OVERLAY_NAMES, hideOverlay, overlayMeshes, setOverlayDepthTest } from './render/debugRender.ts';
+import { ITEM_MATERIAL, OVERLAY_NAMES, hideOverlay, overlayMeshes, setOverlayDepthTest } from './render/debugRender.ts';
 import { RouteView } from './render/routeView.ts';
 import { WorkerWindow } from './workerWindow.ts';
 import { footprintRange, groundHeight } from './render/ground.ts';
 import { BELT_SURFACE_Y } from './render/workshop/models/procedural/buildings.ts';
-import { INSPECT_FRAME, drawnMeshes, entitiesOf, inspectScene, submissionFloor, type InspectFrame } from './render/inspect.ts';
+import { INSPECT_FRAME, drawnMeshes, entitiesOf, inspectScene, submissionFloor, type DrawnMesh, type InspectFrame } from './render/inspect.ts';
 import { LOD_THRESHOLDS } from './render/lod.ts';
 import { Interpolator, type MobileView } from './render/interp.ts';
 import { maxStepPerTick } from './mobileStep.ts';
@@ -800,7 +800,7 @@ function updateSiteHover(moved = false): void {
     siteHover.move(mouse!.x, mouse!.y);
     return;
   }
-  const readout: HoverReadout | null = id >= 0 ? (siteReadout(samePrevWorld ? interp.prev : null, curr!, id) ?? buildingReadout(curr!, id, selectedBuilders().length > 0)) : null;
+  const readout: HoverReadout | null = id >= 0 ? (siteReadout(samePrevWorld ? interp.prev : null, curr!, id) ?? buildingReadout(curr!, id, () => selectedBuilders().length > 0)) : null;
   if (!readout) {
     siteShown = null;
     siteHover.hide();
@@ -2105,32 +2105,17 @@ const game = {
   /** Drawn belt items: per item mesh (overlay/item/<kind>), the ground positions [x, z] of its instances last frame. */
   drawnItems: () => {
     const out: Record<string, Array<[number, number]>> = {};
-    for (const d of drawnMeshes(scene)) {
-      if (!d.name.startsWith('overlay/item/')) continue;
-      const list = (out[d.name] ??= []);
-      for (let i = 0; i < d.count; i++) list.push([d.worlds[i * 16 + 12]!, d.worlds[i * 16 + 14]!]);
-    }
+    for (const { d, x, z } of drawnInstances()) if (d.name.startsWith('overlay/item/')) (out[d.name] ??= []).push([x, z]);
     return out;
   },
-  /** The negative control of the item check (scripts/check-render.mjs): hides the item meshes' materials, or restores them. */
-  hideItemMeshes: (hide: boolean) => {
-    let n = 0;
-    scene.traverse((o) => {
-      if (!(o instanceof Mesh) || !o.name.startsWith('overlay/item/')) return;
-      for (const m of Array.isArray(o.material) ? o.material : [o.material]) m.visible = !hide;
-      n++;
-    });
-    return n;
-  },
+  /** The negative control of the item check (scripts/check-render.mjs): hides the item meshes' material, or restores it. */
+  hideItemMeshes: (hide: boolean) => hideOverlay(scene, ITEM_MATERIAL, hide),
   // ---- W29b: how belts look
   /** The belt models (w17/<model> meshes, splitter and merger markers aside) with an instance at tile (x, z)'s centre, sorted. */
   beltModelAt: (x: number, z: number) => {
     const out = new Set<string>();
-    for (const d of drawnMeshes(scene)) {
-      if (!d.name.startsWith('w17/belt')) continue;
-      for (let i = 0; i < d.count; i++)
-        if (Math.abs(d.worlds[i * 16 + 12]! - (x + 0.5)) < 0.05 && Math.abs(d.worlds[i * 16 + 14]! - (z + 0.5)) < 0.05) out.add(d.name.split('/')[1]!);
-    }
+    for (const p of drawnInstances())
+      if (p.d.name.startsWith('w17/belt') && Math.abs(p.x - (x + 0.5)) < 0.05 && Math.abs(p.z - (z + 0.5)) < 0.05) out.add(p.d.name.split('/')[1]!);
     return [...out].sort();
   },
   /** Debug (negative control): every belt drawn straight (true) or in the shape its neighbours give it. */
@@ -2169,17 +2154,16 @@ const game = {
    */
   drawnNear: (x0: number, z0: number, x1: number, z1: number, group: string) => {
     const out: Array<[string, number[]]> = [];
-    for (const d of drawnMeshes(scene)) {
-      if (d.group !== group) continue;
-      for (let i = 0; i < d.count; i++) {
-        const x = d.worlds[i * 16 + 12]!;
-        const z = d.worlds[i * 16 + 14]!;
-        if (x >= x0 && x < x1 && z >= z0 && z < z1) out.push([d.name, Array.from(d.worlds.subarray(i * 16, i * 16 + 16), (v) => Math.round(v * 1e4) / 1e4)]);
-      }
-    }
+    for (const { d, i, x, z } of drawnInstances())
+      if (d.group === group && x >= x0 && x < x1 && z >= z0 && z < z1) out.push([d.name, Array.from(d.worlds.subarray(i * 16, i * 16 + 16), (v) => Math.round(v * 1e4) / 1e4)]);
     return out;
   },
 };
+
+/** Each drawn instance (render/inspect.ts drawnMeshes) in scene order: its mesh, index, and ground x and z (world matrix elements 12 and 14). Debug hooks only. */
+function* drawnInstances(): Generator<{ d: DrawnMesh; i: number; x: number; z: number }> {
+  for (const d of drawnMeshes(scene)) for (let i = 0; i < d.count; i++) yield { d, i, x: d.worlds[i * 16 + 12]!, z: d.worlds[i * 16 + 14]! };
+}
 
 declare global {
   interface Window {

@@ -2,8 +2,7 @@
 // time unchanged; the build bar shows "0.5M". The numbers live in balance.ts.
 
 import { describe, expect, it } from 'vitest';
-import { World } from '../src/sim/world.ts';
-import { flatTerrain } from '../src/sim/terrain.ts';
+import { flatWorld } from './fixtures.ts';
 import { B, U, buildingInfo } from '../src/sim/kinds.ts';
 import { BELT_COST_MASS, CORE_HP, CORE_PASS_SECONDS, CORE_REPAIR_TIME, EXTRACTOR_BUFFER_SECONDS } from '../src/sim/balance.ts';
 import { costLabel } from '../src/ui/buildbar.ts';
@@ -22,7 +21,7 @@ describe('W29 belt cost', () => {
 
   for (const belts of [true, false]) {
     it(`building one belt tile spends 0.5 mass (belts ${belts ? 'on' : 'off'})`, () => {
-      const w = new World(1, flatTerrain(30, 30), { waves: false, belts });
+      const w = flatWorld(30, 30, { belts });
       const cmd = w.spawnUnit(U.commander, 10.5, 10.5);
       w.enqueue({ t: 'build', ids: [cmd], kind: B.belt, tx: 12, ty: 10, dir: 0 });
       for (let t = 0; t < 30; t++) w.step();

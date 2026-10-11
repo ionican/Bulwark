@@ -20,8 +20,11 @@ export interface BuildingReadout {
   lines: string[];
 }
 
-/** The readout of complete building `id` in snapshot `s` (null: none). `builders`: engineers or the commander are selected. */
-export function buildingReadout(s: Snapshot, id: number, builders: boolean): BuildingReadout | null {
+/**
+ * The readout of complete building `id` in snapshot `s` (null: none). `builders`: engineers or the
+ * commander are selected; as a function, asked only when the building is damaged.
+ */
+export function buildingReadout(s: Snapshot, id: number, builders: boolean | (() => boolean)): BuildingReadout | null {
   const r = rowOf(s, id);
   if (r < 0) return null;
   const c = s.buildings.cols;
@@ -45,6 +48,6 @@ export function buildingReadout(s: Snapshot, id: number, builders: boolean): Bui
     if (damaged) lines.push(hpLine);
   } else if (damaged) lines.push(hpLine);
   else return null;
-  if (damaged && builders) lines.push('right-click: repair');
+  if (damaged && (typeof builders === 'function' ? builders() : builders)) lines.push('right-click: repair');
   return { id, lines };
 }

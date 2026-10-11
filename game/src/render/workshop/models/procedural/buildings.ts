@@ -402,26 +402,22 @@ function straightBelt(m: Mats, name: string, open: number[] = []): ModelDef {
 
 const belt: Make = (m) => straightBelt(m, 'belt');
 
-/** An annular sector round (cx, cz) from angle a0 to a1 (radians in the XZ plane, x = cos, z = sin), extruded up h. */
+/**
+ * An annular sector round (cx, cz) from angle a0 to a1 < a0 + π (radians in the XZ plane, x = cos,
+ * z = sin), extruded up h. slab's outline is XY with y = −z (it is extruded up and turned flat) and
+ * must run counter-clockwise there: the inner radius from a0 to a1, then the outer back.
+ */
 function arc(cx: number, cz: number, r0: number, r1: number, a0: number, a1: number, h: number, segs = 10): BufferGeometry {
-  const pts: Array<[number, number]> = [];
+  const xy: Array<[number, number]> = [];
   for (let i = 0; i <= segs; i++) {
     const a = a0 + ((a1 - a0) * i) / segs;
-    pts.push([cx + r1 * Math.cos(a), cz + r1 * Math.sin(a)]);
+    xy.push([cx + r0 * Math.cos(a), -(cz + r0 * Math.sin(a))]);
   }
   for (let i = segs; i >= 0; i--) {
     const a = a0 + ((a1 - a0) * i) / segs;
-    pts.push([cx + r0 * Math.cos(a), cz + r0 * Math.sin(a)]);
+    xy.push([cx + r1 * Math.cos(a), -(cz + r1 * Math.sin(a))]);
   }
-  // slab's outline is XY with y = −z (it is extruded up and turned flat); counter-clockwise there
-  const xy = pts.map(([x, z]) => [x, -z] as [number, number]);
-  let area = 0;
-  for (let i = 0; i < xy.length; i++) {
-    const [x0, y0] = xy[i]!;
-    const [x1, y1] = xy[(i + 1) % xy.length]!;
-    area += x0 * y1 - x1 * y0;
-  }
-  return slab(area < 0 ? xy.reverse() : xy, h, 0);
+  return slab(xy, h, 0);
 }
 
 /**

@@ -6,11 +6,8 @@
 
 import { describe, expect, it } from 'vitest';
 import { createWorld } from '../src/sim/scenarios.ts';
-import { B, buildingInfo, isBelt } from '../src/sim/kinds.ts';
+import { B, BDX as DX, BDZ as DZ, buildingInfo, isBelt } from '../src/sim/kinds.ts';
 import { BALANCED, NO_DEFENCE, type PlanStep } from './plans.ts';
-
-const DX = [1, 0, -1, 0];
-const DZ = [0, 1, 0, -1];
 
 function chains(plan: PlanStep[]): string[] {
   const w = createWorld(1, 'map1');

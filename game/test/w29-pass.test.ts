@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { World } from '../src/sim/world.ts';
-import { flatTerrain } from '../src/sim/terrain.ts';
+import { flatWorld } from './fixtures.ts';
 import { A, B, U } from '../src/sim/kinds.ts';
 import { T_BUILDING } from '../src/sim/schema.ts';
 import { CORE_HP, CORE_PASS_SECONDS } from '../src/sim/balance.ts';
@@ -13,7 +13,7 @@ import { damageBuilding } from '../src/sim/combat.ts';
 
 /** 40 × 40 belts world, core at tiles 19–21 × 18–20, the base (alien goal without a commander) far south. */
 function world(): { w: World; core: number } {
-  const w = new World(1, flatTerrain(40, 40, { base: { x: 20, z: 37 } }), { waves: false, belts: true });
+  const w = flatWorld(40, 40, { terrain: { base: { x: 20, z: 37 } }, belts: true });
   const core = w.placeBuilding(B.core, 19, 18, true);
   return { w, core };
 }

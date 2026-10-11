@@ -5,14 +5,13 @@
 
 import { describe, expect, it } from 'vitest';
 import { World } from '../src/sim/world.ts';
-import { flatTerrain } from '../src/sim/terrain.ts';
+import { flatWorld } from './fixtures.ts';
 import { B, COMMANDER_INCOME, TICK_SECONDS, U, siteWork } from '../src/sim/kinds.ts';
 import { BF_UPGRADING } from '../src/sim/schema.ts';
 import { BUILD_RATE, RESEARCH_INDEX } from '../src/sim/balance.ts';
 
 function setup(): { w: World; cmd: number; eng: number } {
-  const w = new World(1, flatTerrain(40, 40), { waves: false });
-  w.pool.set([1e6, 1e6, 1e6]);
+  const w = flatWorld(40, 40, { rich: true });
   const cmd = w.spawnUnit(U.commander, 20.5, 24.5);
   const eng = w.spawnUnit(U.engineer, 22.5, 24.5);
   return { w, cmd, eng };

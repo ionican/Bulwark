@@ -5,7 +5,8 @@
 //   CORE_X .. CORE_X+2 (rows ROW .. ROW+2). A belt of n tiles puts the extractor at CORE_X - 2 - n.
 
 import { World } from '../src/sim/world.ts';
-import { flatTerrain, type Deposit } from '../src/sim/terrain.ts';
+import type { Deposit } from '../src/sim/terrain.ts';
+import { flatWorld } from './fixtures.ts';
 import { B, ITEM_NONE, isBelt } from '../src/sim/kinds.ts';
 
 export const ROW = 20;
@@ -30,7 +31,7 @@ export function beltLine(n: number, opts: { kind?: 'mass' | 'rare'; belt?: boole
   const mapW = opts.mapW ?? Math.max(40, coreX + 10);
   const x0 = coreX - 2 - n;
   const deposits: Deposit[] = [{ tx: x0, ty: ROW, kind }];
-  const w = new World(1, flatTerrain(mapW, opts.mapH ?? 40, { deposits, base: { x: coreX + 6, z: ROW + 10 } }), { waves: false, belts: opts.belts ?? true });
+  const w = flatWorld(mapW, opts.mapH ?? 40, { terrain: { deposits, base: { x: coreX + 6, z: ROW + 10 } }, belts: opts.belts ?? true });
   const core = w.placeBuilding(B.core, coreX, ROW, true);
   const extractor = w.placeBuilding(kind === 'mass' ? B.massExtractor : B.rareExtractor, x0, ROW, true);
   const belts: number[] = [];

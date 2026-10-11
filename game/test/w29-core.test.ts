@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import { World } from '../src/sim/world.ts';
 import { createWorld } from '../src/sim/scenarios.ts';
-import { flatTerrain } from '../src/sim/terrain.ts';
+import { flatWorld } from './fixtures.ts';
 import { A, B, ITEM_MASS, U, buildingInfo } from '../src/sim/kinds.ts';
 import { BF_COMPLETE, BF_DISABLED, T_BUILDING } from '../src/sim/schema.ts';
 import { CORE_HP } from '../src/sim/balance.ts';
@@ -76,7 +76,7 @@ describe('W29 the core on map 1 and in the sandbox', () => {
   it('an alien whose route passes the core goes round it (its pass already spent)', () => {
     // flat 30 × 40: core in the middle of the way from the north entry to the base (no commander: the
     // rusher's field falls back to the base)
-    const w = new World(1, flatTerrain(30, 40, { base: { x: 15, z: 34 } }), { waves: false, belts: true });
+    const w = flatWorld(30, 40, { terrain: { base: { x: 15, z: 34 } }, belts: true });
     w.placeBuilding(B.core, 14, 18, true);
     const a = w.aliens.slotForId(w.spawnAlien(A.rusher, 15.5, 4.5));
     w.aliens.cols.pass[a] = 2; // spent: the pass rule does not stop it

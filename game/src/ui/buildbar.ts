@@ -32,7 +32,6 @@ export const costLabel = (k: BuildingKind) => {
   const [m, e, r] = BUILDING_INFO[k].cost;
   return `${m}M ${e}E${r ? ` ${r}R` : ''}`;
 };
-const cost = costLabel;
 
 export interface BuildBarHandlers {
   build(kind: BuildingKind): void;
@@ -58,9 +57,9 @@ export class BuildBar {
       const g = this.group(bar, title);
       for (const k of kinds) {
         const info = BUILDING_INFO[k];
-        const b = this.button(g, `${info.label} [${info.key.toUpperCase()}]`, cost(k), () => h.build(k));
+        const b = this.button(g, `${info.label} [${info.key.toUpperCase()}]`, costLabel(k), () => h.build(k));
         b.dataset.kind = k;
-        b.dataset.cost = cost(k);
+        b.dataset.cost = costLabel(k);
         this.buttons.set(k, b);
       }
     }

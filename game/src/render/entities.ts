@@ -19,7 +19,7 @@ import { slotOf } from '../sim/table.ts';
 import type { Snapshot } from '../sim/snapshot.ts';
 import type { EffectTime } from './anim.ts';
 import { barGeometry, constructionFrameGeometry, dashedRingGeometry, itemGeometries, selectionMarkerGeometry, shieldDomeGeometry } from './geometry.ts';
-import { FRAME_MATERIAL } from './debugRender.ts';
+import { FRAME_MATERIAL, ITEM_MATERIAL } from './debugRender.ts';
 import { LOD_ICON, chooseLod } from './lod.ts';
 import { worldPerPixel } from './cameraRig.ts';
 import type { MobileView } from './interp.ts';
@@ -201,7 +201,7 @@ export class EntityRenderer {
     this.lod = { b: L(C.buildings), bId: new Uint32Array(C.buildings), a: L(C.aliens), aId: new Uint32Array(C.aliens), u: L(C.units), uId: new Uint32Array(C.units) };
     this.buildingRow = new Int32Array(C.buildings);
     this.wreckRow = new Int32Array(C.wrecks);
-    const model = new MeshLambertMaterial({ vertexColors: true, flatShading: true });
+    const model = new MeshLambertMaterial({ name: ITEM_MATERIAL, vertexColors: true, flatShading: true });
     const flat = new MeshBasicMaterial({ vertexColors: true });
     // Starting sizes as before; each grows up to what the simulation's tables allow.
     // one mesh per item kind (W29: mass and rare have their own), named overlay/item/<kind>

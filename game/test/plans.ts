@@ -4,7 +4,7 @@
 // sends spare engineers to reclaim wrecks the way W12's reclaimShare does.
 
 import { World } from '../src/sim/world.ts';
-import { B, U, buildingInfo } from '../src/sim/kinds.ts';
+import { B, U, buildingInfo, isExtractor } from '../src/sim/kinds.ts';
 import { createWorld } from '../src/sim/scenarios.ts';
 import { beltRoutesToCore } from './beltRoute.ts';
 import { BF_COMPLETE } from '../src/sim/schema.ts';
@@ -34,8 +34,9 @@ const wallsZ = (min: number, x: number, zs: number[]) => zs.map((z) => b(min, B.
 // (64, 1); east aliens along z ≈ 64 from (127, 64). A north line at z ≈ 42–53 and an east line at
 // x ≈ 79–88 meet rushers, breakers and saboteurs; hunters slip round walls for the commander, so
 // a core of guns, area cannons, beams and shields stands round him. Economy and the salvage chain
-// sit south of the centre; two guarded rare points north, one east. W12's balanced plan, on tiles.
-export const BALANCED: PlanStep[] = [
+// sit south of the centre; two guarded rare points north, one east. W12's balanced plan, on tiles,
+// without the W29 belt lines (BALANCED below is withBelts of it).
+const BALANCED_BASE: PlanStep[] = [
   // Minute 0: the north rare points first (rare material gates research and every advanced
   // defence), a gun between them, then economy and a first north defence.
   b(0, B.massExtractor, 54, 50),
@@ -170,29 +171,31 @@ for (const [min, x, z] of [
   [16, 54, 83], [16, 57, 83], [20, 60, 83], [20, 63, 83], [24, 66, 83], [24, 69, 83],
   [28, 54, 86], [28, 57, 86], [32, 60, 86], [32, 63, 86],
 ] as const) {
-  const at = BALANCED.findIndex((st) => st.min > min);
-  BALANCED.splice(at < 0 ? BALANCED.length : at, 0, b(min, B.generator, x, z));
+  const at = BALANCED_BASE.findIndex((st) => st.min > min);
+  BALANCED_BASE.splice(at < 0 ? BALANCED_BASE.length : at, 0, b(min, B.generator, x, z));
 }
 // Replace engineers lost to saboteurs.
-for (const min of [20, 20, 26, 26, 32, 32, 38, 38]) BALANCED.push(eng(min));
+for (const min of [20, 20, 26, 26, 32, 32, 38, 38]) BALANCED_BASE.push(eng(min));
 // W29: mass and rare reach the pool only through the core, so each extractor is belted to it. The
 // routes are worked out on map 1 with every planned footprint kept clear (test/beltRoute.ts) and
 // each line is queued just after its extractor, at its minute. A line joins the nearer of the core
 // and an earlier line with room: the planned buildings round the base leave few free input cells, and
 // routing every line into the core sends the 73,29 rare line 81 tiles round the base, which held
 // the minute-4 builds back far enough that the plan lost at wave 5 (13:27).
-{
+/** `plan` with a belt line queued after each of its extractors (a new array; `plan` is unchanged). */
+export function withBelts(plan: PlanStep[]): PlanStep[] {
+  const out = plan.slice();
   const planned: Array<[number, number, number]> = [];
   const extractors: number[] = [];
-  BALANCED.forEach((st, i) => {
+  out.forEach((st, i) => {
     if (!('build' in st.act)) return;
     planned.push([st.act.build, st.act.at[0], st.act.at[1]]);
-    if (st.act.build === B.massExtractor || st.act.build === B.rareExtractor) extractors.push(i);
+    if (isExtractor(st.act.build)) extractors.push(i);
   });
   const lines = beltRoutesToCore(
     createWorld(1, 'map1'),
     extractors.map((i) => {
-      const a = BALANCED[i]!.act as { build: number; at: [number, number] };
+      const a = out[i]!.act as { build: number; at: [number, number] };
       return [a.build, a.at[0], a.at[1]];
     }),
     { planned, join: 'nearest' },
@@ -200,10 +203,14 @@ for (const min of [20, 20, 26, 26, 32, 32, 38, 38]) BALANCED.push(eng(min));
   for (let k = extractors.length - 1; k >= 0; k--) {
     const i = extractors[k]!;
     const line = lines[k];
-    if (!line) throw new Error(`plans: no belt route from the extractor at ${(BALANCED[i]!.act as { at: number[] }).at}`);
-    BALANCED.splice(i + 1, 0, ...line.map(([x, z, d]) => b(BALANCED[i]!.min, B.belt, x, z, d)));
+    if (!line) throw new Error(`plans: no belt route from the extractor at ${(out[i]!.act as { at: number[] }).at}`);
+    out.splice(i + 1, 0, ...line.map(([x, z, d]) => b(out[i]!.min, B.belt, x, z, d)));
   }
+  return out;
 }
+
+/** The map-1 balanced plan, belted (W29). */
+export const BALANCED: PlanStep[] = withBelts(BALANCED_BASE);
 
 export interface DriveResult {
   outcome: number;
