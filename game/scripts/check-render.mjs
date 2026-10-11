@@ -64,6 +64,11 @@
 //     positions move between two frames; a negative control hides those meshes and the same check
 //     then fails. A full extractor (no belt, buffers filled by the sandbox `fillBuffers` command)
 //     draws the same matrices on two frames a tick apart, while a belted extractor's do not.
+//   W29b items visible, by pixels: at the game camera (distance 30, yaw 0) over each belt, one
+//     plain render (no post stack) of the belt tiles carrying that item kind's screen rectangle
+//     with the items shown and one with them hidden; the luminance must differ by more than 8 on
+//     at least ITEM_PX pixels per carrying tile. Negative control: the items lowered into the belt
+//     (`__game.itemDrop(true)`), the same measure must fall below the bar.
 //   delivery load, gated: every map-1 extractor (8 mass, 3 rare) belted to the core in the
 //     sandbox, at least 300 belt tiles carrying an item at every sample and the delivered count
 //     rising every second of the 20 s window (buffers kept full by `fillBuffers` once a second);
@@ -809,6 +814,37 @@ function moved(a, b) {
   return a.length > 0 && b.length > 0 && b.some((p) => !before.has(key(p)));
 }
 
+/** W29b: pixels a carrying belt tile's item must change at the game camera (distance 30), shown against hidden. */
+const ITEM_PX = 40;
+/**
+ * The screen rectangle of the belt tiles now carrying `item` (each tile's corners at the belt top,
+ * 0.4 tile around), rendered twice in one call with the item meshes shown and hidden (no post
+ * stack; nothing moves between the two): luminance differences, and the tiles counted.
+ */
+const itemPixels = (item) =>
+  js(`(() => {
+    const g = __game;
+    const tiles = g.list('building').filter((b) => b.kindName === 'belt' && b.item === ${item});
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, n = 0;
+    for (const t of tiles) {
+      const h = g.terrainInfo.height(t.tx + 0.5, t.ty + 0.5) + 0.3;
+      const pts = [[-0.4, -0.4], [1.4, -0.4], [1.4, 1.4], [-0.4, 1.4]].map(([a, b]) => g.worldToScreen(t.tx + a, t.ty + b, h));
+      if (!pts.every((p) => p.x >= 0 && p.y >= 0 && p.x <= innerWidth && p.y <= innerHeight)) continue;
+      n++;
+      for (const p of pts) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
+    }
+    if (!n) return { tiles: 0, over: 0, px: 0, mean: 0, max: 0 };
+    const r = { x0, y0, x1, y1 };
+    g.hideItemMeshes(false);
+    const a = g.debugRender.capture(r);
+    g.hideItemMeshes(true);
+    const b = g.debugRender.capture(r);
+    g.hideItemMeshes(false);
+    let sum = 0, max = 0, over = 0;
+    for (let i = 0; i < a.data.length; i++) { const v = Math.abs(a.data[i] - b.data[i]); sum += v; max = Math.max(max, v); if (v > 8) over++; }
+    return { tiles: n, over, px: a.data.length, mean: sum / Math.max(1, a.data.length), max: Math.round(max) };
+  })()`);
+
 async function w29Items() {
   await load('/?sandbox=1');
   const MASS = [['massExtractor', 54, 50]];
@@ -846,6 +882,29 @@ async function w29Items() {
     const d = drawnItems();
     js('__game.hideItemMeshes(false)');
     check(!moved(c[name] ?? [], d[name] ?? []), `W29 negative control: with the item meshes hidden the ${label} check fails`, `W29 negative control: hidden ${label} meshes still pass (${JSON.stringify(d[name]?.length)})`);
+  }
+  // W29b: the items are visible, by pixels (shown against hidden), with a negative control
+  for (const [label, item, rig] of [
+    ['mass', 5, { x: 58, z: 54, distance: 30, yaw: 0 }],
+    ['rare', 6, { x: 70, z: 40, distance: 30, yaw: 0 }],
+  ]) {
+    camera(rig);
+    await frames(10);
+    const on = itemPixels(item);
+    const bar = (r) => r.tiles > 0 && r.over >= ITEM_PX * r.tiles;
+    const fmt = (r) => `${r.over} px of ${r.px} changed by > 8 (mean ${r.mean.toFixed(2)}, max ${r.max}) over ${r.tiles} carrying tiles, ${(r.over / Math.max(1, r.tiles)).toFixed(0)} per tile`;
+    check(bar(on), `W29b: ${label} items are visible on the belt at the game camera (${fmt(on)})`, `W29b: ${label} items not visible: ${fmt(on)}`);
+    try {
+      js('__game.itemDrop(true)');
+    } catch (e) {
+      fail(`W29b negative control: __game.itemDrop: ${e.message}`);
+      continue;
+    }
+    await frames(3);
+    const sunk = itemPixels(item);
+    js('__game.itemDrop(false)');
+    await frames(3);
+    check(!bar(sunk), `W29b negative control: with the ${label} items lowered into the belt the pixel check fails (${fmt(sunk)})`, `W29b negative control: lowered ${label} items still pass (${fmt(sunk)})`);
   }
   // the full extractor stands still; the belted one moves
   const ext = js(`__game.list('building').filter((b) => b.kindName === 'massExtractor').map((b) => ({ id: b.id, tx: b.tx, ty: b.ty, idle: b.idle }))`);

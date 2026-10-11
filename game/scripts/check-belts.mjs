@@ -31,6 +31,12 @@
 //   7  the engineers selected by clicks, the hover says "right-click: repair", a right-click on the
 //      core queues a repair; the repair brings it to 4000 hp, re-enables it, and delivery resumes;
 //      screenshot w29-core-repaired.png
+//   8  (W29b) the corner tile of the L is drawn with a corner model, its neighbours straight
+//      (negative control: shapes forced straight fail the check); drawn items stand on the belt
+//      surface; a line laid into leg 2 from the side is drawn with a join model where it meets;
+//      close-ups w29-belt-corner.png, w29-items-close.png, w29-belt-join.png
+//   9  (W29b) at 1440, 1280, 1152 and 1024 px wide, on map 1 and the sandbox: the resource panel,
+//      the idle-units column and the debug spawn box do not overlap; screenshot w29-hud.png
 // 0 console errors throughout. It always stops its server and closes only its own session.
 
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
@@ -499,6 +505,122 @@ async function run() {
   check(r2.delivered > d2.delivered, `delivery resumed: delivered ${d2.delivered} → ${r2.delivered} at tick ${r2.tick}`, `no delivery after the repair: ${JSON.stringify({ d2, r2 })}`);
   await shot('w29-core-repaired.png');
   errorsNow('check-belts');
+  for (const [name, f] of [['belt look', () => beltLook(route)], ['HUD layout', hudLayout]])
+    try {
+      await f();
+    } catch (e) {
+      fail(`${name}: ${e?.message ?? e}`);
+    }
+}
+
+/** The belt models drawn at tile (x, z) (w17/<model> meshes with an instance at the tile centre). */
+const modelsAt = (x, z) => js(`__game.beltModelAt(${x}, ${z})`);
+
+/**
+ * W29b, step 8: how the belt looks. The L-shaped belt's corner tile (the first of leg 2) is drawn
+ * with a corner model and the straight tiles with the straight one (negative control: shapes forced
+ * straight, the corner check fails); a line laid into leg 2 from the side is drawn with a join model
+ * where it meets; the items stand on the belt surface. Close-ups at the game camera:
+ * w29-belt-corner.png, w29-items-close.png, w29-belt-join.png.
+ */
+async function beltLook(route) {
+  const [cx, cz] = route.legs[1][0];
+  const d2 = route.d[1];
+  const step = (x, z, d, n = 1) => [x + [1, 0, -1, 0][d] * n, z + [0, 1, 0, -1][d] * n];
+  js('__game.fillBuffers()');
+  await until('items along the belt', `__game.beltItems.mass >= 8`, 60);
+  // a line from the side into leg 2, 3–7 tiles past the corner, on whichever side is free
+  const occ = new Set();
+  for (const b of buildings()) for (let j = 0; j < b.fh; j++) for (let i = 0; i < b.fw; i++) occ.add(`${b.tx + i},${b.ty + j}`);
+  const ground = (x, z) => !occ.has(`${x},${z}`) && js(`__game.tileInfo(${x + 0.5}, ${z + 0.5}).type`) === 'ground';
+  let join = null;
+  for (let k = 3; k <= 7 && !join; k++) {
+    const at = step(cx, cz, d2, k);
+    for (const side of [(d2 + 1) % 4, (d2 + 3) % 4]) {
+      const tiles = [3, 2, 1].map((n) => [...step(at[0], at[1], side, n), (side + 2) % 4]);
+      if (tiles.every(([x, z]) => ground(x, z))) {
+        join = { at, tiles, side };
+        break;
+      }
+    }
+  }
+  if (!join) throw new Error('no free side line to join leg 2');
+  const refused = js(`(async () => { const out = []; for (const [x, z, d] of ${JSON.stringify(join.tiles)}) { const r = await __game.place('belt', x, z, d); if (!r.ok) out.push(x + ',' + z + ': ' + r.reason); } return out; })()`);
+  if (refused.length) throw new Error(`the joining line refused: ${refused.join('; ')}`);
+  await until('the joining line built', `__game.list('building').some((b) => b.kindName === 'belt' && b.tx === ${join.tiles[2][0]} && b.ty === ${join.tiles[2][1]} && b.complete)`, 20);
+
+  // the close-ups at the game camera (they need nothing but the view)
+  away();
+  camera({ x: cx + 0.5, z: cz + 2, distance: 14, yaw: 0 });
+  await frames(8);
+  await shot('w29-belt-corner.png');
+  camera({ x: cx + 0.5, z: cz + 1.5, distance: 8, yaw: 0 });
+  await frames(8);
+  await shot('w29-items-close.png');
+  camera({ x: join.at[0] + 0.5, z: join.at[1] + 2, distance: 14, yaw: 0 });
+  await frames(8);
+  await shot('w29-belt-join.png');
+
+  // the corner (fed from the side, nothing behind) and its straight neighbours
+  const before = route.legs[0][1];
+  const after = step(cx, cz, d2);
+  // the corner's feeder is on the right of its flow when the right-hand side ((d + 1) mod 4) points back up leg 1
+  const want = (d2 + 1) % 4 === (route.d[0] + 2) % 4 ? 'beltCornerR' : 'beltCornerL';
+  const shapes = () => ({ corner: modelsAt(cx, cz), before: modelsAt(...before), after: modelsAt(...after) });
+  const cornerOk = (s) => JSON.stringify(s.corner) === JSON.stringify([want]) && JSON.stringify(s.before) === '["belt"]' && JSON.stringify(s.after) === '["belt"]';
+  camera({ x: cx + 0.5, z: cz + 2, distance: 14, yaw: 0 });
+  await frames(6);
+  const s1 = shapes();
+  check(cornerOk(s1), `W29b: the corner ${cx},${cz} is drawn with ${want}, its neighbours ${before} and ${after} with the straight belt`, `W29b corner shapes: ${JSON.stringify(s1)} (wanted ${want})`);
+  js('__game.beltShapesStraight(true)');
+  await frames(4);
+  const s0 = shapes();
+  js('__game.beltShapesStraight(false)');
+  await frames(4);
+  check(!cornerOk(s0), `W29b negative control: with the shapes forced straight the corner check fails (corner drawn ${JSON.stringify(s0.corner)})`, `W29b negative control: forced straight still passes: ${JSON.stringify(s0)}`);
+  // items on the surface, in world units
+  const hs = js('__game.itemHeights()');
+  const bad = hs.filter((h) => !(h.bottom >= h.surface - 0.02 && h.top > h.surface + 0.15));
+  check(hs.length > 0 && bad.length === 0, `W29b: ${hs.length} drawn items stand on the belt surface (bottom ≥ surface − 0.02, top > surface + 0.15; e.g. ${JSON.stringify(hs[0])})`, `W29b items not on the surface: ${JSON.stringify(bad.slice(0, 4))} of ${hs.length}`);
+  // the join: the side line meets leg 2 on its right when the line runs in from the right-hand side
+  const jw = join.side === (d2 + 1) % 4 ? 'beltJoinR' : 'beltJoinL';
+  camera({ x: join.at[0] + 0.5, z: join.at[1] + 2, distance: 14, yaw: 0 });
+  await frames(6);
+  const jm = modelsAt(...join.at);
+  check(JSON.stringify(jm) === JSON.stringify([jw]), `W29b: the line laid from ${join.tiles[0][0]},${join.tiles[0][1]} joins leg 2 at ${join.at}, drawn with ${jw}`, `W29b join at ${join.at}: drawn ${JSON.stringify(jm)} (wanted ${jw})`);
+  errorsNow('W29b belt look');
+}
+
+/** Screen rectangles (CSS px) of the resource panel, the idle-units column and the debug spawn box, where shown. */
+const HUD_RECTS = `(() => {
+  const r = (sel) => { const e = document.querySelector(sel); if (!e || getComputedStyle(e).display === 'none' || !e.children.length && !e.textContent) return null; const b = e.getBoundingClientRect(); return b.width > 0 && b.height > 0 ? { x0: b.left, y0: b.top, x1: b.right, y1: b.bottom } : null; };
+  return { res: r('.hud.res'), idle: r('.idle'), dbg: r('.dbg') };
+})()`;
+const overlaps = (a, b) => !!a && !!b && a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+
+/**
+ * W29b, step 9: the HUD's right-hand column at 1440, 1280, 1152 and 1024 px wide, map 1 (the debug
+ * spawn box shown) and the sandbox: the resource panel, the idle-units column and the debug box do
+ * not overlap (bounding rectangles). Screenshot w29-hud.png (map 1 at 1024 px).
+ */
+async function hudLayout() {
+  for (const page of ['/', '/?sandbox=1'])
+    for (const width of [1440, 1280, 1152, 1024]) {
+      ab('open', `${ORIGIN}${page}`);
+      ab('set', 'viewport', String(width), '900');
+      await until(`${page} ready`, 'window.__game?.ready === true', 120);
+      await until('the idle column shown', `(${HUD_RECTS}).idle !== null`, 20);
+      // a few seconds of snapshots: the column is placed again on each one (W26 idleColumn.place)
+      await sleep(2500);
+      await frames(10);
+      const R = js(HUD_RECTS);
+      const pairs = [['res', 'idle'], ['res', 'dbg'], ['idle', 'dbg']].filter(([a, b]) => overlaps(R[a], R[b]));
+      const fmt = (b) => (b ? `${Math.round(b.x0)},${Math.round(b.y0)}–${Math.round(b.x1)},${Math.round(b.y1)}` : 'hidden');
+      check(pairs.length === 0 && R.res && R.idle, `W29b HUD ${page} at ${width} px: no overlap (resources ${fmt(R.res)}, idle ${fmt(R.idle)}, debug ${fmt(R.dbg)})`, `W29b HUD ${page} at ${width} px: ${pairs.map((p) => p.join(' over ')).join('; ') || 'a panel missing'} (resources ${fmt(R.res)}, idle ${fmt(R.idle)}, debug ${fmt(R.dbg)})`);
+      if (page === '/' && width === 1024) await shot('w29-hud.png');
+    }
+  ab('set', 'viewport', '1440', '900');
+  errorsNow('W29b HUD');
 }
 
 async function main() {
