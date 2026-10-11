@@ -5,6 +5,8 @@
 
 import { World } from '../src/sim/world.ts';
 import { B, U, buildingInfo } from '../src/sim/kinds.ts';
+import { createWorld } from '../src/sim/scenarios.ts';
+import { beltRoutesToCore } from '../src/sim/beltRoute.ts';
 import { BF_COMPLETE } from '../src/sim/schema.ts';
 import { RESEARCH } from '../src/sim/balance.ts';
 
@@ -173,6 +175,35 @@ for (const [min, x, z] of [
 }
 // Replace engineers lost to saboteurs.
 for (const min of [20, 20, 26, 26, 32, 32, 38, 38]) BALANCED.push(eng(min));
+// W29: mass and rare reach the pool only through the core, so each extractor is belted to it. The
+// routes are worked out on map 1 with every planned footprint kept clear (src/sim/beltRoute.ts) and
+// each line is queued just after its extractor, at its minute. A line joins the nearer of the core
+// and an earlier line with room: the planned buildings round the base leave few free input cells, and
+// routing every line into the core sends the 73,29 rare line 81 tiles round the base, which held
+// the minute-4 builds back far enough that the plan lost at wave 5 (13:27).
+{
+  const planned: Array<[number, number, number]> = [];
+  const extractors: number[] = [];
+  BALANCED.forEach((st, i) => {
+    if (!('build' in st.act)) return;
+    planned.push([st.act.build, st.act.at[0], st.act.at[1]]);
+    if (st.act.build === B.massExtractor || st.act.build === B.rareExtractor) extractors.push(i);
+  });
+  const lines = beltRoutesToCore(
+    createWorld(1, 'map1'),
+    extractors.map((i) => {
+      const a = BALANCED[i]!.act as { build: number; at: [number, number] };
+      return [a.build, a.at[0], a.at[1]];
+    }),
+    { planned, join: 'nearest' },
+  );
+  for (let k = extractors.length - 1; k >= 0; k--) {
+    const i = extractors[k]!;
+    const line = lines[k];
+    if (!line) throw new Error(`plans: no belt route from the extractor at ${(BALANCED[i]!.act as { at: number[] }).at}`);
+    BALANCED.splice(i + 1, 0, ...line.map(([x, z, d]) => b(BALANCED[i]!.min, B.belt, x, z, d)));
+  }
+}
 
 export interface DriveResult {
   outcome: number;
