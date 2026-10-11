@@ -175,13 +175,13 @@ describe('W29b belt items on the belt', () => {
   });
 
   /** World boxes of the drawn items of kind `item` (instance matrix × geometry box). */
-  function drawnBoxes(w: World, item: number): Box3[] {
+  function drawnBoxes(w: World, item: number, at = { x: 54, z: 72 }): Box3[] {
     const sc = new Scene();
     const snap = snapshotOf(w);
     const belts = new BeltShapes(terrain.w, terrain.h);
     belts.update(snap); // view.ts: the models' instance, updated before the overlays
     const e = new EntityRenderer(sc, terrain, CAPACITY, belts);
-    e.update({ camera: camera({ x: 54, z: 72, distance: 14, yaw: 0 }), viewportHeight: 900, yaw: 0, snapshot: snap, aliens: mobile(snap.aliens), units: mobile(snap.units), projectiles: mobile(snap.projectiles), selection: [] });
+    e.update({ camera: camera({ x: at.x, z: at.z, distance: 14, yaw: 0 }), viewportHeight: 900, yaw: 0, snapshot: snap, aliens: mobile(snap.aliens), units: mobile(snap.units), projectiles: mobile(snap.projectiles), selection: [] });
     const out: Box3[] = [];
     sc.traverse((o) => {
       if (!(o instanceof InstancedMesh) || o.name !== `overlay/item/${item}` || !o.visible) return;
@@ -228,6 +228,39 @@ describe('W29b belt items on the belt', () => {
     // the arc's centre is the south-west corner (54, 71), radius 0.5; half way is 45° round it
     expect(centre.x).toBeCloseTo(54 + 0.5 * Math.SQRT1_2, 1);
     expect(centre.z).toBeCloseTo(71 - 0.5 * Math.SQRT1_2, 1);
+  });
+
+  // Codex adversarial review (W29): a building that puts items on a belt (conveyor.ts output():
+  // an extractor with belts on, a depot, a machine) feeds the perimeter belt whose back faces it,
+  // so the shapes count it. Map 1's mass deposit at (54,50): the extractor covers 54–55 × 50–51.
+  //   (56,50) runs east with its back to the extractor; (56,49) runs south into its left side
+  function extractorLayout(): { w: World; ext: number; belt: number } {
+    const w = createWorld(1, 'sandbox');
+    const ext = w.placeBuilding(B.massExtractor, 54, 50, true);
+    expect(ext).toBeGreaterThanOrEqual(0);
+    const [belt] = lay(w, [[56, 50, 0], [57, 50, 0], [56, 49, 1]]);
+    return { w, ext, belt: belt! };
+  }
+
+  it('a belt fed from behind by an extractor and from a side by a belt is a join, not a corner', async () => {
+    const { BeltShapes, BELT_JOIN_L } = await shapesModule();
+    const { w } = extractorLayout();
+    const s = new BeltShapes(terrain.w, terrain.h);
+    s.update(snapshotOf(w));
+    expect(s.shapeAt(tileOf(56, 50))).toBe(BELT_JOIN_L);
+  });
+
+  it('an item the extractor puts on the belt is drawn entering from the extractor\'s side (the west edge), not the feeder\'s', () => {
+    const { w, ext, belt } = extractorLayout();
+    w.buildings.cols.stock[slot(w, ext)] = 1;
+    for (let t = 0; t < 5 && w.buildings.cols.item[slot(w, belt)] === 0; t++) w.step();
+    const c = w.buildings.cols;
+    expect(c.item[slot(w, belt)], 'the extractor put an item on (56,50)').toBe(ITEM_MASS);
+    c.itemPos[slot(w, belt)] = 0;
+    const [b] = drawnBoxes(w, ITEM_MASS, { x: 56, z: 50 });
+    const centre = b!.getCenter(new Vector3());
+    expect(centre.x, 'on the west edge').toBeCloseTo(56, 1);
+    expect(centre.z, 'on the centre line').toBeCloseTo(50.5, 1);
   });
 });
 

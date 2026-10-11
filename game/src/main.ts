@@ -39,6 +39,7 @@ import { inspectPreview } from './render/preview.ts';
 import { EffectClock } from './render/anim.ts';
 import { idleUnits, nextIdle, type IdleUnits } from './render/idle.ts';
 import { IdleColumn, stackRightColumn, type IdleType } from './ui/idleColumn.ts';
+import { buildingRightClick } from './rightClick.ts';
 import {
   ALIEN_INFO,
   ALIEN_KINDS,
@@ -839,12 +840,9 @@ function rightClick(x: number, y: number, queue: boolean) {
   if (p?.type === 'building') {
     const r = buildingRow(p.id);
     const c = interp.curr!.buildings.cols;
-    if (r >= 0 && (!(c.flags[r]! & BF_COMPLETE) || c.flags[r]! & BF_UPGRADING)) {
-      command({ t: 'assist', ids, target: p.id, queue });
-      return;
-    }
-    if (r >= 0 && c.hp[r]! < c.maxHp[r]!) {
-      command({ t: 'repair', ids, target: p.id, queue });
+    const order = r >= 0 ? buildingRightClick(c.flags[r]!, c.hp[r]!, c.maxHp[r]!) : null;
+    if (order) {
+      command({ t: order, ids, target: p.id, queue });
       return;
     }
   }
@@ -2133,6 +2131,11 @@ const game = {
   itemDrop: (on: boolean) => {
     entities.itemDrop = on;
     return true;
+  },
+  /** Debug (the per-item pixel check): the items on these belts (building ids) are not drawn; [] draws them all. */
+  hideItemsOn: (ids: number[]) => {
+    entities.hiddenItems = new Set(ids);
+    return ids.length;
   },
   /** Each drawn belt item's bottom and top (world y) and the belt surface under it (its tile's top + BELT_SURFACE_Y). */
   itemHeights: () => {

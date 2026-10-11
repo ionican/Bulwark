@@ -7,8 +7,9 @@ import { describe, expect, it } from 'vitest';
 import { World } from '../src/sim/world.ts';
 import { flatWorld } from './fixtures.ts';
 import { B, COMMANDER_INCOME, TICK_SECONDS, U, siteWork } from '../src/sim/kinds.ts';
-import { BF_UPGRADING } from '../src/sim/schema.ts';
+import { BF_COMPLETE, BF_STARTED, BF_UPGRADING } from '../src/sim/schema.ts';
 import { BUILD_RATE, RESEARCH_INDEX } from '../src/sim/balance.ts';
+import { buildingRightClick } from '../src/rightClick.ts';
 
 function setup(): { w: World; cmd: number; eng: number } {
   const w = flatWorld(40, 40, { rich: true });
@@ -131,5 +132,44 @@ describe('W29 repair', () => {
     expect(w.submit({ t: 'repair', ids: [cmd], target: belt })).toBeNull();
     for (let t = 0; t < 50; t++) w.step();
     expect(w.buildings.cols.hp[s]).toBe(w.buildings.cols.maxHp[s]);
+  });
+});
+
+// Codex adversarial review (W29): the right-click on a complete, damaged building is repair even
+// while it is upgrading (an upgrading building keeps BF_COMPLETE; PLAN-W29 item 10). Assist stays
+// for an unfinished site and for an undamaged building under upgrade. The mapping is main.ts's,
+// taken out so it can be tested (src/rightClick.ts).
+
+describe('W29 right-click on a building (main.ts mapping)', () => {
+  it('repair for a complete damaged building, upgrading or not; assist for a site or an undamaged upgrade; nothing for a sound building', () => {
+    const map = buildingRightClick;
+    expect(map(BF_COMPLETE, 50, 100), 'complete, damaged').toBe('repair');
+    expect(map(BF_COMPLETE | BF_UPGRADING, 50, 100), 'upgrading, damaged').toBe('repair');
+    expect(map(BF_COMPLETE | BF_UPGRADING, 100, 100), 'upgrading, undamaged').toBe('assist');
+    expect(map(BF_STARTED, 20, 100), 'site under construction').toBe('assist');
+    expect(map(0, 1, 100), 'site not started').toBe('assist');
+    expect(map(BF_COMPLETE, 100, 100), 'complete, undamaged').toBeNull();
+  });
+
+  it('a damaged building whose upgrade is starved of resources: the right-click order is repair and hp rises', () => {
+    const map = buildingRightClick;
+    const { w, cmd, eng } = setup();
+    w.completeResearch(RESEARCH_INDEX.gunT2!);
+    const gun = w.placeBuilding(B.gun, 20, 20, true);
+    const s = w.buildings.slotForId(gun);
+    const c = w.buildings.cols;
+    expect(w.submit({ t: 'upgrade', ids: [eng], target: gun })).toBeNull();
+    w.step();
+    expect(c.flags[s]! & BF_UPGRADING).not.toBe(0);
+    // starve it: an empty pool (only the commander's income trickles in), and the gun damaged
+    w.pool.set([0, 0, 0]);
+    c.hp[s] = 20;
+    const order = map(c.flags[s]!, c.hp[s]!, c.maxHp[s]!);
+    expect(order).toBe('repair');
+    expect(w.submit({ t: order!, ids: [cmd], target: gun })).toBeNull();
+    const h0 = c.hp[s]!;
+    for (let t = 0; t < 50; t++) w.step();
+    expect(c.flags[s]! & BF_UPGRADING, 'still upgrading').not.toBe(0);
+    expect(c.hp[s]!).toBeGreaterThan(h0 + 5);
   });
 });

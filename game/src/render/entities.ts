@@ -184,6 +184,8 @@ export class EntityRenderer {
   private readonly itemTops: number[];
   /** Debug (the W29b pixel check's negative control): items lowered into the belt, their tops under its surface. */
   itemDrop = false;
+  /** Debug (the per-item pixel check, scripts/check-render.mjs): belts (building ids) whose item is not drawn. */
+  hiddenItems: ReadonlySet<number> = new Set();
 
   /**
    * `belts`: each belt tile's shape (corner items follow the curve), the models' instance
@@ -324,7 +326,7 @@ export class EntityRenderer {
       }
       if (lod !== LOD_ICON) {
         // Belt item.
-        if (belt && c.item[r]! !== 0) {
+        if (belt && c.item[r]! !== 0 && !this.hiddenItems.has(B_.id[r]!)) {
           // W29b: on the belt's top surface (the model stands on its footprint's top), along the
           // tile's path: the quarter circle on a corner, back to front otherwise
           const bx = c.tx[r]!;

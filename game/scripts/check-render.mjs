@@ -89,10 +89,11 @@ import { frameStats, judgeSamples, judgeWorkerWindow } from './benchGate.mjs';
 import { ART_REF, screenshot } from './shots.mjs';
 
 const GAME = fileURLToPath(new URL('..', import.meta.url));
-const PORT = 8823;
-const ORIGIN = `http://127.0.0.1:${PORT}`;
-const SESSION = 'w24-2b';
 const args = process.argv.slice(2);
+// --port and --session (development): another port and agent-browser session than the Verify's
+const PORT = args.includes('--port') ? Number(args[args.indexOf('--port') + 1]) : 8823;
+const ORIGIN = `http://127.0.0.1:${PORT}`;
+const SESSION = args.includes('--session') ? args[args.indexOf('--session') + 1] : 'w24-2b';
 const shotsDir = args.includes('--shots') ? args[args.indexOf('--shots') + 1] : null;
 const BUDGET = { terrainMs: 5, postMs: 3.5 };
 /** The inspection report's key for drawn model meshes with no entity group (src/render/inspect.ts UNGROUPED). */
@@ -897,6 +898,16 @@ async function w29Items() {
     js('__game.itemDrop(false)');
     await frames(3);
     check(!bar(sunk), `W29b negative control: with the ${label} items lowered into the belt the pixel check fails (${fmt(sunk)})`, `W29b negative control: lowered ${label} items still pass (${fmt(sunk)})`);
+    // Codex review: a partial negative control. Half the carrying tiles in view (a corner first)
+    // have their item hidden; the check must fail for them.
+    const carrying = js(`__game.list('building').filter((b) => b.kindName === 'belt' && b.item === ${item}).map((b) => ({ id: b.id, corner: __game.beltModelAt(b.tx, b.ty).some((m) => m.startsWith('beltCorner')) }))`);
+    const hide = [...carrying.filter((b) => b.corner), ...carrying.filter((b) => !b.corner)].slice(0, Math.ceil(carrying.length / 2)).map((b) => b.id);
+    js(`__game.hideItemsOn(${JSON.stringify(hide)})`);
+    await frames(3);
+    const part = itemPixels(item);
+    js('__game.hideItemsOn([])');
+    await frames(3);
+    check(!bar(part), `W29 partial negative control: with ${hide.length} of ${carrying.length} ${label} items hidden the check fails (${fmt(part)})`, `W29 partial negative control: ${hide.length} of ${carrying.length} ${label} items hidden (a corner among them: ${carrying.some((b) => b.corner)}) and the check still passes (${fmt(part)})`);
   }
   // the full extractor stands still; the belted one moves
   const ext = js(`__game.list('building').filter((b) => b.kindName === 'massExtractor').map((b) => ({ id: b.id, tx: b.tx, ty: b.ty, idle: b.idle }))`);
@@ -1172,9 +1183,12 @@ async function main() {
       await sleep(250);
     }
     note(`preview: ${ORIGIN} (this tree's build)`);
-    // --only-2b (development): the run 2b and W27 checks alone
-    if (!args.includes('--only-2b')) await run2a();
-    await run2b();
+    // --only-2b (development): the run 2b and W27 checks alone; --only-w29-items: the W29 item checks alone
+    if (args.includes('--only-w29-items')) await w29Items();
+    else {
+      if (!args.includes('--only-2b')) await run2a();
+      await run2b();
+    }
   } catch (e) {
     fail(String(e?.message ?? e));
   } finally {

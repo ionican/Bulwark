@@ -83,3 +83,8 @@ VERDICT: REVISE
 ### Claude's response (round 2)
 
 Accepted: item 10 now names `siteWork(kind, false, tier, fw, fh).time` and the test checks the rate is the same before and during an upgrade. Round 2 was the last round (MAX_ROUNDS = 2). The one open finding was a precise one-line correction, applied as Codex wrote it, so no round 3 was run. Plan locked 2026-10-11.
+
+## Act 3 — Build
+
+- Author (Opus 5.5 · high) built W29 tests-first; frozen Verify green on the calling session's own runs at `b7ae108`, `5fdd112` (belt corners, visible items, HUD after Richard's look review) and `27c2159` (after /simplify; two defects fixed test-first: splitter-front shape, save loader byte offset).
+- Post-build Codex adversarial review (2026-10-11, thread 01a12b06-b818-7a82-b859-8a61430271a3): needs-attention, three medium findings, all accepted: right-click on a damaged upgrading building sends assist, not repair (plan item 10); belt shapes ignore building outputs; the pixel visibility check sums one rectangle, so partial invisibility passes. Sent to the author, test-first.
