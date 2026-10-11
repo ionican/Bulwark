@@ -35,6 +35,18 @@ function beltWorld(): World {
 }
 
 describe('W29 saves', () => {
+  it('a save read from a Node Buffer view that shares a larger pool (non-zero byteOffset) loads like the plain bytes', () => {
+    const w = beltWorld();
+    for (let i = 0; i < 80; i++) w.step();
+    const bytes = serializeWorld(w);
+    // readFileSync and Buffer.concat return views into a pooled ArrayBuffer: the save starts part-way in
+    const view = Buffer.concat([Buffer.alloc(13, 7), Buffer.from(bytes), Buffer.alloc(5, 9)]).subarray(13, 13 + bytes.length);
+    expect(view.byteOffset).toBeGreaterThan(0);
+    const a = deserializeWorld(bytes);
+    const b = deserializeWorld(view);
+    expect(same(snapOf(b), snapOf(a))).toBe(true);
+  });
+
   it('the save and snapshot versions are bumped', () => {
     expect(SAVE_VERSION).toBe(4);
     expect(SNAPSHOT_VERSION).toBe(7);

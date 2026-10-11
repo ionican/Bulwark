@@ -72,6 +72,19 @@ describe('W29b belt shapes from the snapshot', () => {
     expect(s.shapeAt(tileOf(55, 85)), 'join from the right').toBe(BELT_JOIN_R);
   });
 
+  it('a splitter feeds only its left and right (conveyor.ts): a belt in front of it, fed from a side, is a corner', async () => {
+    const { BeltShapes, BELT_CORNER_R } = await shapesModule();
+    const w = createWorld(1, 'sandbox');
+    // into the splitter (61,70) from behind; it faces south, so it puts out west and east, never south
+    lay(w, [[60, 70, 0]]);
+    expect(w.placeBuilding(B.splitter, 61, 70, true, 1)).toBeGreaterThanOrEqual(0);
+    // (61,71) faces south with its back to the splitter's front; (60,71) runs east into its right-hand side
+    lay(w, [[61, 71, 1], [60, 71, 0]]);
+    const s = new BeltShapes(terrain.w, terrain.h);
+    s.update(snapshotOf(w));
+    expect(s.shapeAt(tileOf(61, 71))).toBe(BELT_CORNER_R);
+  });
+
   it('splitters and mergers keep their own shape', async () => {
     const { BeltShapes, BELT_STRAIGHT } = await shapesModule();
     const w = createWorld(1, 'sandbox');
