@@ -59,7 +59,7 @@
 //
 // W29 (PLAN-W29 items 21–22):
 //   items and the core, in the sandbox: the core is in the inventory above; a mass and a rare
-//     extractor belted to the core (`place`, routes from src/sim/beltRoute.ts): mass and rare items
+//     extractor belted to the core (`place`, routes from test/beltRoute.ts): mass and rare items
 //     are drawn with their own meshes (overlay/item/5 and /6, read from the scene) and their drawn
 //     positions move between two frames; a negative control hides those meshes and the same check
 //     then fails. A full extractor (no belt, buffers filled by the sandbox `fillBuffers` command)
@@ -774,12 +774,12 @@ async function run2b() {
 
 /**
  * Belt routes to the core for extractors at the given anchors, worked out in Node on the same map
- * (src/sim/beltRoute.ts, the planner test/plans.ts uses): each line runs into the core or joins an
+ * (test/beltRoute.ts, the planner test/plans.ts uses): each line runs into the core or joins an
  * earlier line from behind or the side. Returns the steps to `place`, extractors first.
  */
 async function deliveryLayout(extractors) {
   const { createWorld } = await import('../src/sim/scenarios.ts');
-  const { beltRoutesToCore } = await import('../src/sim/beltRoute.ts');
+  const { beltRoutesToCore } = await import('../test/beltRoute.ts');
   const { B } = await import('../src/sim/kinds.ts');
   const w = createWorld(1, 'sandbox');
   const steps = [];

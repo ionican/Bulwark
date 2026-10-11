@@ -6,7 +6,7 @@
 import { World } from '../src/sim/world.ts';
 import { B, U, buildingInfo } from '../src/sim/kinds.ts';
 import { createWorld } from '../src/sim/scenarios.ts';
-import { beltRoutesToCore } from '../src/sim/beltRoute.ts';
+import { beltRoutesToCore } from './beltRoute.ts';
 import { BF_COMPLETE } from '../src/sim/schema.ts';
 import { RESEARCH } from '../src/sim/balance.ts';
 
@@ -176,7 +176,7 @@ for (const [min, x, z] of [
 // Replace engineers lost to saboteurs.
 for (const min of [20, 20, 26, 26, 32, 32, 38, 38]) BALANCED.push(eng(min));
 // W29: mass and rare reach the pool only through the core, so each extractor is belted to it. The
-// routes are worked out on map 1 with every planned footprint kept clear (src/sim/beltRoute.ts) and
+// routes are worked out on map 1 with every planned footprint kept clear (test/beltRoute.ts) and
 // each line is queued just after its extractor, at its minute. A line joins the nearer of the core
 // and an earlier line with room: the planned buildings round the base leave few free input cells, and
 // routing every line into the core sends the 73,29 rare line 81 tiles round the base, which held

@@ -1,6 +1,7 @@
 // W29: belt routes from extractors to the core, worked out on a world's map. Used by the scripted
 // map 1 plans (test/plans.ts) and the render checks' delivery fixture (scripts/check-render.mjs);
-// the game itself never calls it.
+// the game itself never calls it, so it lives here rather than under src/ (w24r3-greybox requires
+// every src file to be part of the game).
 //
 // Each route is a breadth-first search over free belt cells, so it is a shortest line in tiles:
 //   - it starts on a cell beside the extractor pointing away from it (conveyor.ts output() only
@@ -13,9 +14,9 @@
 //     alloy or parts on the line, and the core refuses those, which stops the line.
 // Routes are planned in the order given and each one keeps off the tiles of the earlier ones.
 
-import { B, BELT_TILES_PER_SECOND, TICK_SECONDS, buildingInfo } from './kinds.ts';
-import { EXTRACTOR_BOOST } from './balance.ts';
-import type { World } from './world.ts';
+import { B, BELT_TILES_PER_SECOND, TICK_SECONDS, buildingInfo } from '../src/sim/kinds.ts';
+import { EXTRACTOR_BOOST } from '../src/sim/balance.ts';
+import type { World } from '../src/sim/world.ts';
 
 /** One belt tile: x, z and the direction it carries (0 +x, 1 +z, 2 −x, 3 −z). */
 export type BeltTile = [number, number, number];
