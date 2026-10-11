@@ -3,7 +3,7 @@
 // again when the command is applied, because the state may have changed in between.
 
 import { SANDBOX_COMMANDS, type Command } from './commands.ts';
-import { ALIEN_KINDS, B, BUILDING_KINDS, U, buildingInfo } from './kinds.ts';
+import { ALIEN_KINDS, BUILDING_KINDS, U, buildingInfo } from './kinds.ts';
 import { BF_COMPLETE, BF_UPGRADING } from './schema.ts';
 import { BUILD_REQUIRES, MAX_RUN_DEPTH, RESEARCH, RESEARCH_INDEX, SPAWN_AT_MAX, TIER_REQUIRES } from './balance.ts';
 import { MAX_ORDERS, type World } from './world.ts';
@@ -46,8 +46,8 @@ function check(w: World, cmd: Command): string | null {
       if (!isInt(cmd.kind) || cmd.kind < 0 || cmd.kind >= BUILDING_KINDS.length) return `unknown building kind ${JSON.stringify(cmd.kind)}`;
       if (!isInt(cmd.tx) || !isInt(cmd.ty)) return 'build needs integer tile coordinates';
       if (cmd.dir !== undefined && (!isInt(cmd.dir) || cmd.dir < 0 || cmd.dir > 3)) return 'dir must be 0..3';
-      if (cmd.kind === B.tempTurret) return 'the temporary turret is dropped by an engineer, not built';
-      if (cmd.kind === B.gate) return 'a gate is made from finished walls (the gate command), not built';
+      const placedBy = buildingInfo(cmd.kind).placedBy;
+      if (placedBy) return placedBy;
       if (cmd.t === 'build') {
         if (!idList(cmd.ids)) return 'build needs unit ids';
         const req = BUILD_REQUIRES[BUILDING_KINDS[cmd.kind]!];
@@ -162,6 +162,17 @@ function check(w: World, cmd: Command): string | null {
       if (used + n > w.aliens.capacity) return `the alien table would overflow (${w.aliens.count} aliens + ${w.pendingSpawns} waiting to spawn + ${n} in wave ${cmd.index} > ${w.aliens.capacity})`;
       return null;
     }
+    case 'repair': {
+      if (!idList(cmd.ids) || !isInt(cmd.target)) return 'repair needs ids and a target';
+      const s = w.buildings.slotForId(cmd.target);
+      if (s < 0) return 'repair target does not exist';
+      return repairProblem(w, s);
+    }
+    case 'damage': {
+      if (!isInt(cmd.target) || !isNum(cmd.amount) || cmd.amount <= 0) return 'damage needs a building id and a positive amount';
+      return w.buildings.slotForId(cmd.target) < 0 ? 'damage target does not exist' : null;
+    }
+    case 'fillBuffers':
     case 'clearAliens':
     case 'clearWrecks':
     case 'resetStats':
@@ -171,6 +182,15 @@ function check(w: World, cmd: Command): string | null {
     default:
       return `unknown command ${JSON.stringify((cmd as { t?: unknown }).t)}`;
   }
+}
+
+/** Null if building slot s may be repaired now (complete and below its maximum hit points), otherwise why not. */
+export function repairProblem(w: World, s: number): string | null {
+  const c = w.buildings.cols;
+  const info = buildingInfo(c.kind[s]!);
+  if (!(c.flags[s]! & BF_COMPLETE)) return `${info.label} is not finished`;
+  if (c.hp[s]! >= c.maxHp[s]!) return `${info.label} is not damaged`;
+  return null;
 }
 
 /** Null if building slot s may start its next upgrade now, otherwise why not. */

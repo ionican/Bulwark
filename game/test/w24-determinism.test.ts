@@ -66,12 +66,12 @@ function play(w: World, end: number, seen: Record<string, unknown> = {}): Run {
     // Effects, observed right after the command's tick.
     if (t === 1) seen.unlimited = w.unlimited;
     if (t === 2) seen.run1 = w.runs.filter(Boolean).map((r) => r!.sites.length);
-    if (t === 499) seen.run1Done = w.runs.every((r) => r === null) && w.buildings.count === 9;
+    if (t === 499) seen.run1Done = w.runs.every((r) => r === null) && w.buildings.count === 9 + 1; // W29: and the core
     if (t === 500) {
       let g = -1;
       for (let s = 0; s < w.buildings.highWater; s++) if (w.buildings.alive[s] && w.buildings.cols.kind[s] === B.gate) g = s;
       seen.gate = g < 0 ? null : [w.buildings.cols.tx[g], w.buildings.cols.ty[g], w.buildings.cols.fw[g], w.buildings.cols.fh[g]];
-      seen.wallsAfterGate = w.buildings.count; // 9 walls − 3 + 1 gate
+      seen.wallsAfterGate = w.buildings.count - 1; // 9 walls − 3 + 1 gate (W29: less the core)
     }
     if (t === 700) seen.gunDamageMult = w.tuning.b(B.gun, TB_DAMAGE);
     if (t === 800) seen.gunPlaced = w.occupancy[50 * w.terrain.w + 60]! > 0;

@@ -57,6 +57,26 @@
 // w27-wall-drag-preview.png (same folder). Selection depth: an engineer selected by a real click,
 // moved behind a complete gun turret, camera yaw 0 at distance 16: w24-selection-occluded.png.
 //
+// W29 (PLAN-W29 items 21–22):
+//   items and the core, in the sandbox: the core is in the inventory above; a mass and a rare
+//     extractor belted to the core (`place`, routes from test/beltRoute.ts): mass and rare items
+//     are drawn with their own meshes (overlay/item/5 and /6, read from the scene) and their drawn
+//     positions move between two frames; a negative control hides those meshes and the same check
+//     then fails. A full extractor (no belt, buffers filled by the sandbox `fillBuffers` command)
+//     draws the same matrices on two frames a tick apart, while a belted extractor's do not.
+//   W29b items visible, by pixels, item by item: at the game camera (distance 30, yaw 0), the game
+//     paused, up to ITEM_SAMPLES carrying tiles in view (a corner among them). Each item is measured
+//     on its own: two plain renders (no post stack) of its tile's screen rectangle, one with it
+//     drawn and one with it hidden (`__game.hideItemsOn`); the luminance must differ by more than
+//     8 on at least ITEM_PX pixels for every sampled item. Negative controls: the items lowered
+//     into the belt (`__game.itemDrop(true)`), every sample fails; every other item hidden (the
+//     corner one included), exactly those samples fail and the rest pass.
+//   delivery load, gated: every map-1 extractor (8 mass, 3 rare) belted to the core in the
+//     sandbox, at least 300 belt tiles carrying an item at every sample and the delivered count
+//     rising every second of the 20 s window (buffers kept full by `fillBuffers` once a second);
+//     the game camera's frame gate (≥ 55 fps average, ≥ 45 1%-low) and the worker gate
+//     (scripts/benchGate.mjs judgeWorkerWindow) apply, with the same load-average retry rule.
+//
 // With --shots <dir> it also writes the run 2a screenshots (w24-2a2-*.png: game camera, the same
 // view tilted low, map edge, aliens close up, full zoom-out) there.
 // It always stops the preview server and closes its agent-browser session. Exit 1 on any failed
@@ -67,21 +87,22 @@ import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { homedir, loadavg } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { judgeSamples, judgeWorkerWindow } from './benchGate.mjs';
+import { frameStats, judgeSamples, judgeWorkerWindow } from './benchGate.mjs';
 import { ART_REF, screenshot } from './shots.mjs';
 
 const GAME = fileURLToPath(new URL('..', import.meta.url));
-const PORT = 8823;
-const ORIGIN = `http://127.0.0.1:${PORT}`;
-const SESSION = 'w24-2b';
 const args = process.argv.slice(2);
+// --port and --session (development): another port and agent-browser session than the Verify's
+const PORT = args.includes('--port') ? Number(args[args.indexOf('--port') + 1]) : 8823;
+const ORIGIN = `http://127.0.0.1:${PORT}`;
+const SESSION = args.includes('--session') ? args[args.indexOf('--session') + 1] : 'w24-2b';
 const shotsDir = args.includes('--shots') ? args[args.indexOf('--shots') + 1] : null;
 const BUDGET = { terrainMs: 5, postMs: 3.5 };
 /** The inspection report's key for drawn model meshes with no entity group (src/render/inspect.ts UNGROUPED). */
 const UNGROUPED = 'ungrouped';
 const INVENTORY = [
   'massExtractor', 'generator', 'rareExtractor', 'lab', 'depot', 'shredder', 'smelter', 'assembler', 'wall', 'gun', 'area', 'beam',
-  'heavy', 'shield', 'tempTurret', 'belt', 'splitter', 'merger', 'gate', 'commander', 'engineer', 'rusher', 'hunter', 'breaker', 'saboteur',
+  'heavy', 'shield', 'tempTurret', 'belt', 'splitter', 'merger', 'gate', 'core', 'commander', 'engineer', 'rusher', 'hunter', 'breaker', 'saboteur',
 ];
 
 const failures = [];
@@ -463,14 +484,7 @@ async function measurePose(label, rig, zoomOut) {
   const loadStart = load1();
   const R = js(MEASURE_JS(25));
   const loadEnd = load1();
-  const t = R.times.filter((x) => x >= R.t0 + 5000 && x <= R.t0 + 25000);
-  const iv = [];
-  for (let i = 1; i < t.length; i++) iv.push(t[i] - t[i - 1]);
-  const secs = (t[t.length - 1] - t[0]) / 1000;
-  const worst = [...iv].sort((a, b) => b - a);
-  const n1 = Math.max(1, Math.ceil(iv.length / 100));
-  const avg = iv.length / secs;
-  const low = 1000 / (worst.slice(0, n1).reduce((a, b) => a + b, 0) / n1);
+  const { iv, worst, avg, low } = frameStats(R.times, R.t0);
   const cost = js('__game.renderCost(15)');
   const window = R.samples.filter((x) => x.s > 5);
   // the workload must be live, visible and active every second (scripts/benchGate.mjs)
@@ -530,29 +544,28 @@ async function gateNegatives() {
   );
 }
 
-/** A pose through the gate, with the load-average retry rule. */
-async function gatedPose(label, rig, zoomOut) {
-  const a = await measurePose(label, rig, zoomOut);
-  if (!a.problems.length) {
-    note(`ok   benchmark ${label}: passes`);
-    return;
-  }
+/**
+ * A measurement through the gate, with the load-average retry rule: a failure measured at a load
+ * average above GATE.load waits (up to 5 min) for the load to drop below it and measures once
+ * more, and that result stands; any other failure fails. `name` heads the messages;
+ * `measure(again)` returns { problems, loadStart, loadEnd }.
+ */
+async function gated(name, measure) {
+  const a = await measure(false);
+  if (!a.problems.length) return note(`ok   ${name}: passes`);
   const loadA = Math.max(a.loadStart, a.loadEnd);
-  if (loadA > GATE.load) {
-    note(`benchmark ${label} failed at load average ${loadA.toFixed(2)} (> ${GATE.load}): ${a.problems.slice(0, 6).join(' | ')}; waiting for load < ${GATE.load} (up to 5 min) to measure once more`);
-    const t0 = Date.now();
-    while (load1() >= GATE.load && Date.now() - t0 < 300_000) await sleep(10_000);
-    note(`load average now ${load1().toFixed(2)} after ${((Date.now() - t0) / 1000).toFixed(0)} s`);
-    const b = await measurePose(`${label} (re-measured)`, rig, zoomOut);
-    if (!b.problems.length) {
-      note(`ok   benchmark ${label}: passes when re-measured (first result: ${a.problems.slice(0, 3).join(' | ')})`);
-      return;
-    }
-    fail(`benchmark ${label}: ${b.problems.slice(0, 8).join(' | ')} (first measurement: ${a.problems.slice(0, 3).join(' | ')})`);
-    return;
-  }
-  fail(`benchmark ${label} at load average ${loadA.toFixed(2)}: ${a.problems.slice(0, 8).join(' | ')}`);
+  if (loadA <= GATE.load) return fail(`${name} at load average ${loadA.toFixed(2)}: ${a.problems.slice(0, 8).join(' | ')}`);
+  note(`${name} failed at load average ${loadA.toFixed(2)} (> ${GATE.load}): ${a.problems.slice(0, 6).join(' | ')}; waiting for load < ${GATE.load} (up to 5 min) to measure once more`);
+  const t0 = Date.now();
+  while (load1() >= GATE.load && Date.now() - t0 < 300_000) await sleep(10_000);
+  note(`load average now ${load1().toFixed(2)} after ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+  const b = await measure(true);
+  if (!b.problems.length) return note(`ok   ${name}: passes when re-measured (first result: ${a.problems.slice(0, 3).join(' | ')})`);
+  fail(`${name}: ${b.problems.slice(0, 8).join(' | ')} (first measurement: ${a.problems.slice(0, 3).join(' | ')})`);
 }
+
+/** A pose through the gate. */
+const gatedPose = (label, rig, zoomOut) => gated(`benchmark ${label}`, (again) => measurePose(again ? `${label} (re-measured)` : label, rig, zoomOut));
 
 /** A cold launch of the stress scene in a fresh browser (the session closed first), warm-up on or off. */
 async function coldLaunch(warm) {
@@ -630,7 +643,7 @@ async function run2b() {
     await frames(10);
     const p = js(`__game.screenOf('unit', ${cpos.id})`);
     await click(p.x, p.y);
-    picked = js('__game.selected').some((s) => s.id === cpos.id);
+    picked = js(`__game.selectedIds('unit')`).includes(cpos.id);
   }
   if (!picked) fail(`W27: could not select the commander by clicking it (${JSON.stringify(cpos)}, selected ${JSON.stringify(js('__game.selected'))})`);
   camera({ x: 60, z: 49, distance: 22, yaw: 0, pitch: (55 * Math.PI) / 180 });
@@ -714,7 +727,7 @@ async function run2b() {
       await frames(10);
       const s2 = js(`__game.screenOf('unit', ${eng.id})`);
       await click(s2.x, s2.y);
-      sel = js('__game.selected').some((s) => s.id === eng.id);
+      sel = js(`__game.selectedIds('unit')`).includes(eng.id);
     }
     const bx = gun.tx + gun.fw / 2;
     const bz = gun.ty - 0.7;
@@ -752,6 +765,270 @@ async function run2b() {
   // screenshots and W27 use (the commander can fall)
   await gateNegatives();
   errorsNow('gate negative checks');
+  // W29 item 22: the delivery load, on a scene of its own (after the 2b screenshots and checks, which use the benchmark's)
+  await w29DeliveryBench();
+  errorsNow('W29 delivery benchmark');
+}
+
+// ---- W29 ------------------------------------------------------------------------------------
+
+/**
+ * Belt routes to the core for extractors at the given anchors, worked out in Node on the same map
+ * (test/beltRoute.ts, the planner test/plans.ts uses): each line runs into the core or joins an
+ * earlier line from behind or the side. Returns the steps to `place`, extractors first.
+ */
+async function deliveryLayout(extractors) {
+  const { createWorld } = await import('../src/sim/scenarios.ts');
+  const { beltRoutesToCore } = await import('../test/beltRoute.ts');
+  const { B } = await import('../src/sim/kinds.ts');
+  const w = createWorld(1, 'sandbox');
+  const steps = [];
+  for (const [k, x, z] of extractors) {
+    w.placeBuilding(B[k], x, z, true);
+    steps.push([k, x, z, 0]);
+  }
+  const lines = beltRoutesToCore(w, extractors.map(([k, x, z]) => [B[k], x, z]));
+  lines.forEach((line, i) => {
+    if (!line) throw new Error(`no belt route from the extractor at ${extractors[i][1]},${extractors[i][2]} to the core`);
+    for (const [x, z, d] of line) steps.push(['belt', x, z, d]);
+  });
+  return { steps, tiles: lines.reduce((a, l) => a + l.length, 0) };
+}
+
+const PLACE_ALL = (steps) => `(async () => {
+  const out = await Promise.all(${JSON.stringify(steps)}.map(([k, x, z, d]) => __game.place(k, x, z, d)));
+  return out.map((r, i) => (r.ok ? null : ${JSON.stringify(steps)}[i].join(' ') + ': ' + r.reason)).filter(Boolean);
+})()`;
+
+/** Drawn item instances per mesh name (overlay/item/<kind>), as ground positions, read from the scene. */
+const drawnItems = () => js('__game.drawnItems()');
+/** The drawn positions of `name` moved between two readings (at least one instance not where any was). */
+function moved(a, b) {
+  const key = (p) => `${p[0].toFixed(3)},${p[1].toFixed(3)}`;
+  const before = new Set(a.map(key));
+  return a.length > 0 && b.length > 0 && b.some((p) => !before.has(key(p)));
+}
+
+/** W29b: pixels each sampled belt item must change at the game camera (distance 30), shown against hidden. */
+const ITEM_PX = 40;
+/** At most this many carrying tiles sampled per item kind (corner tiles first). */
+const ITEM_SAMPLES = 8;
+/**
+ * The carrying tiles of `item` to sample, at the current (paused) snapshot: belts whose tile, from
+ * the belt top to a tile above it with 0.3 tile round it, is wholly on screen; corner tiles first.
+ */
+const itemSamples = (item) =>
+  js(`(() => {
+    const g = __game;
+    const tiles = g.list('building').filter((b) => b.kindName === 'belt' && b.item === ${item});
+    const out = [];
+    for (const t of tiles) {
+      const h = g.terrainInfo.height(t.tx + 0.5, t.ty + 0.5);
+      const pts = [];
+      for (const y of [h + 0.25, h + 1]) for (const [a, b] of [[-0.3, -0.3], [1.3, -0.3], [1.3, 1.3], [-0.3, 1.3]]) pts.push(g.worldToScreen(t.tx + a, t.ty + b, y));
+      if (!pts.every((p) => p.x >= 0 && p.y >= 0 && p.x <= innerWidth && p.y <= innerHeight)) continue;
+      const corner = g.beltModelAt(t.tx, t.ty).some((m) => m.startsWith('beltCorner'));
+      out.push({ id: t.id, x: t.tx, z: t.ty, corner, rect: { x0: Math.min(...pts.map((p) => p.x)), y0: Math.min(...pts.map((p) => p.y)), x1: Math.max(...pts.map((p) => p.x)), y1: Math.max(...pts.map((p) => p.y)) } });
+    }
+    out.sort((a, b) => Number(b.corner) - Number(a.corner));
+    return out.slice(0, ${ITEM_SAMPLES});
+  })()`);
+/**
+ * Each sampled item measured on its own, at the same (paused) snapshot: its tile's rectangle
+ * rendered (no post stack) with every item drawn except those on the belts in `hidden`, then again
+ * with this item hidden as well, so only this item differs between the two; the pixels whose
+ * luminance changed by more than 8.
+ */
+const itemPixelsEach = (samples, hidden = []) =>
+  js(`(async () => {
+    const g = __game;
+    const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const hidden = ${JSON.stringify(hidden)};
+    const out = [];
+    for (const s of ${JSON.stringify(samples)}) {
+      g.hideItemsOn(hidden);
+      await frame();
+      const a = g.debugRender.capture(s.rect);
+      g.hideItemsOn([...hidden, s.id]);
+      await frame();
+      const b = g.debugRender.capture(s.rect);
+      let over = 0;
+      for (let i = 0; i < a.data.length; i++) if (Math.abs(a.data[i] - b.data[i]) > 8) over++;
+      out.push({ id: s.id, x: s.x, z: s.z, corner: s.corner, over, px: a.data.length });
+    }
+    g.hideItemsOn([]);
+    await frame();
+    return out;
+  })()`);
+const pauseGame = async () => {
+  js(`(__game.paused || __game.control.pause(), true)`);
+  await until('paused', '__game.paused === true', 10);
+};
+const resumeGame = async () => {
+  js(`(__game.paused && __game.control.pause(), true)`);
+  await until('running', '__game.paused === false', 10);
+};
+
+async function w29Items() {
+  await load('/?sandbox=1');
+  const MASS = [['massExtractor', 54, 50]];
+  const RARE = [['rareExtractor', 73, 29]];
+  const { steps } = await deliveryLayout([...MASS, ...RARE]);
+  const refused = js(PLACE_ALL(steps));
+  if (refused.length) fail(`W29 items fixture refused: ${refused.join('; ')}`);
+  // a full extractor: no belt, buffers filled
+  const full = js(`__game.place('massExtractor', 46, 62)`);
+  if (!full.ok) fail(`W29 full extractor refused: ${full.reason}`);
+  const filled = js('__game.fillBuffers()');
+  if (!filled.ok) fail(`W29 fillBuffers refused: ${filled.reason}`);
+  await until('mass and rare items on the belts', '__game.beltItems.mass > 2 && __game.beltItems.rare > 0', 60);
+  // each item kind: where to look, and the camera distance for the moving check and the pixel check
+  const KINDS = [
+    { label: 'mass', item: 5, x: 58, z: 54, moving: 24, pixels: 30 },
+    { label: 'rare', item: 6, x: 70, z: 40, moving: 30, pixels: 30 },
+  ];
+  for (const { label, item, x, z, moving } of KINDS) {
+    camera({ x, z, distance: moving, yaw: 0 });
+    await until(`a drawn ${label} item`, `(__game.drawnItems()['overlay/item/${item}'] ?? []).length > 0`, 30);
+    const a = drawnItems();
+    await frames(12);
+    const b = drawnItems();
+    const name = `overlay/item/${item}`;
+    // drawnItems holds overlay/item/* only; mass and rare are both on the belts, so any other kind drawn fails
+    const others = Object.keys(b).filter((k) => k !== 'overlay/item/5' && k !== 'overlay/item/6');
+    check(
+      moved(a[name] ?? [], b[name] ?? []) && !others.some((k) => (b[k] ?? []).length > 0),
+      `W29: ${label} items drawn with ${name} (${(b[name] ?? []).length} instances) and moving between two frames; no other item mesh drawn`,
+      `W29: ${label} items: ${name} ${JSON.stringify((a[name] ?? []).slice(0, 4))} → ${JSON.stringify((b[name] ?? []).slice(0, 4))}; others drawn ${JSON.stringify(others.map((k) => [k, (b[k] ?? []).length]))}`,
+    );
+    // negative control: the meshes hidden, the same check must fail
+    js('__game.hideItemMeshes(true)');
+    await frames(3);
+    const c = drawnItems();
+    await frames(12);
+    const d = drawnItems();
+    js('__game.hideItemMeshes(false)');
+    check(!moved(c[name] ?? [], d[name] ?? []), `W29 negative control: with the item meshes hidden the ${label} check fails`, `W29 negative control: hidden ${label} meshes still pass (${JSON.stringify(d[name]?.length)})`);
+  }
+  // W29b, per item (Codex review): at one paused snapshot, each sampled carrying tile's item (a
+  // corner among them) must change ITEM_PX pixels on its own. Negative controls: every item lowered
+  // into the belt fails each sample; with only some items hidden (the corner one included), exactly
+  // those samples fail and the rest still pass.
+  for (const { label, item, x, z, pixels } of KINDS) {
+    camera({ x, z, distance: pixels, yaw: 0 });
+    await frames(10);
+    let samples = [];
+    for (let k = 0; k < 40; k++) {
+      await pauseGame();
+      samples = itemSamples(item);
+      if (samples.some((t) => t.corner) && samples.length >= 4) break;
+      await resumeGame();
+      await frames(10);
+    }
+    if (!samples.some((t) => t.corner) || samples.length < 4) {
+      fail(`W29b: ${label}: no paused moment with at least 4 carrying tiles in view and a corner among them (${JSON.stringify(samples.map((t) => [t.x, t.z, t.corner]))})`);
+      await resumeGame();
+      continue;
+    }
+    const pass = (r) => r.over >= ITEM_PX;
+    const fmt = (rs) => rs.map((r) => `${r.x},${r.z}${r.corner ? ' (corner)' : ''} ${r.over}`).join('; ');
+    const span = (rs) => `min ${Math.min(...rs.map((r) => r.over))}, max ${Math.max(...rs.map((r) => r.over))} px`;
+    const on = itemPixelsEach(samples);
+    check(on.every(pass), `W29b: each of ${on.length} sampled ${label} items is visible on its own at the game camera (${span(on)} changed by > 8; per item: ${fmt(on)})`, `W29b: ${label} items not visible on their own (threshold ${ITEM_PX}): ${fmt(on.filter((r) => !pass(r)))} (all: ${fmt(on)})`);
+    js('__game.itemDrop(true)');
+    await frames(3);
+    const sunk = itemPixelsEach(samples);
+    js('__game.itemDrop(false)');
+    await frames(3);
+    check(!sunk.some(pass), `W29b negative control: with the ${label} items lowered into the belt every sample fails (${span(sunk)})`, `W29b negative control: lowered ${label} items still pass: ${fmt(sunk.filter(pass))}`);
+    // hide every other sample from the start, the corner (sorted first) among them
+    const hidden = samples.filter((_, i) => i % 2 === 0).map((t) => t.id);
+    const part = itemPixelsEach(samples, hidden);
+    const hid = part.filter((r) => hidden.includes(r.id));
+    const shown = part.filter((r) => !hidden.includes(r.id));
+    check(
+      hid.length > 0 && hid.some((r) => r.corner) && !hid.some(pass) && shown.every(pass),
+      `W29b partial negative control: ${hid.length} of ${part.length} ${label} items hidden (a corner among them) fail on their own (${span(hid)}); the ${shown.length} shown still pass (${span(shown)})`,
+      `W29b partial negative control (${label}): hidden ${fmt(hid)}; shown ${fmt(shown)}`,
+    );
+    await resumeGame();
+  }
+  // the full extractor stands still; the belted one moves
+  const ext = js(`__game.list('building').filter((b) => b.kindName === 'massExtractor').map((b) => ({ id: b.id, tx: b.tx, ty: b.ty, idle: b.idle }))`);
+  const fullX = ext.find((b) => b.tx === 46);
+  const busy = ext.find((b) => b.tx === 54);
+  check(fullX?.idle && !busy?.idle, 'W29: the unbelted extractor is full (idle flag), the belted one is not', `W29 extractors: ${JSON.stringify(ext)}`);
+  const pose = async (b) => {
+    camera({ x: b.tx + 1, z: b.ty + 1, distance: 12, yaw: 0 });
+    await frames(6);
+    const m0 = js(`__game.drawnNear(${b.tx}, ${b.ty}, ${b.tx + 2}, ${b.ty + 2}, 'building')`);
+    await frames(12);
+    const m1 = js(`__game.drawnNear(${b.tx}, ${b.ty}, ${b.tx + 2}, ${b.ty + 2}, 'building')`);
+    return { n: m0.length, same: JSON.stringify(m0) === JSON.stringify(m1) };
+  };
+  const pf = await pose(fullX);
+  const pb = await pose(busy);
+  check(pf.n > 0 && pf.same && pb.n > 0 && !pb.same, `W29: a full extractor's digging animation is stopped (${pf.n} drawn parts unchanged over 12 frames; the belted extractor's ${pb.n} parts move)`, `W29 extractor animation: full ${JSON.stringify(pf)}, belted ${JSON.stringify(pb)}`);
+  errorsNow('W29 items');
+}
+
+/** The W29 delivery load: one measured window (game camera), the figures and the gate's verdict. */
+async function measureDelivery(layout) {
+  await load('/?sandbox=1');
+  const refused = js(PLACE_ALL(layout.steps));
+  if (refused.length) fail(`W29 delivery fixture refused: ${refused.join('; ')}`);
+  await until('300 belt tiles carrying items', `(__game.fillBuffers(), __game.beltItems.occupied >= 300)`, 90);
+  camera({ x: 64, z: 58, distance: 50, yaw: 0 });
+  await frames(30);
+  const loadStart = load1();
+  const R = js(`(async () => {
+    const g = __game;
+    const R = { times: [], samples: [] };
+    let on = true;
+    const rec = (now) => { if (!on) return; R.times.push(now); requestAnimationFrame(rec); };
+    requestAnimationFrame(rec);
+    const t0 = performance.now();
+    R.t0 = t0;
+    for (let s = 1; s <= 25; s++) {
+      await new Promise((r) => setTimeout(r, Math.max(0, t0 + s * 1000 - performance.now())));
+      if (s === 5) g.workerWindow.start();
+      g.fillBuffers();
+      const e = g.economy;
+      R.samples.push({ s, tick: g.tick, occupied: g.beltItems.occupied, delivered: e.delivered.mass + e.delivered.rare });
+    }
+    on = false;
+    R.worker = g.workerWindow.stop();
+    R.drawCalls = g.drawCalls;
+    return R;
+  })()`);
+  const loadEnd = load1();
+  const { worst, avg, low } = frameStats(R.times, R.t0);
+  const win = R.samples.filter((x) => x.s >= 5);
+  const problems = [];
+  if (!(avg >= GATE.gameAvg && low >= GATE.gameLow)) problems.push(`${avg.toFixed(1)} fps average / ${low.toFixed(1)} 1%-low (gate ${GATE.gameAvg} / ${GATE.gameLow})`);
+  problems.push(...judgeWorkerWindow(R.worker));
+  const thin = win.filter((x) => x.occupied < 300);
+  if (thin.length) problems.push(`belt tiles carrying items below 300 at seconds ${thin.map((x) => `${x.s} (${x.occupied})`).join(', ')}`);
+  const stalls = win.slice(1).filter((x, i) => !(x.delivered > win[i].delivered));
+  if (stalls.length) problems.push(`delivery did not rise at seconds ${stalls.map((x) => x.s).join(', ')}`);
+  const wk = R.worker;
+  const f2 = (v) => (Number.isFinite(v) ? v.toFixed(2) : String(v));
+  const occ = win.map((x) => x.occupied);
+  note(
+    `W29 delivery benchmark (11 extractors, ${layout.tiles} belt tiles, game camera): ${avg.toFixed(1)} fps average, ${low.toFixed(1)} 1%-low, longest frame ${worst[0].toFixed(1)} ms; ` +
+      `belt tiles carrying items ${Math.min(...occ)}–${Math.max(...occ)}; delivered ${win[0].delivered} → ${win[win.length - 1].delivered} over ticks ${win[0].tick}–${win[win.length - 1].tick}; ` +
+      `worker window ${f2(wk?.seconds)} s: ${wk?.ticks} ticks, per-tick step median ${f2(wk?.medianTickMs)} ms (tick-weighted), max ${f2(wk?.maxTickMs)} ms; encoding median ${f2(wk?.encodeMedianMs)} ms; draw calls ${R.drawCalls}; load average ${loadStart.toFixed(2)} → ${loadEnd.toFixed(2)}`,
+  );
+  return { problems, loadStart, loadEnd };
+}
+
+async function w29DeliveryBench() {
+  const layout = await deliveryLayout([
+    ['massExtractor', 54, 50], ['massExtractor', 72, 49], ['massExtractor', 46, 62], ['massExtractor', 80, 60],
+    ['massExtractor', 50, 77], ['massExtractor', 74, 78], ['massExtractor', 36, 40], ['massExtractor', 92, 84],
+    ['rareExtractor', 55, 26], ['rareExtractor', 73, 29], ['rareExtractor', 100, 59],
+  ]);
+  await gated('W29 delivery benchmark', () => measureDelivery(layout));
 }
 
 /** W24 run 2a: map 1, the sandbox inventory, input, the stress scene and the walking benchmark. */
@@ -779,8 +1056,8 @@ async function run2a() {
   ab('mouse', 'move', String(Math.round(eng[0].x + 4)), String(Math.round(eng[0].y + 1)));
   ab('mouse', 'up', 'left');
   await frames(30);
-  const sel = js('__game.selected');
-  if (!(sel.length === 1 && sel[0].id === eng[0].id && rigNow() === before)) fail(`input: a 3-px click on engineer ${eng[0].id} selected ${JSON.stringify(sel)} and the camera ${rigNow() === before ? 'stayed' : 'moved'}`);
+  const sel = js(`__game.selectedIds('unit')`);
+  if (!(sel.length === 1 && sel[0] === eng[0].id && rigNow() === before)) fail(`input: a 3-px click on engineer ${eng[0].id} selected ${JSON.stringify(sel)} and the camera ${rigNow() === before ? 'stayed' : 'moved'}`);
   else note('input: a click (under 5 px) on an engineer selects it; the camera does not move');
   const xs = units.map((u) => u.x);
   const ys = units.map((u) => u.y);
@@ -863,6 +1140,10 @@ async function run2a() {
     await shot2a('strategic-zoom');
   }
   errorsNow('sandbox');
+  await w29Items();
+  // back to the sandbox fixture for the budgets
+  await load('/?sandbox=1');
+  await sandboxFixture();
 
   // ---- budgets at the game camera (sandbox fixture, medium, 1440 × 900)
   // the budget is a rendering cost: measured on a still frame (simulation paused), three times,
@@ -946,9 +1227,12 @@ async function main() {
       await sleep(250);
     }
     note(`preview: ${ORIGIN} (this tree's build)`);
-    // --only-2b (development): the run 2b and W27 checks alone
-    if (!args.includes('--only-2b')) await run2a();
-    await run2b();
+    // --only-2b (development): the run 2b and W27 checks alone; --only-w29-items: the W29 item checks alone
+    if (args.includes('--only-w29-items')) await w29Items();
+    else {
+      if (!args.includes('--only-2b')) await run2a();
+      await run2b();
+    }
   } catch (e) {
     fail(String(e?.message ?? e));
   } finally {

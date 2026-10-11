@@ -82,7 +82,9 @@ describe('pause and speed', () => {
     expect(r.world.tick).toBeGreaterThan(tick);
     expect(r.world.log.some((s) => s.cmd.t === 'move' && s.tick === tick)).toBe(true); // applied on the first tick after resume
     const s = r.world.units.slotForId(cmdr);
-    expect(r.world.units.cols.x[s]).toBeLessThan(64.5);
+    // W29: the core stands west of the commander, so the first steps go north round it; the move
+    // applied shows as the commander nearer (40, 40) than where it stood
+    expect(Math.hypot(r.world.units.cols.x[s]! - 40, r.world.units.cols.z[s]! - 40)).toBeLessThan(Math.hypot(64.5 - 40, 64.5 - 40));
   });
 
   it('1× and 3× runs of the same command log give identical state at the same tick', () => {
@@ -257,7 +259,7 @@ describe('win and loss', () => {
     const ex = [w.placeBuilding(B.massExtractor, 54, 50, true), w.placeBuilding(B.massExtractor, 72, 49, true)];
     for (const id of ex) w.buildings.cols.hp[w.buildings.slotForId(id)] = 0;
     for (let i = 0; i < 20; i++) w.step();
-    expect(w.buildings.count).toBe(0);
+    expect(w.buildings.count).toBe(1); // W29: the core stays
     expect(w.outcome).toBe(0);
     for (const id of unitIds(w, U.engineer)) w.units.cols.hp[w.units.slotForId(id)] = 0;
     w.step();
@@ -340,7 +342,7 @@ describe('unknown kinds are rejected and reported', () => {
     expect(w.submit({ t: 'research', node: 'warpDrive' })).toMatch(/unknown research node/);
     expect(w.submit({ t: 'teleport' } as unknown as Command)).toMatch(/unknown command/);
     w.step();
-    expect(w.buildings.count).toBe(0);
+    expect(w.buildings.count).toBe(1); // W29: the core, nothing else
     expect(w.log.length).toBe(0);
   });
 

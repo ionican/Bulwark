@@ -1,0 +1,160 @@
+{
+  "commit": "d82db0b",
+  "saveVersion": 3,
+  "stateFormat": 6,
+  "tick": 5401,
+  "kills": 47,
+  "buildings": 43,
+  "aliens": 20,
+  "projectiles": 13,
+  "wrecks": 46,
+  "queuedOrders": 288,
+  "pool": [
+    9.020562075079397e-17,
+    4174.79380626141,
+    36.686274716991726
+  ],
+  "stats": {
+    "shooters": {
+      "massExtractor": {
+        "shots": 0,
+        "hpRemoved": 0,
+        "kills": 0
+      },
+      "generator": {
+        "shots": 0,
+        "hpRemoved": 0,
+        "kills": 0
+      },
+      "rareExtractor": {
+        "shots": 0,
+        "hpRemoved": 0,
+        "kills": 0
+      },
+      "lab": {
+        "shots": 0,
+        "hpRemoved": 0,
+        "kills": 0
+      },
+      "depot": {
+        "shots": 0,
+        "hpRemoved": 0,
+        "kills": 0
+      },
+      "shredder": {
+        "shots": 0,
+        "hpRemoved": 0,
+        "kills": 0
+      },
+      "smelter": {
+        "shots": 0,
+        "hpRemoved": 0,
+        "kills": 0
+      },
+      "assembler": {
+        "shots": 0,
+        "hpRemoved": 0,
+        "kills": 0
+      },
+      "wall": {
+        "shots": 0,
+        "hpRemoved": 0,
+        "kills": 0
+      },
+      "gun": {
+        "shots": 197,
+        "hpRemoved": 4602,
+        "kills": 45
+      },
+      "area": {
+        "shots": 0,
+        "hpRemoved": 0,
+        "kills": 0
+      },
+      "beam": {
+        "shots": 0,
+        "hpRemoved": 0,
+        "kills": 0
+      },
+      "heavy": {
+        "shots": 0,
+        "hpRemoved": 0,
+        "kills": 0
+      },
+      "shield": {
+        "shots": 0,
+        "hpRemoved": 0,
+        "kills": 0
+      },
+      "tempTurret": {
+        "shots": 0,
+        "hpRemoved": 0,
+        "kills": 0
+      },
+      "belt": {
+        "shots": 0,
+        "hpRemoved": 0,
+        "kills": 0
+      },
+      "splitter": {
+        "shots": 0,
+        "hpRemoved": 0,
+        "kills": 0
+      },
+      "merger": {
+        "shots": 0,
+        "hpRemoved": 0,
+        "kills": 0
+      },
+      "gate": {
+        "shots": 0,
+        "hpRemoved": 0,
+        "kills": 0
+      },
+      "commander": {
+        "shots": 5,
+        "hpRemoved": 138,
+        "kills": 2
+      },
+      "engineer": {
+        "shots": 0,
+        "hpRemoved": 0,
+        "kills": 0
+      }
+    },
+    "aliens": {
+      "rusher": {
+        "spawned": 60,
+        "killed": 40,
+        "hpFromWalls": 0,
+        "hpFromBuildings": 13976.95134305954,
+        "hpFromUnits": 0,
+        "absorbedByShields": 0
+      },
+      "hunter": {
+        "spawned": 7,
+        "killed": 7,
+        "hpFromWalls": 0,
+        "hpFromBuildings": 0,
+        "hpFromUnits": 0,
+        "absorbedByShields": 0
+      },
+      "breaker": {
+        "spawned": 0,
+        "killed": 0,
+        "hpFromWalls": 0,
+        "hpFromBuildings": 0,
+        "hpFromUnits": 0,
+        "absorbedByShields": 0
+      },
+      "saboteur": {
+        "spawned": 0,
+        "killed": 0,
+        "hpFromWalls": 0,
+        "hpFromBuildings": 0,
+        "hpFromUnits": 0,
+        "absorbedByShields": 0
+      }
+    }
+  }
+}

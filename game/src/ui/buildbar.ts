@@ -27,7 +27,8 @@ export const BUILD_GROUPS: Array<[string, BuildingKind[]]> = [
 /** Test-group sizes for the debug spawn buttons (W12 wave 2–5 scale). */
 export const TEST_GROUP: Record<string, number> = { rusher: 16, hunter: 4, breaker: 3, saboteur: 6 };
 
-const cost = (k: BuildingKind) => {
+/** A kind's cost as the bar shows it: "0.5M 0E" for a belt tile (fractions as they are, never rounded). */
+export const costLabel = (k: BuildingKind) => {
   const [m, e, r] = BUILDING_INFO[k].cost;
   return `${m}M ${e}E${r ? ` ${r}R` : ''}`;
 };
@@ -56,9 +57,9 @@ export class BuildBar {
       const g = this.group(bar, title);
       for (const k of kinds) {
         const info = BUILDING_INFO[k];
-        const b = this.button(g, `${info.label} [${info.key.toUpperCase()}]`, cost(k), () => h.build(k));
+        const b = this.button(g, `${info.label} [${info.key.toUpperCase()}]`, costLabel(k), () => h.build(k));
         b.dataset.kind = k;
-        b.dataset.cost = cost(k);
+        b.dataset.cost = costLabel(k);
         this.buttons.set(k, b);
       }
     }

@@ -6,12 +6,12 @@
 // with stubby up-angled tube (area cannon), tall needle pylon (beam), heavy turret with a very
 // long barrel (heavy cannon), petal cradle round an orb (shield generator).
 
-import { Builder, bolt, cbox, cyl, gear, lathe, prism, profile, sphere, taper, torus, tubeX } from '../kit.ts';
+import { Builder, bolt, cbox, cyl, gear, lathe, prism, profile, slab, sphere, taper, torus, tubeX } from '../kit.ts';
 import type { Mats } from '../materials.ts';
 import type { ModelDef, PartDef } from '../types.ts';
 import type { BuildingKind } from '../../../../sim/kinds.ts';
 import { octBase, part } from './common.ts';
-import { OctahedronGeometry } from 'three';
+import { OctahedronGeometry, type BufferGeometry } from 'three';
 
 type Make = (m: Mats) => ModelDef;
 
@@ -350,16 +350,116 @@ const assembler: Make = (m) => {
 };
 
 // ---- belt piece (1 tile, runs along +X) --------------------------------------------------------
-const belt: Make = (m) => {
+/** Top of the belt surface above the tile's base (W29b: belt items stand on it, entities.ts). */
+export const BELT_SURFACE_Y = 0.25;
+/** Rails: the trim rail and its ivory cap run at ±RAIL from the centre line; the belt is ±HALF wide. */
+const RAIL = 0.36;
+const HALF = 0.31;
+
+/** One straight rail (trim with an ivory cap) along x from x0 to x1 at z. */
+function railX(b: Builder, x0: number, x1: number, z: number): void {
+  const len = x1 - x0;
+  const x = (x0 + x1) / 2;
+  b.add('trim', cbox(len, 0.1, 0.08, 0.015, 0), { x, y: 0.18, z });
+  b.add('ivory', cbox(len, 0.06, 0.1, 0.015, 0), { x, y: 0.28, z: z * 1.04 }, { wear: false });
+}
+/** The same along z (from z0 to z1 at x). */
+function railZ(b: Builder, z0: number, z1: number, x: number): void {
+  const len = z1 - z0;
+  const z = (z0 + z1) / 2;
+  b.add('trim', cbox(0.08, 0.1, len, 0.015, 0), { x, y: 0.18, z });
+  b.add('ivory', cbox(0.1, 0.06, len, 0.015, 0), { x: x * 1.04, y: 0.28, z }, { wear: false });
+}
+
+/**
+ * The straight piece. `open` lists the sides a joining lane runs in from: +1 the model's +z side
+ * (the right of the flow), −1 its −z side. On an open side the rail breaks for the lane's width,
+ * the lane's belt surface runs in from the tile edge, and its rails turn to meet the main rail ends,
+ * so the joining belt reads as running into this one rather than stopping at a rail.
+ */
+function straightBelt(m: Mats, name: string, open: number[] = []): ModelDef {
   const b = new Builder(m);
-  for (const z of [-0.36, 0.36]) {
-    b.add('trim', cbox(1.0, 0.1, 0.08, 0.015, 0), { y: 0.18, z });
-    b.add('ivory', cbox(1.0, 0.06, 0.1, 0.015, 0), { y: 0.28, z: z * 1.04 }, { wear: false });
+  for (const side of [-1, 1]) {
+    const z = side * RAIL;
+    if (!open.includes(side)) {
+      railX(b, -0.5, 0.5, z);
+      for (const x of [-0.3, 0.3]) b.add('trim', cbox(0.08, 0.18, 0.08, 0.01), { x, z });
+      continue;
+    }
+    // rail ends either side of the gap, the lane's rails from them to the tile edge, posts at the corners
+    railX(b, -0.5, -RAIL, z);
+    railX(b, RAIL, 0.5, z);
+    for (const x of [-RAIL, RAIL]) {
+      railZ(b, side > 0 ? RAIL : -0.5, side > 0 ? 0.5 : -RAIL, x);
+      b.add('trim', cbox(0.08, 0.18, 0.08, 0.01), { x, z });
+    }
+    b.add('belt', cbox(2 * HALF, 0.04, 0.5 - HALF, 0.0, 0), { y: BELT_SURFACE_Y - 0.04, z: side * (HALF + 0.5) / 2 });
   }
-  for (const x of [-0.3, 0.3]) for (const z of [-0.36, 0.36]) b.add('trim', cbox(0.08, 0.18, 0.08, 0.01), { x, z });
-  b.add('belt', cbox(1.0, 0.04, 0.62, 0.0, 0), { y: 0.21 });
+  b.add('belt', cbox(1.0, 0.04, 2 * HALF, 0.0, 0), { y: BELT_SURFACE_Y - 0.04 });
   for (const x of [-0.45, 0, 0.45]) b.add('trim', cyl(0.05, 0.05, 0.64, 8), { x, y: 0.2, z: -0.32, rx: Math.PI / 2 });
-  return { name: 'belt', parts: [part('base', b)], radius: 0.8, height: 0.35 };
+  return { name, parts: [part('base', b)], radius: 0.8, height: 0.35 };
+}
+
+const belt: Make = (m) => straightBelt(m, 'belt');
+
+/**
+ * An annular sector round (cx, cz) from angle a0 to a1 < a0 + π (radians in the XZ plane, x = cos,
+ * z = sin), extruded up h. slab's outline is XY with y = −z (it is extruded up and turned flat) and
+ * must run counter-clockwise there: the inner radius from a0 to a1, then the outer back.
+ */
+function arc(cx: number, cz: number, r0: number, r1: number, a0: number, a1: number, h: number, segs = 10): BufferGeometry {
+  const xy: Array<[number, number]> = [];
+  for (let i = 0; i <= segs; i++) {
+    const a = a0 + ((a1 - a0) * i) / segs;
+    xy.push([cx + r0 * Math.cos(a), -(cz + r0 * Math.sin(a))]);
+  }
+  for (let i = segs; i >= 0; i--) {
+    const a = a0 + ((a1 - a0) * i) / segs;
+    xy.push([cx + r1 * Math.cos(a), -(cz + r1 * Math.sin(a))]);
+  }
+  return slab(xy, h, 0);
+}
+
+/**
+ * The corner piece: fed from the model's +z side (`side` 1, a right turn) or −z side (−1, a left
+ * turn), out along +x. Belt surface, rails, caps and rollers sweep the quarter circle of radius ½
+ * round the tile corner between the input edge and the front edge, in the straight piece's parts.
+ */
+function cornerBelt(m: Mats, name: string, side: 1 | -1): ModelDef {
+  const b = new Builder(m);
+  const cx = 0.5;
+  const cz = 0.5 * side;
+  // from the input edge (angle π: the point (0, cz)) round to the front edge ((½, 0)): −π/2 · side
+  const a0 = Math.PI;
+  const a1 = Math.PI + (Math.PI / 2) * side;
+  const lo = Math.min(a0, a1);
+  const hi = Math.max(a0, a1);
+  b.add('belt', arc(cx, cz, 0.5 - HALF, 0.5 + HALF, lo, hi, 0.04), { y: BELT_SURFACE_Y - 0.04 });
+  for (const r of [0.5 - RAIL, 0.5 + RAIL]) {
+    b.add('trim', arc(cx, cz, r - 0.04, r + 0.04, lo, hi, 0.1), { y: 0.18 });
+    const rc = 0.5 + (r - 0.5) * 1.04;
+    b.add('ivory', arc(cx, cz, rc - 0.05, rc + 0.05, lo, hi, 0.06), { y: 0.28 }, { wear: false });
+  }
+  // posts on the outer rail, a third and two thirds round; rollers across the belt, radially
+  for (const t of [1 / 3, 2 / 3]) {
+    const a = lo + (hi - lo) * t;
+    b.add('trim', cbox(0.08, 0.18, 0.08, 0.01), { x: cx + (0.5 + RAIL) * Math.cos(a), z: cz + (0.5 + RAIL) * Math.sin(a) });
+  }
+  for (const t of [0.12, 0.5, 0.88]) {
+    const a = lo + (hi - lo) * t;
+    // a cylinder along y, laid along x (rz), then turned to the radial direction (ry)
+    b.add('trim', cyl(0.05, 0.05, 2 * HALF + 0.02, 8), { x: cx + 0.5 * Math.cos(a), y: 0.2, z: cz + 0.5 * Math.sin(a), rz: Math.PI / 2, ry: -a });
+  }
+  return { name, parts: [part('base', b)], radius: 0.8, height: 0.35 };
+}
+
+/** W29b: the belt's other shapes (render/beltShapes.ts picks one per tile from its neighbours). */
+export const BELT_SHAPE_MAKERS: Record<string, Make> = {
+  beltCornerR: (m) => cornerBelt(m, 'beltCornerR', 1),
+  beltCornerL: (m) => cornerBelt(m, 'beltCornerL', -1),
+  beltJoinR: (m) => straightBelt(m, 'beltJoinR', [1]),
+  beltJoinL: (m) => straightBelt(m, 'beltJoinL', [-1]),
+  beltJoinLR: (m) => straightBelt(m, 'beltJoinLR', [-1, 1]),
 };
 
 // ---- wall (1 tile along X; diagonal instances are stretched by the scene) -----------------------
@@ -422,6 +522,35 @@ const gatePlaceholder: Make = (m) => {
   return { name: 'gate', parts: [part('base', b)], radius: 1.6, height: 1.6 };
 };
 
+// ---- W29 core: where belts deliver mass and rare ------------------------------------------------
+// A 3 × 3 stepped block in the W19 style (ivory structure, gunmetal trim, cyan light strips): a
+// wide base, a chamfered body with a light strip round it, a tower with a ring, and an intake
+// chute in the middle of each side where the belts come in.
+const core: Make = (m) => {
+  const b = new Builder(m);
+  b.add('trim', cbox(2.94, 0.1, 2.94, 0.02, 0.3));
+  b.add('ivory', cbox(2.7, 0.7, 2.7, 0.05, 0.4), { y: 0.1 });
+  b.add('glow', cbox(2.72, 0.04, 2.72, 0, 0.4), { y: 0.62 });
+  b.add('trim', cbox(2.3, 0.12, 2.3, 0.02, 0.3), { y: 0.8 });
+  b.add('ivory', taper(cbox(1.7, 1.0, 1.7, 0.05, 0.25), 0.75), { y: 0.92 });
+  b.add('trim', cbox(1.1, 0.1, 1.1, 0.02, 0.12), { y: 1.92 });
+  b.add('copper', cyl(0.28, 0.34, 0.5, 8), { y: 2.0 });
+  b.add('glow', new OctahedronGeometry(0.22), { y: 2.75 });
+  for (let i = 0; i < 4; i++) {
+    const a = (i * Math.PI) / 2;
+    const cx = Math.cos(a);
+    const cz = Math.sin(a);
+    // intake chute: a dark mouth in a trim frame, a light strip above it
+    b.add('trim', cbox(0.3, 0.34, 0.62, 0.02), { x: cx * 1.36, y: 0.12, z: cz * 1.36, ry: -a });
+    b.add('hull', cbox(0.08, 0.2, 0.42, 0.01), { x: cx * 1.5, y: 0.18, z: cz * 1.5, ry: -a });
+    b.add('glow', cbox(0.02, 0.04, 0.5, 0.004), { x: cx * 1.36, y: 0.52, z: cz * 1.36, ry: -a });
+    // light strips up the tower faces
+    b.add('glow', cbox(0.02, 0.6, 0.06, 0.004), { x: cx * 0.78, y: 1.2, z: cz * 0.78, ry: -a });
+  }
+  b.add('trim', torus(0.5, 0.05, 6, 28), { y: 2.4, rx: Math.PI / 2 });
+  return { name: 'core', parts: [part('base', b)], radius: 2.1, height: 2.9 };
+};
+
 export const BUILDING_MAKERS: Record<BuildingKind, Make> = {
   massExtractor,
   generator,
@@ -442,4 +571,5 @@ export const BUILDING_MAKERS: Record<BuildingKind, Make> = {
   splitter: belt,
   merger: belt,
   gate: gatePlaceholder,
+  core,
 };

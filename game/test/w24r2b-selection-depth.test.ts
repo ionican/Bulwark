@@ -10,6 +10,7 @@ import { CAPACITY } from '../src/sim/world.ts';
 import { U } from '../src/sim/kinds.ts';
 import { decodeSnapshot, encodeSnapshot } from '../src/sim/snapshot.ts';
 import { EntityRenderer } from '../src/render/entities.ts';
+import { BeltShapes } from '../src/render/beltShapes.ts';
 import { selectionMarkerGeometry } from '../src/render/geometry.ts';
 import { Interpolator } from '../src/render/interp.ts';
 import { applyRig } from '../src/render/cameraRig.ts';
@@ -24,7 +25,7 @@ function selectedEngineer() {
   const id = w.spawnUnit(U.engineer, 20.5, 20.5);
   const snap = decodeSnapshot(encodeSnapshot(w));
   const scene = new Scene();
-  const renderer = new EntityRenderer(scene, w.terrain, CAPACITY);
+  const renderer = new EntityRenderer(scene, w.terrain, CAPACITY, new BeltShapes(w.terrain.w, w.terrain.h));
   const interp = new Interpolator(CAPACITY);
   interp.push(snap, 0);
   const camera = new PerspectiveCamera(60, 1, 0.5, 2000);

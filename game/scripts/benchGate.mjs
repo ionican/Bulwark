@@ -74,3 +74,21 @@ export function judgeWorkerWindow(report) {
   if (report.ticks < 8 * report.seconds) problems.push(`worker window: ${report.ticks} ticks in ${report.seconds.toFixed(1)} s (fewer than 8 per second)`);
   return problems;
 }
+
+/**
+ * Frame figures of a measured window: the requestAnimationFrame timestamps `times` (ms) between
+ * t0 + from and t0 + to, as frame intervals `iv`, those intervals slowest first (`worst`), the
+ * average frame rate `avg` (intervals per second of the window) and the 1%-low `low` (1000 ÷ the
+ * mean of the slowest 1% of intervals, at least one).
+ */
+export function frameStats(times, t0, from = 5000, to = 25000) {
+  const t = times.filter((x) => x >= t0 + from && x <= t0 + to);
+  const iv = [];
+  for (let i = 1; i < t.length; i++) iv.push(t[i] - t[i - 1]);
+  const secs = (t[t.length - 1] - t[0]) / 1000;
+  const worst = [...iv].sort((a, b) => b - a);
+  const n1 = Math.max(1, Math.ceil(iv.length / 100));
+  const avg = iv.length / secs;
+  const low = 1000 / (worst.slice(0, n1).reduce((a, b) => a + b, 0) / n1);
+  return { iv, worst, avg, low };
+}

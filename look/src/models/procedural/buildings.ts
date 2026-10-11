@@ -412,6 +412,16 @@ const gatePlaceholder: Make = (m) => {
   return { name: 'gate', parts: [part('base', b)], radius: 1.6, height: 1.6 };
 };
 
+// W29 placeholder so look/ keeps compiling against the game's BuildingKind: a 3 × 3 block with a
+// tower. The game's core model is in game/src/render/workshop/models/procedural/buildings.ts.
+const corePlaceholder: Make = (m) => {
+  const b = new Builder(m);
+  b.add('ivory', cbox(2.7, 0.7, 2.7, 0.05));
+  b.add('ivory', cbox(1.6, 1.0, 1.6, 0.05), { y: 0.8 });
+  b.add('glow', cbox(2.72, 0.04, 2.72, 0), { y: 0.5 });
+  return { name: 'core', parts: [part('base', b)], radius: 2.1, height: 1.9 };
+};
+
 export const BUILDING_MAKERS: Record<BuildingKind, Make> = {
   massExtractor,
   generator,
@@ -432,4 +442,5 @@ export const BUILDING_MAKERS: Record<BuildingKind, Make> = {
   splitter: belt,
   merger: belt,
   gate: gatePlaceholder,
+  core: corePlaceholder,
 };

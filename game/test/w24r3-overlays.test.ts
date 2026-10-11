@@ -13,6 +13,7 @@ import { B, U } from '../src/sim/kinds.ts';
 import { BF_UPGRADING, isReserved } from '../src/sim/schema.ts';
 import { CAPACITY } from '../src/sim/world.ts';
 import { EntityRenderer } from '../src/render/entities.ts';
+import { BeltShapes } from '../src/render/beltShapes.ts';
 import { Interpolator } from '../src/render/interp.ts';
 import { applyRig } from '../src/render/cameraRig.ts';
 import { draw, renderer, snapshotOf, terrain } from './w24r2a-fixtures.ts';
@@ -47,7 +48,7 @@ function drawAll() {
   const cam = new PerspectiveCamera(45, 1440 / 900, 0.5, 1000);
   applyRig(cam, { x: 50, z: 82, distance: 14, yaw: 0 }, 0);
   draw(r, s, { cam });
-  const overlays = new EntityRenderer(scene, terrain, CAPACITY);
+  const overlays = new EntityRenderer(scene, terrain, CAPACITY, new BeltShapes(terrain.w, terrain.h));
   const interp = new Interpolator(CAPACITY);
   interp.push(s, 0);
   overlays.update({ camera: cam, viewportHeight: 900, yaw: 0, snapshot: s, aliens: interp.aliens, units: interp.units, projectiles: interp.projectiles, selection: [] });

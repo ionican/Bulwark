@@ -20,6 +20,14 @@
 // world's counter (`nextOrderId`); new saves record state format 6. A version 2 save (state format
 // 4 or 5) still loads: its orders get ids 1, 2, 3… in unit-slot and queue order, and the counter
 // continues after the last.
+// Version 4 (W29): the belts option, the core's id, delivered and dug counts, exact cumulative
+// spending, the delivery ring and its cursor, repair power, and (through the alien table) each
+// alien's core pass; new saves record state format 7. Saves of versions 2 and 3 load by explicit
+// migration as instant-economy worlds (belts off, no core): the new alien columns get their
+// defaults, and the per-kind arrays indexed past the building kinds are remapped, because the
+// core is appended to the building kinds (stats.ts statsFromOlderKinds; tuning only grows at its end).
+// From version 4 a save records its building, unit and alien kind counts (`kinds`), and the stats
+// are remapped whenever they differ from this build's; a save without them has the pre-W29 counts.
 
 import { World, type PendingGroup, type Route, type ScenarioName } from './world.ts';
 import type { WallRun } from './runs.ts';
@@ -29,15 +37,22 @@ import { map1Terrain, type Terrain } from './terrain.ts';
 import type { AnyTypedArray, FieldSpec, Table } from './table.ts';
 import type { StampedCommand } from './commands.ts';
 import type { Order } from './units.ts';
+import { KIND_COUNTS, statsFromOlderKinds, type KindCounts } from './stats.ts';
 
 export const SAVE_MAGIC = 0x534b5742; // "BWKS"
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 
 /** Save versions this build reads, and the state formats (SNAPSHOT_VERSION) each was written with (header note). */
 const READABLE: ReadonlyMap<number, readonly number[]> = new Map([
   [2, [4, 5]],
+  [3, [6]],
   [SAVE_VERSION, [SNAPSHOT_VERSION]],
 ]);
+
+/** Kind counts of a save that does not record them (versions 2 and 3, before W29 appended the core). */
+const PRE_W29_KINDS: KindCounts = { buildings: 19, units: 2, aliens: 4 };
+/** Alien columns W29 added; a version 2 or 3 save has none, so they start at 0 (no pass started). */
+const W29_ALIEN_COLUMNS = new Set(['pass', 'passUntil']);
 
 export class SaveVersionError extends Error {}
 
@@ -114,6 +129,11 @@ export function serializeWorld(w: World): Uint8Array {
     ['tuning.building', w.tuning.building],
     ['tuning.alien', w.tuning.alien],
     ['tuning.unit', w.tuning.unit],
+    ['delivered', w.delivered],
+    ['dug', w.dug],
+    ['spentTotal', w.spentTotal],
+    ['deliveryRing', w.deliveryRing],
+    ['repairPower', w.repairPower],
   );
   w.fields.forEach((f, i) => blobs.push([`field${i}.dist`, f.dist], [`field${i}.dir`, f.dir]));
   const isMap1 = w.terrain === map1Terrain();
@@ -134,6 +154,7 @@ export function serializeWorld(w: World): Uint8Array {
       ? 'map1'
       : { w: w.terrain.w, h: w.terrain.h, deposits: w.terrain.deposits, entries: w.terrain.entries, base: w.terrain.base },
     tables,
+    kinds: KIND_COUNTS,
     scalars: {
       parts: w.parts,
       upkeep: w.upkeep,
@@ -172,6 +193,9 @@ export function serializeWorld(w: World): Uint8Array {
       nextOrderId: w.nextOrderId,
       commanderRespawnTick: w.commanderRespawnTick,
       commanderDeaths: w.commanderDeaths,
+      belts: w.belts,
+      coreId: w.coreId,
+      deliveryCursor: w.deliveryCursor,
     },
     fieldMeta: w.fields.map((f) => ({ builtAt: f.builtAt, goalCount: f.goalCount })),
     researchQueue: w.researchQueue,
@@ -212,13 +236,14 @@ export function deserializeWorld(input: Uint8Array | ArrayBuffer): World {
   const snapVersion = dv.getUint32(8, true);
   if (!READABLE.get(version)?.includes(snapVersion))
     throw new SaveVersionError(
-      `This save is version ${version} (state format ${snapVersion}); this build reads version ${SAVE_VERSION} (state format ${SNAPSHOT_VERSION}) and version 2 (state format 4 or 5) only.`,
+      `This save is version ${version} (state format ${snapVersion}); this build reads version ${SAVE_VERSION} (state format ${SNAPSHOT_VERSION}), version 3 (state format 6) and version 2 (state format 4 or 5) only.`,
     );
   const jsonLen = dv.getUint32(12, true);
   const state = JSON.parse(new TextDecoder().decode(bytes.subarray(16, 16 + jsonLen)), reviver);
   const head = 16 + ((jsonLen + 7) & ~7);
-  // Copy the blob area so typed-array views are aligned whatever the input's offset.
-  const area = bytes.slice(head).buffer;
+  // Copy the blob area so typed-array views are aligned whatever the input's offset. An explicit
+  // copy: a Node Buffer's slice() is a view into its pool, so its .buffer is the whole pool.
+  const area = new Uint8Array(bytes.subarray(head)).buffer;
   const blob = new Map<string, ArrayLike<number>>();
   for (const r of state.blobs as BlobRef[]) blob.set(r.name, view(r.type, area, r.offset, r.length));
   const get = (name: string) => {
@@ -241,7 +266,8 @@ export function deserializeWorld(input: Uint8Array | ArrayBuffer): World {
     const meta = state.tables[name];
     const t = w[name] as unknown as AnyTable;
     const cols: Record<string, ArrayLike<number>> = {};
-    for (const f of t.schema) cols[f.name] = get(`${name}.${f.name}`);
+    for (const f of t.schema)
+      cols[f.name] = version < 4 && name === 'aliens' && W29_ALIEN_COLUMNS.has(f.name) && !blob.has(`${name}.${f.name}`) ? new Array<number>(meta.highWater).fill(0) : get(`${name}.${f.name}`);
     t.importState({ count: meta.count, highWater: meta.highWater, free: get(`${name}.free`), alive: get(`${name}.alive`), gen: get(`${name}.gen`), cols });
   }
   w.pool.set(get('pool'));
@@ -256,16 +282,28 @@ export function deserializeWorld(input: Uint8Array | ArrayBuffer): World {
   w.walk.set(get('walk'));
   w.fieldGoal.set(get('fieldGoal'));
   w.fieldDirty.set(get('fieldDirty'));
-  w.stats.set(get('stats'));
+  const kinds: KindCounts = state.kinds ?? PRE_W29_KINDS;
+  const sameKinds = kinds.buildings === KIND_COUNTS.buildings && kinds.units === KIND_COUNTS.units && kinds.aliens === KIND_COUNTS.aliens;
+  w.stats.set(sameKinds ? get('stats') : statsFromOlderKinds(get('stats'), kinds));
   w.tuning.building.set(get('tuning.building'));
   w.tuning.alien.set(get('tuning.alien'));
   w.tuning.unit.set(get('tuning.unit'));
+  if (version >= 4) {
+    w.delivered.set(get('delivered'));
+    w.dug.set(get('dug'));
+    w.spentTotal.set(get('spentTotal'));
+    w.deliveryRing.set(get('deliveryRing'));
+    w.repairPower.set(get('repairPower'));
+    w.repairing = w.repairPower.some((p) => p > 0);
+  }
   w.fields.forEach((f, i) => {
     f.dist.set(get(`field${i}.dist`));
     f.dir.set(get(`field${i}.dir`));
     f.builtAt = state.fieldMeta[i].builtAt;
     f.goalCount = state.fieldMeta[i].goalCount;
   });
+  // Older saves' scalars carry no belts, coreId or deliveryCursor: they keep new World's defaults
+  // (belts off, no core, cursor 0), so they load as instant-economy worlds.
   Object.assign(w, state.scalars);
   w.researchQueue = state.researchQueue;
   w.orders.length = 0;

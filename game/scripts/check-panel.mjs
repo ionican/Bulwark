@@ -53,90 +53,11 @@
 //      Bulwark Art Reference)
 // 0 console errors throughout. It always stops its server and closes only its own session.
 
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { ART_REF, screenshot } from './shots.mjs';
+import { harness } from './harness.mjs';
 
-const GAME = fileURLToPath(new URL('..', import.meta.url));
-const PORT = 8825;
-const ORIGIN = `http://127.0.0.1:${PORT}`;
-const SESSION = 'w3panel';
-const args = process.argv.slice(2);
-const arg = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : null);
-const shotsDir = arg('--shots') ?? ART_REF;
+const h = harness({ name: 'check-panel', port: 8825, session: 'w3panel' });
+const { ORIGIN, note, check, ab, js, sleep, frames, until, R, click, drag, shiftDown, shiftUp, key, press, centreOf, clickEl, camera, buildings, units, queueOf, speed, selectUnit, errorsNow, shot, load } = h;
 
-const failures = [];
-const fail = (msg) => {
-  failures.push(msg);
-  console.log(`FAIL ${msg}`);
-};
-const note = (msg) => console.log(msg);
-const check = (ok, pass, failMsg) => (ok ? note(`ok   ${pass}`) : fail(failMsg));
-
-function agentBrowser() {
-  const onPath = spawnSync('agent-browser', ['--version'], { encoding: 'utf8' });
-  if (onPath.status === 0) return 'agent-browser';
-  const nvm = join(homedir(), '.nvm', 'versions', 'node');
-  if (existsSync(nvm))
-    for (const v of readdirSync(nvm).sort().reverse()) {
-      const p = join(nvm, v, 'bin', 'agent-browser');
-      if (existsSync(p)) return p;
-    }
-  throw new Error('agent-browser not found (PATH or ~/.nvm/versions/node/*/bin)');
-}
-const AB = agentBrowser();
-
-function ab(...a) {
-  const r = spawnSync(AB, ['--session', SESSION, '--json', ...a], { encoding: 'utf8', maxBuffer: 1 << 26, timeout: 240_000 });
-  let out;
-  try {
-    out = JSON.parse(r.stdout.trim().split('\n').filter(Boolean).pop() ?? 'null');
-  } catch {
-    throw new Error(`agent-browser ${a[0]}: unreadable output: ${r.stdout?.slice(0, 500)} ${r.stderr?.slice(0, 500)}`);
-  }
-  if (!out?.success) throw new Error(`agent-browser ${a.join(' ')}: ${out?.error ?? r.stderr}`);
-  return out.data;
-}
-const js = (code) => ab('eval', code).result;
-const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
-const frames = (n) => js(`new Promise((res) => { let k = 0; const f = () => (++k >= ${n} ? res(true) : requestAnimationFrame(f)); requestAnimationFrame(f); })`);
-
-async function until(what, code, seconds) {
-  const t0 = Date.now();
-  for (;;) {
-    let v = null;
-    try {
-      v = js(code);
-    } catch {
-      v = null;
-    }
-    if (v) return v;
-    if (Date.now() - t0 > seconds * 1000) throw new Error(`timed out waiting for ${what}`);
-    await sleep(300);
-  }
-}
-
-// ---- real input ------------------------------------------------------------------------------
-
-const R = (v) => String(Math.round(v));
-async function click(x, y, button = 'left') {
-  ab('mouse', 'move', R(x), R(y));
-  ab('mouse', 'down', button);
-  ab('mouse', 'up', button);
-  await frames(3);
-}
-/** A press-move-release from a to b in `steps` moves. */
-async function drag(a, b, steps = 8, button = 'left') {
-  ab('mouse', 'move', R(a.x), R(a.y));
-  ab('mouse', 'down', button);
-  for (let k = 1; k <= steps; k++) ab('mouse', 'move', R(a.x + ((b.x - a.x) * k) / steps), R(a.y + ((b.y - a.y) * k) / steps));
-  await frames(2);
-  ab('mouse', 'up', button);
-  await frames(3);
-}
 /**
  * A real wheel event at (x, y). agent-browser 0.37.1's `mouse wheel` dispatches at (0, 0) whatever
  * the mouse position (probed 2026-10-10), so this sends the same CDP input event itself, to this
@@ -174,39 +95,6 @@ async function wheelAt(x, y, dy) {
     ws.close();
   }
 }
-const shiftDown = () => ab('keydown', 'Shift');
-const shiftUp = () => ab('keyup', 'Shift');
-/** A key press with whatever has focus (keydown then keyup). */
-function key(k) {
-  ab('keydown', k);
-  ab('keyup', k);
-}
-/** A key press with nothing focused. */
-function press(k) {
-  js('(document.activeElement && document.activeElement !== document.body && document.activeElement.blur(), true)');
-  key(k);
-}
-/** Centre of the first element matching `sel`, checked to be the element actually under that point. */
-function centreOf(sel) {
-  const r = js(`(() => {
-    const e = document.querySelector(${JSON.stringify(sel)});
-    if (!e) return null;
-    const r = e.getBoundingClientRect();
-    if (!r.width || !r.height) return { hidden: true };
-    const x = r.x + r.width / 2, y = r.y + r.height / 2;
-    const top = document.elementFromPoint(x, y);
-    return { x, y, ok: !!top && (top === e || e.contains(top)), top: top ? top.tagName + '.' + top.className : null };
-  })()`);
-  if (!r) throw new Error(`no element ${sel}`);
-  if (r.hidden) throw new Error(`element ${sel} is not laid out (hidden)`);
-  if (!r.ok) throw new Error(`element ${sel} is covered by ${r.top}`);
-  return r;
-}
-async function clickEl(sel) {
-  const p = centreOf(sel);
-  await click(p.x, p.y);
-  return p;
-}
 const text = (sel) => js(`document.querySelector(${JSON.stringify(sel)})?.textContent ?? null`);
 const toScreen = (x, z) => js(`__game.worldToScreen(${x}, ${z})`);
 const toScreenY = (x, y, z) => js(`__game.worldToScreen(${x}, ${z}, ${y})`);
@@ -216,10 +104,6 @@ async function clickTile(x, z) {
 }
 const panel = () => js('__game.sandboxPanel');
 const tool = () => js('__game.tool');
-const camera = (rig) => js(`(__game.camera.set(${JSON.stringify(rig)}), true)`);
-const buildings = () => js(`__game.list('building')`);
-const units = () => js(`__game.list('unit')`);
-const queueOf = (id) => js(`(__game.queues.find((q) => q.id === ${id})?.orders ?? [])`);
 
 async function pause(on) {
   if (js('__game.paused') !== on) {
@@ -227,67 +111,10 @@ async function pause(on) {
     await until(on ? 'paused' : 'running', `__game.paused === ${on}`, 10);
   }
 }
-async function speed(n) {
-  js('(document.activeElement && document.activeElement !== document.body && document.activeElement.blur(), true)');
-  shiftDown();
-  key(String(n));
-  shiftUp();
-  await until(`speed ${n}`, `__game.speed === ${n}`, 10);
-}
 async function tab(name) {
   await clickEl(`.sbx button[data-tab="${name}"]`);
   await until(`tab ${name}`, `__game.sandboxPanel.tab === ${JSON.stringify(name)}`, 5);
   await frames(15); // the panel redraws at most 4 times a second
-}
-
-/** Selects unit `id` by a real click near its screen point (Shift: added). */
-async function selectUnit(id, add = false) {
-  const tryClicks = async () => {
-    for (const [ox, oy] of [[0, -4], [0, 0], [2, -8], [-2, -2]]) {
-      const p = js(`__game.screenOf('unit', ${id})`);
-      if (add) shiftDown();
-      await click(p.x + ox, p.y + oy);
-      if (add) shiftUp();
-      const sel = js('__game.selected.map((s) => s.id)');
-      if (sel.includes(id)) return sel;
-    }
-    return null;
-  };
-  const sel = await tryClicks();
-  if (sel) return sel;
-  // hidden from this camera (C1: a building in front takes the click): look straight down on it, then back
-  const rig = js('__game.camera.get()');
-  const u = units().find((x) => x.id === id);
-  if (u) {
-    camera({ x: u.x, z: u.z, distance: 18, yaw: rig.yaw, pitch: (80 * Math.PI) / 180 });
-    await frames(5);
-    const again = await tryClicks();
-    camera(rig);
-    await frames(5);
-    if (again) return again;
-  }
-  throw new Error(`could not select unit ${id} by clicking it`);
-}
-
-function errorsNow(label) {
-  const page = ab('errors').errors ?? [];
-  const c = ab('console');
-  const consoleErrs = (c.messages ?? c.logs ?? []).filter((m) => (m.type ?? m.level) === 'error');
-  const game = js('__game.errors');
-  check(!page.length && !consoleErrs.length && !game, `${label}: 0 console errors`, `${label}: ${page.length} page errors, ${consoleErrs.length} console errors, __game.errors ${game}: ${JSON.stringify([...page, ...consoleErrs]).slice(0, 600)}`);
-}
-
-async function shot(name) {
-  const path = await screenshot({ ab, js, frames }, join(shotsDir, name), { settle: 6 });
-  check(existsSync(path) && statSync(path).size > 0, `screenshot ${path}`, `screenshot ${path} not written`);
-  return path;
-}
-
-async function load(path) {
-  ab('open', `${ORIGIN}${path}`);
-  ab('set', 'viewport', '1440', '900');
-  await until(`${path} ready`, 'window.__game?.ready === true', 120);
-  await frames(10);
 }
 
 // ---- 1: shown in the sandbox only; the greybox switch is gone --------------------------------
@@ -611,7 +438,7 @@ async function moveUnitTo(id, x, z) {
   await selectUnit(id);
   const p = toScreen(x, z);
   await click(p.x, p.y, 'right');
-  await until(`unit ${id} at ${x}, ${z}`, `(() => { const u = __game.list('unit').find((u) => u.id === ${id}); return u && Math.hypot(u.x - ${x}, u.z - ${z}) < 0.35 && !__game.queues.find((q) => q.id === ${id})?.orders.length; })()`, 60);
+  await until(`unit ${id} at ${x}, ${z}`, `(() => { const u = __game.list('unit').find((u) => u.id === ${id}); return u && Math.hypot(u.x - ${x}, u.z - ${z}) < 0.35 && !__game.queues.find((q) => q.id === ${id})?.orders.length; })()`, 60)
 }
 
 async function picking(f, gateB) {
@@ -912,49 +739,4 @@ async function run() {
   errorsNow('check-panel');
 }
 
-async function main() {
-  let server = null;
-  if (!args.includes('--no-build')) {
-    console.log('building…');
-    execFileSync('npx', ['vite', 'build', '--logLevel', 'warn'], { cwd: GAME, stdio: 'inherit' });
-  }
-  mkdirSync(shotsDir, { recursive: true });
-  try {
-    server = spawn('npx', ['vite', 'preview', '--host', '127.0.0.1', '--port', String(PORT), '--strictPort'], { cwd: GAME, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
-    let serverOut = '';
-    server.stdout.on('data', (d) => (serverOut += d));
-    server.stderr.on('data', (d) => (serverOut += d));
-    const t0 = Date.now();
-    for (;;) {
-      try {
-        if ((await fetch(`${ORIGIN}/`)).ok) break;
-      } catch {
-        /* not up yet */
-      }
-      if (server.exitCode !== null) throw new Error(`vite preview exited: ${serverOut}`);
-      if (Date.now() - t0 > 30_000) throw new Error(`vite preview did not start on ${PORT}: ${serverOut}`);
-      await sleep(250);
-    }
-    note(`origin: ${ORIGIN} (this tree's build)`);
-    await run();
-  } catch (e) {
-    fail(String(e?.message ?? e));
-  } finally {
-    try {
-      spawnSync(AB, ['--session', SESSION, 'keyup', 'Shift'], { timeout: 10_000 });
-      spawnSync(AB, ['--session', SESSION, 'close'], { timeout: 30_000 });
-    } catch {
-      /* already closed */
-    }
-    if (server)
-      try {
-        process.kill(-server.pid, 'SIGTERM');
-      } catch {
-        /* already stopped */
-      }
-  }
-  console.log(failures.length ? `check-panel: ${failures.length} FAILED` : 'check-panel: all checks passed');
-  process.exit(failures.length ? 1 : 0);
-}
-
-await main();
+await h.main(run);

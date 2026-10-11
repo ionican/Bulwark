@@ -12,7 +12,7 @@ import { buildOccupancy } from '../src/render/picking.ts';
 import { decodeSnapshot, encodeSnapshot } from '../src/sim/snapshot.ts';
 
 /** W13's `size` per kind (game/src/sim/kinds.ts at 0192b27). */
-const W13_SIZE: Record<Exclude<BuildingKind, 'gate'>, number> = {
+const W13_SIZE: Record<Exclude<BuildingKind, 'gate' | 'core'>, number> = {
   massExtractor: 2,
   generator: 2,
   rareExtractor: 2,
@@ -32,7 +32,8 @@ const W13_SIZE: Record<Exclude<BuildingKind, 'gate'>, number> = {
   splitter: 1,
   merger: 1,
 };
-const EXISTING = BUILDING_KINDS.filter((k) => k !== 'gate') as Array<Exclude<BuildingKind, 'gate'>>;
+// the gate (W24) and the core (W29) are not W13 kinds
+const EXISTING = BUILDING_KINDS.filter((k) => k !== 'gate' && k !== 'core') as Array<Exclude<BuildingKind, 'gate' | 'core'>>;
 
 // ---- W13 reference code (0192b27), with the size passed in --------------------------------------
 

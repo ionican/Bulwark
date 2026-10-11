@@ -4,8 +4,11 @@
 // respawn at an entry, so the counts hold while it is measured. 'sandbox' (W24, /?sandbox=1) is
 // map 1's start with no wave schedule, no end state and the sandbox commands (sandbox.ts).
 // The scenario is stored on the world (World.scenario), so saves and snapshots carry it.
+// W29: map 1 and the sandbox deliver by belt (World.belts) and have the core beside the
+// commander's start (balance.ts CORE_OFFSET); 'stress' and 'empty' keep the instant economy.
 
-import { ALIEN_KINDS, B, BUILDING_KINDS } from './kinds.ts';
+import { ALIEN_KINDS, B, BUILDING_KINDS, buildingInfo, isExtractor } from './kinds.ts';
+import { CORE_OFFSET } from './balance.ts';
 import { TILE_ROCK, tileAt, type Terrain } from './terrain.ts';
 import type { Tuning } from './tuning.ts';
 import { World, type ScenarioName } from './world.ts';
@@ -17,10 +20,13 @@ export const STRESS_BUILDINGS = 300;
 
 /**
  * A world at a scenario's start. `opts` (the sandbox reset): the terrain to use, and the tuning
- * and unlimited spending to carry over, set before any unit is created.
+ * and unlimited spending to carry over, set before any unit is created. `belts` (W29): map 1 and
+ * the sandbox deliver by belt and have the core unless it is false (tests about something else);
+ * the other scenarios never do.
  */
-export function createWorld(seed: number, scenario: ScenarioName, opts: { terrain?: Terrain; tuning?: Tuning; unlimited?: boolean } = {}): World {
-  const w = new World(seed, opts.terrain, { waves: scenario !== 'sandbox' });
+export function createWorld(seed: number, scenario: ScenarioName, opts: { terrain?: Terrain; tuning?: Tuning; unlimited?: boolean; belts?: boolean } = {}): World {
+  const belts = (scenario === 'map1' || scenario === 'sandbox') && opts.belts !== false;
+  const w = new World(seed, opts.terrain, { waves: scenario !== 'sandbox', belts });
   w.scenario = scenario;
   if (opts.tuning) {
     w.tuning.building.set(opts.tuning.building);
@@ -30,6 +36,10 @@ export function createWorld(seed: number, scenario: ScenarioName, opts: { terrai
   if (opts.unlimited) w.unlimited = true;
   if (scenario === 'map1' || scenario === 'sandbox') w.spawnStartUnits();
   else if (scenario === 'stress') setupStress(w);
+  if (belts) {
+    const { base } = w.terrain;
+    if (w.placeBuilding(B.core, Math.floor(base.x) + CORE_OFFSET[0], Math.floor(base.z) + CORE_OFFSET[1], true) < 0) throw new Error('the core does not fit beside the base');
+  }
   w.computeRoutes();
   return w;
 }
@@ -45,9 +55,9 @@ function setupStress(w: World) {
   for (const d of t.deposits) {
     if (w.placeBuilding(d.kind === 'mass' ? B.massExtractor : B.rareExtractor, d.tx, d.ty, true) >= 0) placed++;
   }
-  // Mixed kinds, excluding the extractors (they need deposits), the temporary turret and the gate
-  // (made from walls). Walls get extra weight.
-  const pool = BUILDING_KINDS.map((_, i) => i).filter((k) => k !== B.massExtractor && k !== B.rareExtractor && k !== B.tempTurret && k !== B.gate);
+  // Mixed kinds, excluding the extractors (they need deposits) and the kinds never placed by command
+  // (placedBy: the temporary turret, the gate and, W29, the core). Walls get extra weight.
+  const pool = BUILDING_KINDS.map((_, i) => i).filter((k) => !isExtractor(k) && !buildingInfo(k).placedBy);
   pool.push(B.wall, B.wall, B.wall);
   let attempts = 0;
   while (placed < STRESS_BUILDINGS && attempts++ < 20000) {

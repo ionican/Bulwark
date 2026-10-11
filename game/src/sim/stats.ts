@@ -72,6 +72,36 @@ export function recordAbsorbed(w: World, type: number, alienKind: number, amount
 export const recordSpawned = (w: World, kind: number) => add(w, alienStatIndex(kind, AL_SPAWNED), 1);
 export const recordKilled = (w: World, kind: number) => add(w, alienStatIndex(kind, AL_KILLED), 1);
 
+/** How many building, unit and alien kinds a stats array was laid out for (a save records it). */
+export interface KindCounts {
+  buildings: number;
+  units: number;
+  aliens: number;
+}
+
+export const KIND_COUNTS: KindCounts = { buildings: BUILDING_KINDS.length, units: UNIT_KINDS.length, aliens: ALIEN_KINDS.length };
+
+/**
+ * W29: an older stats array (from a save) laid out for `kinds`, in today's layout. Kinds are only
+ * ever appended, and appending a building kind moves every unit row and the whole alien block, so
+ * each row is copied to its kind's new place; the new kinds' rows are zero.
+ */
+export function statsFromOlderKinds(old: ArrayLike<number>, kinds: KindCounts): Float64Array {
+  const shooters = kinds.buildings + kinds.units;
+  const want = shooters * SHOOTER_FIELDS + kinds.aliens * ALIEN_FIELDS_STATS;
+  if (old.length !== want) throw new Error(`stats of ${old.length} values, expected ${want} for ${JSON.stringify(kinds)}`);
+  if (kinds.buildings > BUILDING_KINDS.length || kinds.units > UNIT_KINDS.length || kinds.aliens > ALIEN_KINDS.length)
+    throw new Error(`stats laid out for more kinds than this build has: ${JSON.stringify(kinds)}`);
+  const out = new Float64Array(STAT_COUNT);
+  for (let row = 0; row < shooters; row++) {
+    const to = row < kinds.buildings ? row : BUILDING_KINDS.length + (row - kinds.buildings);
+    for (let f = 0; f < SHOOTER_FIELDS; f++) out[shooterIndex(to, f)] = old[row * SHOOTER_FIELDS + f]!;
+  }
+  const from = shooters * SHOOTER_FIELDS;
+  for (let i = 0; i < kinds.aliens * ALIEN_FIELDS_STATS; i++) out[ALIEN_BASE + i] = old[from + i]!;
+  return out;
+}
+
 /** The counters as named records (debug hook, tests). Works on a world's array or a snapshot's. */
 export function statsReport(stats: ArrayLike<number>) {
   const shooters: Record<string, { shots: number; hpRemoved: number; kills: number }> = {};

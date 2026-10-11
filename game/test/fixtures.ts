@@ -13,10 +13,11 @@ export function unitIds(w: World, kind?: number): number[] {
 
 /**
  * A w × h flat world with no wave schedule and no units (seed 1). `rich`: 1,000,000 of each
- * resource. `terrain`: rocks, deposits, entries and base for flatTerrain.
+ * resource. `terrain`: rocks, deposits, entries and base for flatTerrain. `belts`: the W29 belt
+ * economy (World option, default off).
  */
-export function flatWorld(w = 40, h = 40, opts: { rich?: boolean; terrain?: Parameters<typeof flatTerrain>[2] } = {}): World {
-  const world = new World(1, flatTerrain(w, h, opts.terrain), { waves: false });
+export function flatWorld(w = 40, h = 40, opts: { rich?: boolean; terrain?: Parameters<typeof flatTerrain>[2]; belts?: boolean } = {}): World {
+  const world = new World(1, flatTerrain(w, h, opts.terrain), { waves: false, belts: opts.belts });
   if (opts.rich) world.pool.set([1e6, 1e6, 1e6]);
   return world;
 }

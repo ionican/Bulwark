@@ -9,6 +9,8 @@ import { Mesh, type Material, type Object3D } from 'three';
 export const OVERLAY_NAMES = ['construction-frame', 'reserved-outline'] as const;
 /** The construction frames' material name (entities.ts) and the reserved outlines' (materials.ts). */
 export const [FRAME_MATERIAL, OUTLINE_MATERIAL] = OVERLAY_NAMES;
+/** W29: the belt items' material (entities.ts), hidden by the item check's negative control; not depth-test switched, so not in OVERLAY_NAMES. */
+export const ITEM_MATERIAL = 'belt-item';
 
 /** Meshes under `root` drawn with the material called `name`, in scene order. */
 export function overlayMeshes(root: Object3D, name: string): Mesh[] {

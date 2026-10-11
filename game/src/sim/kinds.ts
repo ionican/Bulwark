@@ -6,7 +6,7 @@
 
 import { map1 } from '../../../model/data/map1.ts';
 import type { BuildingDef, WeaponDef } from '../../../model/src/types.ts';
-import { BUILD_RATE, HEAVY_T2, RARE_EXTRACTOR_OUTPUT, gateStats } from './balance.ts';
+import { BELT_COST_MASS, BUILD_RATE, CORE_HP, CORE_REPAIR_TIME, HEAVY_T2, RARE_EXTRACTOR_OUTPUT, gateStats } from './balance.ts';
 
 export const METRES_PER_TILE = 2;
 export const TICK_HZ = 10;
@@ -45,12 +45,17 @@ export const BUILDING_KINDS = [
   'merger',
   // W24: appended (the order is part of the snapshot format).
   'gate',
+  // W29: appended.
+  'core',
 ] as const;
 export type BuildingKind = (typeof BUILDING_KINDS)[number];
 export const B = Object.fromEntries(BUILDING_KINDS.map((k, i) => [k, i])) as Record<BuildingKind, number>;
 
-/** What an alien target category sees a building as. */
-export type BuildingRole = 'economy' | 'chain' | 'wall' | 'defence' | 'floor';
+/**
+ * What an alien target category sees a building as. 'core' (W29) is no category's goal: aliens
+ * attack it only in passing (aliens.ts).
+ */
+export type BuildingRole = 'economy' | 'chain' | 'wall' | 'defence' | 'floor' | 'core';
 
 export interface Weapon {
   /** Tiles. */
@@ -93,6 +98,12 @@ export interface BuildingInfo {
   tiers?: Array<{ hpMult: number; damageMult: number; cost: Cost; time: number }>;
   /** Hotkey in the build bar. */
   key: string;
+  /** Set: never placed or built by command; the text is the refusal reason (validate.ts). */
+  placedBy?: string;
+  /** W29 core: at 0 hp it is disabled (BF_DISABLED) and ignores damage, never removed (combat.ts damageBuilding). */
+  disablesAtZero?: true;
+  /** W29 core: impassable in every flow-field grid, never broken through or kept as a target (aliens attack it only in passing). */
+  impassable?: true;
 }
 
 // Projectile kinds.
@@ -108,7 +119,10 @@ export const ITEM_SALVAGE = 1;
 export const ITEM_SCRAP = 2;
 export const ITEM_ALLOY = 3;
 export const ITEM_PART = 4;
-export const ITEM_NAMES = ['', 'salvage', 'scrap', 'alloy', 'part'] as const;
+// W29: mined resources on belts, one unit each (appended).
+export const ITEM_MASS = 5;
+export const ITEM_RARE = 6;
+export const ITEM_NAMES = ['', 'salvage', 'scrap', 'alloy', 'part', 'mass', 'rare'] as const;
 
 function weapon(w: WeaponDef, shot: number, shotSpeed: number): Weapon {
   return {
@@ -153,9 +167,9 @@ const INFO: Record<BuildingKind, BuildingInfo> = {
   beam: { label: bd.beam.label, fw: 2, fh: 2, hp: bd.beam.hp, cost: costOf(bd.beam), buildTime: bd.beam.buildTime, role: 'defence', weapon: weapon(bd.beam.weapon!, P_BEAM, 0), key: '4' },
   heavy: { label: bd.heavy.label, fw: 3, fh: 3, hp: bd.heavy.hp, cost: costOf(bd.heavy), buildTime: bd.heavy.buildTime, role: 'defence', weapon: weapon(bd.heavy.weapon!, P_HEAVY, 18), tiers: [HEAVY_T2], key: '5' },
   shield: { label: bd.shield.label, fw: 2, fh: 2, hp: bd.shield.hp, cost: costOf(bd.shield), buildTime: bd.shield.buildTime, role: 'defence', key: '6' },
-  tempTurret: { label: 'Temporary turret', fw: 1, fh: 1, hp: map1.tempTurret.hp, cost: [0, 0, 0], buildTime: 1, role: 'defence', weapon: weapon(map1.tempTurret.weapon, P_BULLET, 30), key: '' },
+  tempTurret: { label: 'Temporary turret', fw: 1, fh: 1, hp: map1.tempTurret.hp, cost: [0, 0, 0], buildTime: 1, role: 'defence', weapon: weapon(map1.tempTurret.weapon, P_BULLET, 30), key: '', placedBy: 'the temporary turret is dropped by an engineer, not built' },
   // Belt pieces: not in W12. First-pass numbers; cheap so a chain is a layout question, not a cost one.
-  belt: { label: 'Conveyor belt', fw: 1, fh: 1, hp: 100, cost: [2, 0, 0], buildTime: 4, role: 'floor', key: 'b' },
+  belt: { label: 'Conveyor belt', fw: 1, fh: 1, hp: 100, cost: [BELT_COST_MASS, 0, 0], buildTime: 4, role: 'floor', key: 'b' },
   splitter: { label: 'Splitter', fw: 1, fh: 1, hp: 150, cost: [10, 20, 0], buildTime: 10, role: 'floor', key: 'v' },
   merger: { label: 'Merger', fw: 1, fh: 1, hp: 150, cost: [10, 20, 0], buildTime: 10, role: 'floor', key: 'n' },
   // W24 gate: converted from finished walls only (gate.ts), never placed from the build bar. Its
@@ -171,6 +185,23 @@ const INFO: Record<BuildingKind, BuildingInfo> = {
     role: 'wall',
     tiers: tiersOf(bd.wall),
     key: '',
+    placedBy: 'a gate is made from finished walls (the gate command), not built',
+  },
+  // W29: placed complete by createWorld on map 1 and in the sandbox; never built, reclaimed (reclaim
+  // takes wrecks only) or upgraded (no tiers). buildTime is the repair time (repair restores maxHp per
+  // construction time).
+  core: {
+    label: 'Core',
+    fw: 3,
+    fh: 3,
+    hp: CORE_HP,
+    cost: [0, 0, 0],
+    buildTime: CORE_REPAIR_TIME,
+    role: 'core',
+    key: '',
+    placedBy: 'the core stands from the start; it is not built or placed',
+    disablesAtZero: true,
+    impassable: true,
   },
 };
 /**
@@ -205,6 +236,50 @@ export const RECLAIM_RATE = map1.engineer.reclaimRate;
 export const CARRY_CAPACITY = 20;
 export const START_ENGINEERS = map1.engineer.startCount;
 export const isBelt = (kind: number): boolean => kind === B.belt || kind === B.splitter || kind === B.merger;
+/** A mass or rare extractor (W29: with belts on, it digs into its own buffer). */
+export const isExtractor = (kind: number): boolean => kind === B.massExtractor || kind === B.rareExtractor;
+
+/** Belt direction 0..3: +x, +z, −x, −z (a tile step per direction). */
+export const BDX = [1, 0, -1, 0] as const;
+export const BDZ = [0, 1, 0, -1] as const;
+
+/**
+ * The directions a belt piece of `kind` facing `dir` puts items out to: a splitter to its left and
+ * right (never its front), a belt or merger to its front. The conveyor (conveyor.ts) and the belt
+ * shapes the renderer draws (render/beltShapes.ts) both read this.
+ */
+export function outputDirs(kind: number, dir: number): readonly number[] {
+  return kind === B.splitter ? [(dir + 1) & 3, (dir + 3) & 3] : [dir & 3];
+}
+
+/**
+ * Whether a complete building of `kind` puts items on belts (conveyor.ts stepConveyors): a depot
+ * (salvage), a chain machine whose output is an item (the assembler's parts go to the pool, not a
+ * belt) and, with belts on (World.belts), an extractor. Each puts them only on a belt in its
+ * outputRing whose direction is the cell's away direction (its back faces the building).
+ */
+export function outputsToBelts(kind: number, belts: boolean): boolean {
+  if (kind === B.depot) return true;
+  if (isExtractor(kind)) return belts;
+  const m = buildingInfo(kind).machine;
+  return m !== undefined && m.output !== ITEM_PART;
+}
+
+/**
+ * The cells a building with footprint fw × fh at (tx, ty) puts items into, each with the direction
+ * pointing away from the footprint, in conveyor.ts's round-robin order (for a square footprint
+ * W13's: east, south, west, north for each i). Cells may lie off the map.
+ */
+export function outputRing(tx: number, ty: number, fw: number, fh: number): Array<[number, number, number]> {
+  const ring: Array<[number, number, number]> = [];
+  for (let i = 0; i < Math.max(fw, fh); i++) {
+    if (i < fh) ring.push([tx + fw, ty + i, 0]);
+    if (i < fw) ring.push([tx + i, ty + fh, 1]);
+    if (i < fh) ring.push([tx - 1, ty + i, 2]);
+    if (i < fw) ring.push([tx + i, ty - 1, 3]);
+  }
+  return ring;
+}
 
 // ---- Aliens --------------------------------------------------------------------------------
 

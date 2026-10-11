@@ -302,6 +302,9 @@ const ALL_SANDBOX: Command[] = [
   { t: 'clearWrecks' },
   { t: 'resetStats' },
   { t: 'resetSandbox' },
+  // W29 debug commands
+  { t: 'damage', target: 0, amount: 10 }, // building 0: the sandbox's core
+  { t: 'fillBuffers' },
 ];
 
 describe('sandbox only', () => {
@@ -476,7 +479,7 @@ describe('other sandbox commands', () => {
     w.step();
     expect(w.tick).toBe(tick + 1); // time carries on
     expect(w.scenario).toBe('sandbox');
-    expect(w.buildings.count).toBe(0);
+    expect(w.buildings.count).toBe(1); // W29: the core, as at the start
     expect(w.runs.every((r) => r === null)).toBe(true);
     expect(w.units.count).toBe(start.units.count);
     expect(w.unlimited).toBe(true);

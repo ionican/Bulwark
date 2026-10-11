@@ -9,6 +9,7 @@ import { A, ALIEN_KINDS, BUILDING_KINDS, B, UNIT_KINDS } from '../src/sim/kinds.
 import { BF_COMPLETE, BF_STARTED } from '../src/sim/schema.ts';
 import { CAPACITY } from '../src/sim/world.ts';
 import { EntityRenderer } from '../src/render/entities.ts';
+import { BeltShapes } from '../src/render/beltShapes.ts';
 import { routeMarkerGeometries } from '../src/render/geometry.ts';
 import { createWorld } from '../src/sim/scenarios.ts';
 import { footprintRange } from '../src/render/ground.ts';
@@ -113,7 +114,7 @@ describe('criterion 2: every kind is drawn with its model, read from the scene g
     expect(rep.gun!.greybox).toBeGreaterThan(0);
     // the model view's overlays add no greybox
     const overlay = new Scene();
-    const o = new EntityRenderer(overlay, terrain, CAPACITY);
+    const o = new EntityRenderer(overlay, terrain, CAPACITY, new BeltShapes(terrain.w, terrain.h));
     o.update({ camera: camera(), viewportHeight: 900, yaw: 0, snapshot: s, aliens: mobile(s.aliens), units: mobile(s.units), projectiles: mobile(s.aliens), selection: [] });
     for (const k of INVENTORY) expect(inspect(s, overlay)[k]?.greybox ?? 0, k).toBe(0);
   });
@@ -280,7 +281,7 @@ describe('Richard: no alien routes are drawn (the simulation still computes them
     const isRoute = (g: BufferGeometry) => markers.includes((g.getAttribute('position').array as Float32Array).join(','));
     const scenes: Object3D[] = [];
     const sc = new Scene();
-    const e = new EntityRenderer(sc, terrain, CAPACITY);
+    const e = new EntityRenderer(sc, terrain, CAPACITY, new BeltShapes(terrain.w, terrain.h));
     e.update({ camera: camera({ x: 64, z: 64, distance: 200, yaw: 0 }), viewportHeight: 900, yaw: 0, snapshot: s, aliens: mobile(s.aliens), units: mobile(s.units), projectiles: mobile(s.aliens), selection: [] });
     scenes.push(sc);
     draw(r, s, { level: 0 });

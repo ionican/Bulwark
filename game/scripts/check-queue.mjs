@@ -159,7 +159,7 @@ async function selectEngineer(id, add) {
     await click(p.x + ox, p.y + oy);
     if (add) shiftUp();
     await frames(3);
-    const sel = js('__game.selected.map((s) => s.id)');
+    const sel = js(`__game.selectedIds('unit')`);
     if (sel.includes(id)) return sel;
     if (!add) continue;
   }
@@ -608,7 +608,7 @@ async function runW26() {
   const unitAt = (id) => js(`(() => { const u = __game.list('unit').find((u) => u.id === ${id}); return u ? { x: u.x, z: u.z } : null; })()`);
   await click(eb.x, eb.y);
   await frames(5);
-  const s1 = js('__game.selected.map((s) => s.id)');
+  const s1 = js(`__game.selectedIds('unit')`);
   const rig1 = js('__game.camera.get()');
   // map state the next clicks must not change, with the wall tool open (it needs a builder
   // selected, so after the first click; a click reaching the map would now place a wall)
@@ -623,7 +623,7 @@ async function runW26() {
   );
   await click(eb.x, eb.y);
   await frames(5);
-  const s2 = js('__game.selected.map((s) => s.id)');
+  const s2 = js(`__game.selectedIds('unit')`);
   const rig2 = js('__game.camera.get()');
   const u2 = s2.length === 1 ? unitAt(s2[0]) : null;
   check(
@@ -635,7 +635,7 @@ async function runW26() {
   await click(eb.x, eb.y);
   shiftUp();
   await frames(5);
-  const s3 = js('__game.selected.map((s) => s.id)').sort((a, b) => a - b);
+  const s3 = js(`__game.selectedIds('unit')`).sort((a, b) => a - b);
   check(JSON.stringify(s3) === JSON.stringify([...idle.engineer].sort((a, b) => a - b)), `W26: Shift + click selects both idle engineers (${s3.join(', ')})`, `W26: Shift + click selected ${JSON.stringify(s3)}, idle ${JSON.stringify(idle.engineer)}`);
   const after = mapState();
   check(after === before && js('__game.buildMode') === 'wall', 'W26: clicks on the column change no map state (wall tool open: nothing placed, nothing ordered)', `W26: map state ${before} → ${after}, build mode ${js('__game.buildMode')}`);

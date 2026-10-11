@@ -15,7 +15,7 @@ describe('W25b: the freeze reproduced (headless)', () => {
     while (!queuesEmpty(w, ids) && t++ < 3000) w.step();
     expect(queuesEmpty(w, ids), `queues still hold orders at tick ${w.tick}`).toBe(true);
     const all = sites(w);
-    expect(all.length).toBe(13 + 6 + 9 + 1);
+    expect(all.length).toBe(13 + 6 + 9 + 1 + 1); // W29: the sandbox's core is a building too
     expect(all.filter((b) => !(b.flags & BF_COMPLETE))).toEqual([]);
     expect(w.runs.every((r) => r === null)).toBe(true);
   });

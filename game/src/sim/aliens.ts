@@ -7,9 +7,15 @@
 // W24: a reserved construction site (no build power yet) is not solid: aliens walk over it unless
 // it is their goal, which they shoot as in W13. Damage per shot and speed include the sandbox
 // tuning multipliers.
+// W29: the core is impassable (world.ts rebuildGrids) and never an obstruction or a kept target.
+// An alien within reach of the enabled core whose pass has not started attacks it for
+// CORE_PASS_SECONDS, then (or as soon as the core is disabled) its pass is spent and it goes back
+// to its own targeting the same tick; a spent alien never targets the core again. Hunters too.
+// The pass rule runs before the keep-shooting step, so that step cannot extend it.
 
-import { AS_ATTACKING, AS_MOVING, T_BUILDING, T_NONE, T_UNIT } from './schema.ts';
-import { A, TICK_SECONDS, U, alienInfo, buildingInfo, isBelt, unitInfo } from './kinds.ts';
+import { AS_ATTACKING, AS_MOVING, BF_DISABLED, PASS_ATTACKING, PASS_NONE, PASS_SPENT, T_BUILDING, T_NONE, T_UNIT } from './schema.ts';
+import { A, TICK_HZ, TICK_SECONDS, U, alienInfo, buildingInfo, isBelt, unitInfo } from './kinds.ts';
+import { CORE_PASS_SECONDS } from './balance.ts';
 import { alienDps, alienSpeed } from './tuning.ts';
 import { clearMove } from './grid.ts';
 import { alienShot, centreOf, distToBuilding } from './combat.ts';
@@ -17,6 +23,41 @@ import { GOAL_COMMANDER, isReserved, type World } from './world.ts';
 
 const DT = TICK_SECONDS;
 const SHOT_INTERVAL = 1;
+const PASS_TICKS = Math.round(CORE_PASS_SECONDS * TICK_HZ);
+
+/** Alien s is within its reach of building slot b (the same reach as any building target). */
+function inReach(w: World, s: number, b: number): boolean {
+  const c = w.aliens.cols;
+  const info = alienInfo(c.kind[s]!);
+  return distToBuilding(w, b, c.x[s]!, c.z[s]!) <= info.radius + info.reach + 0.9;
+}
+
+/**
+ * The core pass for alien s this tick. `core` is the core's slot (-1: none) and `enabled` whether it
+ * takes hits; stepAliens works both out once a tick (alien shots are projectiles, so nothing in the
+ * alien step changes them). True if it attacked the core (nothing else this tick); false when it has
+ * no business with the core, or its pass just ended (it targets as usual this tick).
+ */
+function corePass(w: World, s: number, core: number, enabled: boolean): boolean {
+  const c = w.aliens.cols;
+  const pass = c.pass[s]!;
+  if (pass === PASS_SPENT) return false;
+  if (pass === PASS_ATTACKING && !(enabled && w.tick < c.passUntil[s]! && inReach(w, s, core))) {
+    c.pass[s] = PASS_SPENT;
+    if (c.tType[s] === T_BUILDING && c.tId[s] === w.coreId) c.tType[s] = T_NONE;
+    return false;
+  }
+  if (pass === PASS_NONE) {
+    if (!enabled || !inReach(w, s, core)) return false;
+    c.pass[s] = PASS_ATTACKING;
+    c.passUntil[s] = w.tick + PASS_TICKS;
+  }
+  c.tType[s] = T_BUILDING;
+  c.tId[s] = w.coreId;
+  c.state[s] = AS_ATTACKING;
+  shoot(w, s);
+  return true;
+}
 
 /** Moves alien s towards (px, pz) by its speed, never into rock or a solid building. */
 function moveTowards(w: World, s: number, px: number, pz: number, speed: number): void {
@@ -45,7 +86,9 @@ function targetValid(w: World, s: number): boolean {
   const type = c.tType[s]!;
   if (type === T_BUILDING) {
     const b = w.buildings.slotForId(c.tId[s]!);
-    return b >= 0 && w.buildings.cols.hp[b]! > 0 && distToBuilding(w, b, c.x[s]!, c.z[s]!) <= info.radius + info.reach + 0.9;
+    // the core is held only by the pass rule (corePass), never kept as an ordinary target
+    if (b >= 0 && buildingInfo(w.buildings.cols.kind[b]!).impassable) return false;
+    return b >= 0 && w.buildings.cols.hp[b]! > 0 && inReach(w, s, b);
   }
   if (type === T_UNIT) {
     const u = w.units.slotForId(c.tId[s]!);
@@ -82,12 +125,17 @@ export function stepAliens(w: World): void {
   const W = w.terrain.w;
   const uc = w.units.cols;
   const cmdr = w.commanderSlot();
+  const core = w.coreId < 0 ? -1 : w.buildings.slotForId(w.coreId);
+  const coreEnabled = core >= 0 && !(w.buildings.cols.flags[core]! & BF_DISABLED);
   for (let s = 0; s < a.highWater; s++) {
     if (!a.alive[s] || c.hp[s]! <= 0) continue;
     const kind = c.kind[s]!;
     const info = alienInfo(kind);
     const speed = alienSpeed(w, kind);
     if (c.cooldown[s]! > 0) c.cooldown[s] = c.cooldown[s]! - DT;
+
+    // W29: the core in passing, before the keep-shooting step so that step cannot extend it.
+    if (corePass(w, s, core, coreEnabled)) continue;
 
     // Keep shooting a target that is still in reach.
     if (c.tType[s] !== T_NONE && targetValid(w, s)) {
@@ -159,7 +207,8 @@ export function stepAliens(w: World): void {
       continue;
     }
     const b = w.occupancy[next]! - 1;
-    if (b >= 0) {
+    // W29: never the core (impassable in every grid, so a route only reaches it with no way round)
+    if (b >= 0 && !buildingInfo(w.buildings.cols.kind[b]!).impassable) {
       const bk = w.buildings.cols.kind[b]!;
       const solid = !isBelt(bk) && !isReserved(w.buildings.cols.flags[b]!);
       if (solid || w.isGoalBuilding(info.category, bk)) {

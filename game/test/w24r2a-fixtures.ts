@@ -66,6 +66,8 @@ export const KIND_SPOTS: Array<[keyof typeof B, number, number, number?]> = [
   ['belt', 48, 66, 0],
   ['splitter', 56, 66, 1],
   ['merger', 64, 66, 2],
+  // W29: where map 1 has it (base + CORE_OFFSET)
+  ['core', 61, 63],
 ];
 
 export interface Fixture {

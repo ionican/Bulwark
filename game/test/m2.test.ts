@@ -37,7 +37,7 @@ describe('map 1 start', () => {
     const w = createWorld(1, 'map1');
     expect(w.aliens.count).toBe(0);
     expect(w.units.count).toBe(3); // commander + W12's 2 starting engineers
-    expect(w.buildings.count).toBe(0); // empty base
+    expect(w.buildings.count).toBe(1); // empty base but for the core (W29)
     for (let i = 0; i < 1700; i++) {
       w.step();
       if (w.aliens.count !== 0 || w.pendingSpawns !== 0) throw new Error(`alien present at tick ${w.tick}`);

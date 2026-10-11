@@ -12,7 +12,9 @@
 //                        belt (long bar with one chevron), splitter (one in, three chevrons out),
 //                        merger (three chevrons in, one out), rusher (arrowhead), hunter (long
 //                        thin dart), breaker (wide block with a toothed ram), saboteur (diamond
-//                        with an antenna), wreck (jagged scrap outline)
+//                        with an antenna), wreck (jagged scrap outline), core (W29: octagon with a
+//                        square window round a diamond), belt corners (W29b: the belt's bar bent a
+//                        quarter turn in from the right or the left, its chevron at the exit)
 //
 // Icons are flat quads on the ground (W22's iconQuad), turned so the icon's "up" is screen-up, or
 // to the turret's aim and the belt's direction; their size is kept at a constant number of pixels.
@@ -53,6 +55,9 @@ export const ICONS = [
   'breaker',
   'saboteur',
   'wreck',
+  'core',
+  'beltCornerR',
+  'beltCornerL',
 ] as const;
 export type IconName = (typeof ICONS)[number];
 export const ICON = Object.fromEntries(ICONS.map((n, i) => [n, i])) as Record<IconName, number>;
@@ -210,6 +215,36 @@ function drawNew(c: Ctx, id: IconName): void {
       poly(c, [[-0.8, 0.3], [-0.5, -0.4], [-0.15, -0.1], [0.1, -0.7], [0.45, -0.25], [0.85, -0.35], [0.6, 0.35], [0.8, 0.7], [0.1, 0.5], [-0.35, 0.75]]);
       solid(c, 0.12);
       break;
+    case 'core': {
+      const oct: Array<[number, number]> = [];
+      for (let k = 0; k < 8; k++) oct.push([Math.cos(((k + 0.5) * Math.PI) / 4) * 1.0, Math.sin(((k + 0.5) * Math.PI) / 4) * 1.0]);
+      poly(c, oct);
+      solid(c);
+      c.fillStyle = INK;
+      c.fillRect(-0.48, -0.48, 0.96, 0.96);
+      poly(c, [[0, -0.32], [0.32, 0], [0, 0.32], [-0.32, 0]]);
+      c.fillStyle = PALE;
+      c.fill();
+      break;
+    }
+    case 'beltCornerR':
+    case 'beltCornerL': {
+      // the straight belt's bar (0.76 wide) bent a quarter turn: in at one side edge, out at the
+      // top edge, round the cell corner between them; the chevron at the exit as on the straight bar
+      // canvas right is the right of the flow (the icon's up is the flow)
+      c.beginPath();
+      if (id === 'beltCornerR') {
+        c.arc(1.05, -1.05, 1.05 + 0.38, Math.PI / 2, Math.PI, false);
+        c.arc(1.05, -1.05, 1.05 - 0.38, Math.PI, Math.PI / 2, true);
+      } else {
+        c.arc(-1.05, -1.05, 1.05 + 0.38, Math.PI / 2, 0, true);
+        c.arc(-1.05, -1.05, 1.05 - 0.38, 0, Math.PI / 2, false);
+      }
+      c.closePath();
+      solid(c, 0.12);
+      chevron(c, 0, -0.62, -Math.PI / 2, 0.62);
+      break;
+    }
     default:
       break;
   }

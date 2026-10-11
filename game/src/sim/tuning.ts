@@ -11,8 +11,8 @@
 // building hit-point change marks the cost grids and flow fields for rebuilding, because hit points
 // feed the flow cost (world.ts buildingPathCost).
 
-import { ALIEN_KINDS, BUILDING_KINDS, U, UNIT_KINDS, alienInfo, buildingInfo, unitInfo } from './kinds.ts';
-import { FIELD_ENG_BUILD_MULT, TUNE_MAX, TUNE_MIN } from './balance.ts';
+import { ALIEN_KINDS, B, BUILDING_KINDS, U, UNIT_KINDS, alienInfo, buildingInfo, unitInfo } from './kinds.ts';
+import { EXTRACTOR_BOOST, EXTRACTOR_BUFFER_SECONDS, FIELD_ENG_BUILD_MULT, TUNE_MAX, TUNE_MIN } from './balance.ts';
 import type { World } from './world.ts';
 
 /** What the rule accessors below read of a world: its tuning and its research (snapshotRules.ts builds one from a snapshot). */
@@ -150,6 +150,14 @@ export function resetTune(w: World, target?: TuneTarget, kind?: number): void {
 export const unitMaxHp = (w: Rules, kind: number): number => unitInfo(kind).hp * w.tuning.u(kind, TU_HP);
 /** Unit speed, tiles per tick. */
 export const unitSpeed = (w: Rules, kind: number): number => unitInfo(kind).speed * w.tuning.u(kind, TU_SPEED);
+/** What an extractor of `kind` digs per second: mass × EXTRACTOR_BOOST once 'extractors' is researched, rare as listed, 0 for any other kind. */
+export function extractorRate(w: Rules, kind: number): number {
+  if (kind === B.massExtractor) return buildingInfo(kind).income![0] * (w.researched('extractors') ? EXTRACTOR_BOOST : 1);
+  if (kind === B.rareExtractor) return buildingInfo(kind).income![2];
+  return 0;
+}
+/** W29: an extractor's buffer cap, EXTRACTOR_BUFFER_SECONDS of its output (0 for other kinds). */
+export const extractorCap = (w: Rules, kind: number): number => EXTRACTOR_BUFFER_SECONDS * extractorRate(w, kind);
 /** Build power: W12 rate, × Field engineering for engineers once researched, × tune. */
 export function unitBuildRate(w: Rules, kind: number): number {
   const info = unitInfo(kind);

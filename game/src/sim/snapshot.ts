@@ -2,7 +2,7 @@
 //
 // Layout (little-endian):
 //   header    16 × u32 (H_* indices)
-//   globals   48 × f64 (G_* indices): pool, rates, parts, commander, counters, scenario
+//   globals   56 × f64 (G_* indices): pool, rates, parts, commander, counters, scenario, belts
 //   stats     STAT_COUNT × f64: the per-kind combat counters (stats.ts), every snapshot (W24)
 //   tuning    TUNE_COUNT × f64: the sandbox multipliers, building, alien, unit (tuning.ts; W24)
 //   runs      RUN_CAPACITY × 4 × i32: per run-table slot [run id (0 = free), tiles, complete, skipped]
@@ -22,7 +22,7 @@
 // The bytes depend on simulation state only (no timings), so equal state gives byte-identical
 // snapshots — the determinism tests compare them.
 
-import { ALIEN_FIELDS, BF_COMPLETE, BUILDING_FIELDS, G_RESEARCH_DONE, G_SHORT, PROJECTILE_FIELDS, UNIT_FIELDS, WRECK_FIELDS } from './schema.ts';
+import { ALIEN_FIELDS, BF_COMPLETE, BUILDING_FIELDS, G_BELTS, G_CORE_ID, G_CORE_MASS, G_CORE_RARE, G_RESEARCH_DONE, G_SHORT, G_SPENT, PROJECTILE_FIELDS, UNIT_FIELDS, WRECK_FIELDS } from './schema.ts';
 import { BYTES, makeArray, type AnyTypedArray, type ArrayFor, type FieldSpec, type Table } from './table.ts';
 import { SCENARIO_NAMES, type World } from './world.ts';
 import { STAT_COUNT } from './stats.ts';
@@ -40,11 +40,14 @@ export const SNAPSHOT_MAGIC = 0x314b5742; // "BWK1"
  * --strip-queue removes it again to compare with version 4).
  * 6 (W25c): order ids in the queue section, and G_QUEUE_BYTES, its length (so --strip-queue can
  * remove it whatever it holds).
+ * 7 (W29): the core kind, mass and rare items, BF_DISABLED and BF_IDLE, the extractor buffer in the
+ * stock column, the repair order kind (Q_REPAIR), and globals 46–52 (belts on, the core's id,
+ * delivered mass and rare, exact cumulative spending); 56 globals.
  */
-export const SNAPSHOT_VERSION = 6;
+export const SNAPSHOT_VERSION = 7;
 const HEADER_WORDS = 16;
 const HEADER_BYTES = HEADER_WORDS * 4;
-export const GLOBAL_COUNT = 48;
+export const GLOBAL_COUNT = 56;
 const GLOBAL_BYTES = GLOBAL_COUNT * 8;
 
 export const H_MAGIC = 0;
@@ -106,6 +109,7 @@ export const G_RESPAWN_TICK = 42; // sandbox: tick the next commander appears, -
 export const G_COMMANDER_DEATHS = 43; // sandbox: commanders lost so far
 export const G_QUEUE_ORDERS = 44; // W25: orders in the queue section, all units
 export const G_QUEUE_BYTES = 45; // W25c: length of the queue section in bytes
+// W29 globals 46–52 are in schema.ts (render code reads them): G_BELTS, G_CORE_ID, G_CORE_MASS, G_CORE_RARE, G_SPENT
 
 
 type SnapFields<S extends readonly FieldSpec[]> = Exclude<S[number], { snap: false }>;
@@ -337,6 +341,11 @@ function writeGlobals(world: World, g: Float64Array): void {
   g[G_COMMANDER_DEATHS] = world.commanderDeaths;
   g[G_QUEUE_ORDERS] = queuedOrders(world);
   g[G_QUEUE_BYTES] = queueBytes(world.units.count, g[G_QUEUE_ORDERS]!, runSiteWords(world));
+  g[G_BELTS] = world.belts ? 1 : 0;
+  g[G_CORE_ID] = world.coreId;
+  g[G_CORE_MASS] = world.delivered[0]!;
+  g[G_CORE_RARE] = world.delivered[1]!;
+  for (let k = 0; k < 3; k++) g[G_SPENT + k] = world.spentTotal[k]!;
 }
 
 /**

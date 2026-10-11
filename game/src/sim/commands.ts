@@ -54,6 +54,9 @@ export type Command =
   | { t: 'dequeue'; id: number; order: number }
   /** Empty the queues of `ids`, under the same rule. */
   | { t: 'clearQueue'; ids: number[] }
+  // ---- W29 ----
+  /** Repair a complete, damaged building (free; units.ts). Any building, the core included. */
+  | { t: 'repair'; ids: number[]; target: number; queue?: boolean }
   // Sandbox only (sandbox.ts): refused with a reason in any other scenario.
   /** Spawn `count` (1..50) aliens of `kind` round world point (x, z). */
   | { t: 'spawnAt'; kind: number; x: number; z: number; count: number }
@@ -71,7 +74,11 @@ export type Command =
   | { t: 'clearWrecks' }
   | { t: 'resetStats' }
   /** Back to the sandbox start state; tuning and unlimited are kept unless `full`. */
-  | { t: 'resetSandbox'; full?: boolean };
+  | { t: 'resetSandbox'; full?: boolean }
+  /** W29 debug: `amount` hit points of damage to a building, as a hit (combat.ts damageBuilding). */
+  | { t: 'damage'; target: number; amount: number }
+  /** W29 debug: every complete extractor's buffer to its cap (the delivery-load benchmark). */
+  | { t: 'fillBuffers' };
 
 /** Commands refused outside the sandbox scenario. */
 export const SANDBOX_COMMANDS: ReadonlySet<Command['t']> = new Set([
@@ -85,6 +92,8 @@ export const SANDBOX_COMMANDS: ReadonlySet<Command['t']> = new Set([
   'clearWrecks',
   'resetStats',
   'resetSandbox',
+  'damage',
+  'fillBuffers',
 ]);
 
 export interface StampedCommand {

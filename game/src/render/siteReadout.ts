@@ -56,7 +56,8 @@ export interface SiteReadout {
   lines: string[];
 }
 
-function rowOf(snap: Snapshot, id: number): number {
+/** The row of building `id` in a snapshot (-1: not in it). */
+export function rowOf(snap: Snapshot, id: number): number {
   const ids = snap.buildings.id;
   for (let r = 0; r < snap.buildings.count; r++) if (ids[r] === id) return r;
   return -1;

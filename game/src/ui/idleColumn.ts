@@ -13,7 +13,7 @@ export type IdleType = 'commander' | 'engineer';
 export const IDLE_TYPES: readonly IdleType[] = ['commander', 'engineer'];
 
 const css = `
-.idle{position:fixed;right:8px;display:flex;flex-direction:column;gap:4px;z-index:6;font:600 13px system-ui,sans-serif}
+.idle{position:fixed;right:8px;top:118px;display:flex;flex-direction:column;gap:4px;z-index:6;font:600 13px system-ui,sans-serif}
 .idle button{display:flex;align-items:center;gap:6px;color:#f4efe6;background:rgba(18,15,13,.88);border:1px solid rgba(244,239,230,.45);
 border-radius:4px;padding:3px 8px 3px 4px;cursor:pointer}
 .idle button:hover{border-color:#f4efe6}
@@ -54,7 +54,6 @@ export class IdleColumn {
       this.buttons.set(type, { b, n });
     }
     document.body.appendChild(this.el);
-    this.place();
   }
 
   /** Shows the counts of `idle`; a type with none is hidden. */
@@ -69,15 +68,24 @@ export class IdleColumn {
       n.textContent = `× ${count}`;
       b.dataset.count = String(count);
     }
-    this.place();
   }
+}
 
-  /** Below the debug spawn panel (ui/buildbar.ts `.dbg`), or where it would be. */
-  private place(): void {
-    const dbg = document.querySelector('.dbg');
-    const top = dbg ? dbg.getBoundingClientRect().bottom + 8 : 118;
-    this.el.style.top = `${Math.round(top)}px`;
-  }
+/**
+ * W29b: the right-hand column, top to bottom: the resource panel (ui/hud.ts `.hud.res`, pinned at
+ * the top), the debug spawn box (ui/buildbar.ts `.dbg`) 8 px below it but never above 118 px, and
+ * the idle units column 8 px below whichever of those is lower; a hidden box counts as absent (with
+ * it hidden the column once went to the top and covered the resource panel's per-second rates).
+ * The one place that positions them, called once per snapshot (the resource panel's height changes
+ * with its lines). It reads layout once, then writes: moving the box does not change its height.
+ */
+export function stackRightColumn(res: HTMLElement, dbg: HTMLElement | null, idle: HTMLElement): void {
+  const resBottom = res.getBoundingClientRect().bottom;
+  const dbgHeight = dbg ? dbg.getBoundingClientRect().height : 0; // 0 while hidden (display: none)
+  const dbgTop = Math.round(Math.max(118, resBottom + 8));
+  if (dbg) dbg.style.top = `${dbgTop}px`;
+  const lowest = Math.max(resBottom, dbgHeight > 0 ? dbgTop + dbgHeight : 0);
+  idle.style.top = `${Math.round(lowest > 0 ? lowest + 8 : 118)}px`;
 }
 
 /** The type's W23 strategic-zoom icon, as at strategic zoom (render/icons.ts draws the same shapes). */
