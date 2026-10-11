@@ -13,6 +13,7 @@ import { CORE_HP } from '../src/sim/balance.ts';
 import { damageBuilding } from '../src/sim/combat.ts';
 import { itemGeometries } from '../src/render/geometry.ts';
 import { EntityRenderer } from '../src/render/entities.ts';
+import { BeltShapes } from '../src/render/beltShapes.ts';
 import { Animator } from '../src/render/anim.ts';
 import { entitiesOf, inspectScene } from '../src/render/inspect.ts';
 import { economyText, type EconomyReadout } from '../src/ui/hud.ts';
@@ -51,8 +52,10 @@ describe('W29 items on belts', () => {
 
   it('the overlay draws a mass item with the mass mesh and a rare item with the rare mesh (no clamp to the part mesh)', () => {
     const sc = new Scene();
-    const e = new EntityRenderer(sc, terrain, CAPACITY);
     const snap = snapshotOf(scene());
+    const belts = new BeltShapes(terrain.w, terrain.h);
+    belts.update(snap);
+    const e = new EntityRenderer(sc, terrain, CAPACITY, belts);
     e.update({ camera: camera({ x: 58, z: 68, distance: 14, yaw: 0 }), viewportHeight: 900, yaw: 0, snapshot: snap, aliens: mobile(snap.aliens), units: mobile(snap.units), projectiles: mobile(snap.projectiles), selection: [] });
     const count = (name: string) => {
       let n = 0;

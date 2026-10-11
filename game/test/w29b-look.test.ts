@@ -11,6 +11,7 @@ import type { World } from '../src/sim/world.ts';
 import { B, ITEM_MASS, ITEM_RARE } from '../src/sim/kinds.ts';
 import { CAPACITY } from '../src/sim/world.ts';
 import { EntityRenderer } from '../src/render/entities.ts';
+import { BeltShapes } from '../src/render/beltShapes.ts';
 import { itemGeometries } from '../src/render/geometry.ts';
 import { drawnMeshes } from '../src/render/inspect.ts';
 import { bakeModel } from '../src/render/w17Batches.ts';
@@ -176,8 +177,10 @@ describe('W29b belt items on the belt', () => {
   /** World boxes of the drawn items of kind `item` (instance matrix × geometry box). */
   function drawnBoxes(w: World, item: number): Box3[] {
     const sc = new Scene();
-    const e = new EntityRenderer(sc, terrain, CAPACITY);
     const snap = snapshotOf(w);
+    const belts = new BeltShapes(terrain.w, terrain.h);
+    belts.update(snap); // view.ts: the models' instance, updated before the overlays
+    const e = new EntityRenderer(sc, terrain, CAPACITY, belts);
     e.update({ camera: camera({ x: 54, z: 72, distance: 14, yaw: 0 }), viewportHeight: 900, yaw: 0, snapshot: snap, aliens: mobile(snap.aliens), units: mobile(snap.units), projectiles: mobile(snap.projectiles), selection: [] });
     const out: Box3[] = [];
     sc.traverse((o) => {

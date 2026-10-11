@@ -7,12 +7,13 @@
 // Scene graph: one sprite `core/disabled` (userData: id, icon 'hazard', text 'DISABLED').
 // inspectCore reads the visible ones back (tests, __game.inspectCore).
 
-import { CanvasTexture, Group, Sprite, SpriteMaterial, Texture, type Object3D, type PerspectiveCamera } from 'three';
-import { B } from '../sim/kinds.ts';
-import { BF_DISABLED } from '../sim/schema.ts';
+import { CanvasTexture, Group, Sprite, Texture, type Object3D, type PerspectiveCamera } from 'three';
+import { BF_DISABLED, G_CORE_ID } from '../sim/schema.ts';
 import type { Snapshot } from '../sim/snapshot.ts';
 import type { Terrain } from '../sim/terrain.ts';
 import { groundHeight } from './ground.ts';
+import { rowOf } from './siteReadout.ts';
+import { MARK_DARK as DARK, MARK_LIGHT as LIGHT, markBox, markHeight, markSprite } from './waitView.ts';
 
 export interface CoreFrame {
   camera: PerspectiveCamera;
@@ -26,8 +27,6 @@ export const CORE_MARK_TEXT = 'DISABLED';
 const MARK_PX = 30;
 /** Height above the ground (tiles): over the core model. */
 const LIFT = 3.6;
-const LIGHT = '#f4efe6';
-const DARK = '#120f0d';
 
 export type CoreMarkTexture = () => { texture: Texture; aspect: number };
 
@@ -46,13 +45,7 @@ export function canvasCoreMark(): CoreMarkTexture {
     const w = Math.ceil(pad + tri + pad * 0.8 + textW + pad);
     c.width = w;
     c.height = h;
-    ctx.beginPath();
-    ctx.roundRect(3, 3, w - 6, h - 6, h * 0.18);
-    ctx.fillStyle = DARK;
-    ctx.fill();
-    ctx.lineWidth = 4;
-    ctx.strokeStyle = LIGHT;
-    ctx.stroke();
+    markBox(ctx, w, h);
     // hazard triangle with a dark "!"
     const x0 = pad;
     const y0 = (h - tri) / 2;
@@ -66,7 +59,6 @@ export function canvasCoreMark(): CoreMarkTexture {
     ctx.fillStyle = DARK;
     ctx.fillRect(x0 + tri / 2 - 3, y0 + tri * 0.3, 6, tri * 0.38);
     ctx.fillRect(x0 + tri / 2 - 3, y0 + tri * 0.76, 6, 6);
-    ctx.font = `bold ${Math.round(h * 0.42)}px ui-monospace, Menlo, monospace`;
     ctx.fillStyle = LIGHT;
     ctx.textBaseline = 'middle';
     ctx.fillText(CORE_MARK_TEXT, x0 + tri + pad * 0.8, h / 2 + 1);
@@ -84,27 +76,34 @@ export class CoreOverlay {
   private readonly terrain: Terrain;
   private readonly mark: CoreMarkTexture;
   private readonly sprite: Sprite;
+  /** The snapshot the core's row was found in, and the row (-1: no core). */
+  private rowFor: Snapshot | null = null;
+  private row = -1;
 
   constructor(parent: Object3D, terrain: Terrain, mark: CoreMarkTexture = blankCoreMark) {
     this.terrain = terrain;
     this.mark = mark;
     this.group.name = 'core';
-    this.sprite = new Sprite(new SpriteMaterial({ depthTest: false, depthWrite: false, sizeAttenuation: false, toneMapped: false, transparent: true }));
+    this.sprite = markSprite();
     this.sprite.name = 'core/disabled';
-    this.sprite.renderOrder = 19;
-    this.sprite.frustumCulled = false;
+    this.sprite.userData = { id: -1, icon: CORE_MARK_ICON, text: CORE_MARK_TEXT };
     this.sprite.visible = false;
     this.group.add(this.sprite);
     parent.add(this.group);
   }
 
   update(f: CoreFrame): void {
-    const b = f.snapshot.buildings;
+    const snap = f.snapshot;
+    if (snap !== this.rowFor) {
+      this.rowFor = snap;
+      const id = snap.globals[G_CORE_ID]!;
+      this.row = id < 0 ? -1 : rowOf(snap, id);
+    }
+    const b = snap.buildings;
     const c = b.cols;
-    let row = -1;
-    for (let r = 0; r < b.count && row < 0; r++) if (c.kind[r] === B.core && c.flags[r]! & BF_DISABLED) row = r;
+    const row = this.row;
     const s = this.sprite;
-    if (row < 0) {
+    if (row < 0 || !(c.flags[row]! & BF_DISABLED)) {
       s.visible = false;
       return;
     }
@@ -115,12 +114,10 @@ export class CoreOverlay {
     }
     const x = c.tx[row]! + c.fw[row]! / 2;
     const z = c.ty[row]! + c.fh[row]! / 2;
-    // sizeAttenuation off: scale × 1/tan(fov/2) is the height in normalised device units (2 = the viewport)
-    const f2 = 1 / Math.tan((f.camera.fov * Math.PI) / 180 / 2);
-    const height = ((MARK_PX / f.viewportHeight) * 2) / f2;
+    const height = markHeight(f.camera, f.viewportHeight, MARK_PX);
     s.position.set(x, groundHeight(this.terrain, x, z) + LIFT, z);
     s.scale.set(height * tex.aspect, height, 1);
-    s.userData = { id: b.id[row]!, icon: CORE_MARK_ICON, text: CORE_MARK_TEXT };
+    s.userData.id = b.id[row]!;
     s.visible = true;
   }
 }

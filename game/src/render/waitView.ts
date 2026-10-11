@@ -41,6 +41,36 @@ const SITE_LIFT = 2.8;
 const LIGHT = '#f4efe6';
 const DARK = '#120f0d';
 
+/**
+ * The screen-sized marker style the waiting markers and the disabled-core marker share (shape and
+ * word, light on dark, never colour alone): the dark box with a light edge filling a w × h canvas.
+ */
+export function markBox(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+  ctx.beginPath();
+  ctx.roundRect(3, 3, w - 6, h - 6, h * 0.18);
+  ctx.fillStyle = DARK;
+  ctx.fill();
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = LIGHT;
+  ctx.stroke();
+}
+export const MARK_LIGHT = LIGHT;
+export const MARK_DARK = DARK;
+
+/** A marker sprite: drawn over everything, the same size on screen at any zoom (no size attenuation). */
+export function markSprite(): Sprite {
+  const s = new Sprite(new SpriteMaterial({ depthTest: false, depthWrite: false, sizeAttenuation: false, toneMapped: false, transparent: true }));
+  s.renderOrder = 19;
+  s.frustumCulled = false;
+  return s;
+}
+
+/** A marker sprite's scale for a height of `px` CSS px: with size attenuation off, scale × 1/tan(fov/2) is the height in normalised device units (2 = the viewport). */
+export function markHeight(camera: PerspectiveCamera, viewportHeight: number, px: number): number {
+  const f2 = 1 / Math.tan((camera.fov * Math.PI) / 180 / 2);
+  return ((px / viewportHeight) * 2) / f2;
+}
+
 /** Browser mark: an hourglass, light on a dark box with a light edge (drawn once). */
 export function canvasWaitMark(): WaitMarkTexture {
   let t: { texture: Texture; aspect: number } | null = null;
@@ -54,13 +84,7 @@ export function canvasWaitMark(): WaitMarkTexture {
     const w = Math.ceil(pad + icon * 0.7 + pad);
     c.width = w;
     c.height = h;
-    ctx.beginPath();
-    ctx.roundRect(3, 3, w - 6, h - 6, h * 0.18);
-    ctx.fillStyle = DARK;
-    ctx.fill();
-    ctx.lineWidth = 4;
-    ctx.strokeStyle = LIGHT;
-    ctx.stroke();
+    markBox(ctx, w, h);
     // hourglass: top and bottom bars, two triangles meeting at the waist, sand in the lower one
     const x0 = pad;
     const y0 = (h - icon) / 2;
@@ -114,9 +138,7 @@ export class WaitOverlay {
   private spriteFor(i: number): Sprite {
     let s = this.sprites[i];
     if (!s) {
-      s = new Sprite(new SpriteMaterial({ depthTest: false, depthWrite: false, sizeAttenuation: false, toneMapped: false, transparent: true }));
-      s.renderOrder = 19;
-      s.frustumCulled = false;
+      s = markSprite();
       this.group.add(s);
       this.sprites[i] = s;
     }
@@ -151,9 +173,8 @@ export class WaitOverlay {
     const ws = waitingState(f.snapshot);
     this.state = ws;
     const t = this.terrain;
-    // sizeAttenuation off: scale × 1/tan(fov/2) is the height in normalised device units (2 = the viewport)
-    const f2 = 1 / Math.tan(((f.camera.fov * Math.PI) / 180) / 2);
-    const px = (p: number) => ((p / f.viewportHeight) * 2) / f2;
+    const px = (p: number) => markHeight(f.camera, f.viewportHeight, p);
+    const f2 = 1 / Math.tan((f.camera.fov * Math.PI) / 180 / 2); // normalised device units per unit of sprite scale
     const cam = f.camera;
     cam.updateMatrixWorld();
     const placed: Rect[] = [];

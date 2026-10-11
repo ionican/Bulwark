@@ -9,11 +9,11 @@
 // drawn ground (ground.ts).
 
 import { DoubleSide, Frustum, InstancedMesh, Matrix4, MeshBasicMaterial, MeshLambertMaterial, Sphere, Vector3, type BufferGeometry, type Material, type PerspectiveCamera, type Scene } from 'three';
-import { B, ITEM_RARE, SHIELD, U, alienInfo, isBelt, unitInfo } from '../sim/kinds.ts';
+import { B, ITEM_NAMES, SHIELD, U, alienInfo, isBelt, unitInfo } from '../sim/kinds.ts';
 import { BF_COMPLETE, BF_UPGRADING, isReserved } from '../sim/schema.ts';
 import type { Terrain } from '../sim/terrain.ts';
-import { footprintRange, groundHeight as heightAt } from './ground.ts';
-import { BELT_STRAIGHT, BeltShapes, itemOnBelt } from './beltShapes.ts';
+import { groundHeight as heightAt, tileTop } from './ground.ts';
+import { BELT_STRAIGHT, itemOnBelt, type BeltShapes } from './beltShapes.ts';
 import { BELT_SURFACE_Y } from './workshop/models/procedural/buildings.ts';
 import { slotOf } from '../sim/table.ts';
 import type { Snapshot } from '../sim/snapshot.ts';
@@ -180,15 +180,21 @@ export class EntityRenderer {
   readonly counts: LodCounts = { full: 0, simple: 0, icon: 0, culled: 0 };
   private readonly terrain: Terrain;
   private wppPerDist = 0;
-  /** W29b: each belt tile's shape (corner items follow the curve); worked out again when the belts change. */
-  private readonly beltShapes: BeltShapes;
-  private beltsFor: Snapshot | null = null;
   /** Each item mesh's height above its base. */
   private readonly itemTops: number[];
   /** Debug (the W29b pixel check's negative control): items lowered into the belt, their tops under its surface. */
   itemDrop = false;
 
-  constructor(scene: Scene, terrain: Terrain, capacity: Capacity) {
+  /**
+   * `belts`: each belt tile's shape (corner items follow the curve), the models' instance
+   * (models.ts), which view.ts updates from the same snapshot before this renderer runs.
+   */
+  constructor(
+    scene: Scene,
+    terrain: Terrain,
+    capacity: Capacity,
+    private readonly belts: BeltShapes,
+  ) {
     this.terrain = terrain;
     const C = capacity;
     const L = (n: number) => new Uint8Array(n).fill(255);
@@ -200,12 +206,12 @@ export class EntityRenderer {
     // Starting sizes as before; each grows up to what the simulation's tables allow.
     // one mesh per item kind (W29: mass and rare have their own), named overlay/item/<kind>
     const items = itemGeometries();
+    if (items.length !== ITEM_NAMES.length) throw new Error(`item meshes: ${items.length} for ${ITEM_NAMES.length} item kinds`);
     this.itemTops = items.map((g) => {
       g.computeBoundingBox();
       return g.boundingBox!.max.y;
     });
     this.items = new Batch(scene, items, [model], 1536, 0, C.buildings, 'overlay/item');
-    this.beltShapes = new BeltShapes(terrain.w, terrain.h);
     const dome = new MeshBasicMaterial({ color: '#cfe6ff', transparent: true, opacity: 0.12, depthWrite: false, side: DoubleSide });
     this.shields = new Batch(scene, [shieldDomeGeometry(), dashedRingGeometry()], [dome, flat], 128, 0, C.buildings);
     // W24 run 3 (D1): frames are depth-tested on their own material (a building in front hides the
@@ -271,10 +277,6 @@ export class EntityRenderer {
     this.counts.full = this.counts.simple = this.counts.icon = this.counts.culled = 0;
     for (const b of this.allBatches()) b.reset();
 
-    if (snap !== this.beltsFor) {
-      this.beltsFor = snap;
-      this.beltShapes.update(snap);
-    }
     // Row lookups for this frame.
     this.buildingRow.fill(-1);
     for (let r = 0; r < snap.buildings.count; r++) this.buildingRow[slotOf(snap.buildings.id[r]!)] = r;
@@ -327,10 +329,10 @@ export class EntityRenderer {
           // tile's path: the quarter circle on a corner, back to front otherwise
           const bx = c.tx[r]!;
           const bz = c.ty[r]!;
-          const shape = kind === B.belt ? this.beltShapes.shapeAt(bz * t.w + bx) : BELT_STRAIGHT;
+          const shape = kind === B.belt ? this.belts.itemShapeAt(bz * t.w + bx) : BELT_STRAIGHT;
           const o = itemOnBelt(shape, c.dir[r]!, c.itemPos[r]!, _item);
-          const item = Math.min(ITEM_RARE, c.item[r]!);
-          const base = footprintRange(t, bx, bz, 1, 1).top + BELT_SURFACE_Y - (this.itemDrop ? this.itemTops[item]! + 0.02 : 0);
+          const item = c.item[r]!;
+          const base = tileTop(t, bx, bz) + BELT_SURFACE_Y - (this.itemDrop ? this.itemTops[item]! + 0.02 : 0);
           this.items.push(item, o.tx, -o.tz, 1, 1, 1, x + o.x, base, z + o.z);
         }
         if (c.hp[r]! < c.maxHp[r]! - 0.5 && complete && !belt) this.bar(x, y + 2.4, z, c.hp[r]! / c.maxHp[r]!, size * 0.9, yc, ys);

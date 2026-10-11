@@ -110,7 +110,6 @@ export const G_COMMANDER_DEATHS = 43; // sandbox: commanders lost so far
 export const G_QUEUE_ORDERS = 44; // W25: orders in the queue section, all units
 export const G_QUEUE_BYTES = 45; // W25c: length of the queue section in bytes
 // W29 globals 46–52 are in schema.ts (render code reads them): G_BELTS, G_CORE_ID, G_CORE_MASS, G_CORE_RARE, G_SPENT
-export { G_BELTS, G_CORE_ID, G_CORE_MASS, G_CORE_RARE, G_SPENT };
 
 
 type SnapFields<S extends readonly FieldSpec[]> = Exclude<S[number], { snap: false }>;

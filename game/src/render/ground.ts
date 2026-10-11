@@ -30,6 +30,18 @@ export function groundHeight(t: Terrain, x: number, z: number): number {
   return d + (h[i + s]! - d) * (1 - fx) + (h[i + 1]! - d) * (1 - fz);
 }
 
+/** footprintRange(t, tx, ty, 1, 1).top without the object (per belt item per frame, entities.ts). */
+export function tileTop(t: Terrain, tx: number, ty: number): number {
+  const s = t.w + 1;
+  let top = -Infinity;
+  for (let z = Math.max(0, ty); z <= Math.min(t.h, ty + 1); z++)
+    for (let x = Math.max(0, tx); x <= Math.min(t.w, tx + 1); x++) {
+      const v = t.heights[z * s + x]!;
+      if (v > top) top = v;
+    }
+  return top === -Infinity ? groundHeight(t, tx + 0.5, ty + 0.5) : top;
+}
+
 /**
  * Highest and lowest ground under a footprint fw × fh from the anchor tile (tx, ty). The surface
  * is linear on each triangle, so both extremes are at grid vertices. A building stands at `top`

@@ -78,7 +78,7 @@ export async function createView(
     return atlas;
   });
   scene.add(models.group);
-  const entities = new EntityRenderer(scene, terrain, capacity);
+  const entities = new EntityRenderer(scene, terrain, capacity, models.belts);
   const terrainView = buildTerrainView(terrain);
   scene.add(terrainView.group);
   adapter.attach(scene, camera);

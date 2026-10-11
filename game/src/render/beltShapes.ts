@@ -53,9 +53,14 @@ export class BeltShapes {
     this.shape = new Uint8Array(w * h);
   }
 
-  /** The shape at tile index z * w + x (BELT_STRAIGHT for anything but a shaped belt). */
+  /** The shape drawn at tile index z * w + x (BELT_STRAIGHT for anything but a shaped belt, and for every belt under forceStraight). */
   shapeAt(tile: number): number {
-    return this.straight ? BELT_STRAIGHT : (this.shape[tile] ?? BELT_STRAIGHT);
+    return this.straight ? BELT_STRAIGHT : this.itemShapeAt(tile);
+  }
+
+  /** The shape items follow at tile index z * w + x; forceStraight does not change it (the W29b negative control straightens the models only). */
+  itemShapeAt(tile: number): number {
+    return this.shape[tile] ?? BELT_STRAIGHT;
   }
 
   /** Debug: draw every belt straight (true) or by its neighbours (false). */

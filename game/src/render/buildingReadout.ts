@@ -13,16 +13,11 @@ import { BF_COMPLETE, BF_DISABLED, BF_IDLE, BF_UPGRADING, G_BELTS, G_CORE_MASS, 
 import { extractorCap } from '../sim/tuning.ts';
 import type { Snapshot } from '../sim/snapshot.ts';
 import { snapshotRules } from '../snapshotRules.ts';
+import { rowOf } from './siteReadout.ts';
 
 export interface BuildingReadout {
   id: number;
   lines: string[];
-}
-
-function rowOf(s: Snapshot, id: number): number {
-  const ids = s.buildings.id;
-  for (let r = 0; r < s.buildings.count; r++) if (ids[r] === id) return r;
-  return -1;
 }
 
 /** The readout of complete building `id` in snapshot `s` (null: none). `builders`: engineers or the commander are selected. */
