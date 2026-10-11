@@ -176,7 +176,7 @@ async function selectUnit(id, add = false) {
       if (add) shiftDown();
       await click(p.x + ox, p.y + oy);
       if (add) shiftUp();
-      const sel = js('__game.selected.map((s) => s.id)');
+      const sel = js(`__game.selected.filter((s) => s.type === 'unit').map((s) => s.id)`);
       if (sel.includes(id)) return sel;
     }
     return null;
@@ -364,7 +364,7 @@ async function run() {
   const engs = us.filter((u) => u.kindName === 'engineer');
   await selectUnit(cmdr.id);
   for (const e of engs) await selectUnit(e.id, true);
-  const sel = js('__game.selected.map((s) => s.id)');
+  const sel = js(`__game.selected.filter((s) => s.type === 'unit').map((s) => s.id)`);
   check(sel.length === 1 + engs.length, `the commander and ${engs.length} engineers selected by clicks`, `selected ${JSON.stringify(sel)}`);
   await clickEl('.bar button[data-kind="massExtractor"]');
   const ep = js(`__game.worldToScreen(${dep.tx + 1}, ${dep.ty + 1})`);
@@ -475,14 +475,14 @@ async function run() {
   press('Escape');
   // the builders selected at the start are still selected; if not, a Shift box round the
   // engineers (they finish the belt standing side by side, so a click can land on the other one)
-  if (!engs.every((e) => js('__game.selected.map((s) => s.id)').includes(e.id))) {
+  if (!engs.every((e) => js(`__game.selected.filter((s) => s.type === 'unit').map((s) => s.id)`).includes(e.id))) {
     const pts = engs.map((e) => js(`__game.screenOf('unit', ${e.id})`));
     shiftDown();
     await drag({ x: Math.min(...pts.map((p) => p.x)) - 25, y: Math.min(...pts.map((p) => p.y)) - 35 }, { x: Math.max(...pts.map((p) => p.x)) + 25, y: Math.max(...pts.map((p) => p.y)) + 25 });
     shiftUp();
     await frames(5);
   }
-  const selE = js('__game.selected.map((s) => s.id)');
+  const selE = js(`__game.selected.filter((s) => s.type === 'unit').map((s) => s.id)`);
   check(engs.every((e) => selE.includes(e.id)), `the engineers selected (selection ${JSON.stringify(selE)})`, `selected ${JSON.stringify(selE)}, engineers ${JSON.stringify(engs.map((e) => e.id))}`);
   const cp = coreScreen();
   await hover(cp);

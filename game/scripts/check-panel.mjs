@@ -248,7 +248,8 @@ async function selectUnit(id, add = false) {
       if (add) shiftDown();
       await click(p.x + ox, p.y + oy);
       if (add) shiftUp();
-      const sel = js('__game.selected.map((s) => s.id)');
+      // units only: since W29 the core is building 0, so building and unit ids overlap from the start
+      const sel = js(`__game.selected.filter((s) => s.type === 'unit').map((s) => s.id)`);
       if (sel.includes(id)) return sel;
     }
     return null;
@@ -611,7 +612,7 @@ async function moveUnitTo(id, x, z) {
   await selectUnit(id);
   const p = toScreen(x, z);
   await click(p.x, p.y, 'right');
-  await until(`unit ${id} at ${x}, ${z}`, `(() => { const u = __game.list('unit').find((u) => u.id === ${id}); return u && Math.hypot(u.x - ${x}, u.z - ${z}) < 0.35 && !__game.queues.find((q) => q.id === ${id})?.orders.length; })()`, 60);
+  await until(`unit ${id} at ${x}, ${z}`, `(() => { const u = __game.list('unit').find((u) => u.id === ${id}); return u && Math.hypot(u.x - ${x}, u.z - ${z}) < 0.35 && !__game.queues.find((q) => q.id === ${id})?.orders.length; })()`, 60)
 }
 
 async function picking(f, gateB) {
