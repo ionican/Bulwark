@@ -3,7 +3,7 @@
 // again when the command is applied, because the state may have changed in between.
 
 import { SANDBOX_COMMANDS, type Command } from './commands.ts';
-import { ALIEN_KINDS, B, BUILDING_KINDS, U, buildingInfo } from './kinds.ts';
+import { ALIEN_KINDS, BUILDING_KINDS, U, buildingInfo } from './kinds.ts';
 import { BF_COMPLETE, BF_UPGRADING } from './schema.ts';
 import { BUILD_REQUIRES, MAX_RUN_DEPTH, RESEARCH, RESEARCH_INDEX, SPAWN_AT_MAX, TIER_REQUIRES } from './balance.ts';
 import { MAX_ORDERS, type World } from './world.ts';
@@ -46,9 +46,8 @@ function check(w: World, cmd: Command): string | null {
       if (!isInt(cmd.kind) || cmd.kind < 0 || cmd.kind >= BUILDING_KINDS.length) return `unknown building kind ${JSON.stringify(cmd.kind)}`;
       if (!isInt(cmd.tx) || !isInt(cmd.ty)) return 'build needs integer tile coordinates';
       if (cmd.dir !== undefined && (!isInt(cmd.dir) || cmd.dir < 0 || cmd.dir > 3)) return 'dir must be 0..3';
-      if (cmd.kind === B.tempTurret) return 'the temporary turret is dropped by an engineer, not built';
-      if (cmd.kind === B.gate) return 'a gate is made from finished walls (the gate command), not built';
-      if (cmd.kind === B.core) return 'the core stands from the start; it is not built or placed';
+      const placedBy = buildingInfo(cmd.kind).placedBy;
+      if (placedBy) return placedBy;
       if (cmd.t === 'build') {
         if (!idList(cmd.ids)) return 'build needs unit ids';
         const req = BUILD_REQUIRES[BUILDING_KINDS[cmd.kind]!];

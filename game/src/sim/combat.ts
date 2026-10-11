@@ -223,7 +223,7 @@ export function damageBuilding(w: World, s: number, dmg: number, srcType = T_NON
   const c = w.buildings.cols;
   // W29 item 7: the one place the core's rule lives. A disabled core ignores every hit (shots in
   // flight included); otherwise its hp clamps at 0, where it is disabled, never removed.
-  const core = c.kind[s] === B.core;
+  const core = buildingInfo(c.kind[s]!).disablesAtZero === true;
   if (core && c.flags[s]! & BF_DISABLED) return;
   const wall = buildingInfo(c.kind[s]!).role === 'wall';
   if (!wall) {

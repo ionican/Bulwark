@@ -239,6 +239,8 @@ export function stepConstruction(w: World): void {
  * CORE_REPAIR_TIME). A core repaired to full is enabled again.
  */
 export function stepRepair(w: World): void {
+  if (!w.repairing) return;
+  w.repairing = false;
   const b = w.buildings;
   const c = b.cols;
   const p = w.repairPower;
@@ -247,7 +249,9 @@ export function stepRepair(w: World): void {
     if (bp <= 0) continue;
     p[s] = 0;
     if (!b.alive[s] || !(c.flags[s]! & BF_COMPLETE)) continue;
-    const time = siteWork(c.kind[s]!, false, c.tier[s]!, c.fw[s]!, c.fh[s]!).time;
+    const kind = c.kind[s]!;
+    // siteWork(kind, false, …).time without its object: only a gate's time depends on the footprint.
+    const time = kind === B.gate ? siteWork(kind, false, c.tier[s]!, c.fw[s]!, c.fh[s]!).time : buildingInfo(kind).buildTime;
     const max = c.maxHp[s]!;
     c.hp[s] = Math.min(max, c.hp[s]! + (bp * max * DT) / time);
     if (c.hp[s]! >= max && c.flags[s]! & BF_DISABLED) c.flags[s] = c.flags[s]! & ~BF_DISABLED;

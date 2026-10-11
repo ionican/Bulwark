@@ -290,6 +290,7 @@ export function deserializeWorld(input: Uint8Array | ArrayBuffer): World {
     w.spentTotal.set(get('spentTotal'));
     w.deliveryRing.set(get('deliveryRing'));
     w.repairPower.set(get('repairPower'));
+    w.repairing = w.repairPower.some((p) => p > 0);
   }
   w.fields.forEach((f, i) => {
     f.dist.set(get(`field${i}.dist`));

@@ -7,7 +7,7 @@
 // W29: map 1 and the sandbox deliver by belt (World.belts) and have the core beside the
 // commander's start (balance.ts CORE_OFFSET); 'stress' and 'empty' keep the instant economy.
 
-import { ALIEN_KINDS, B, BUILDING_KINDS } from './kinds.ts';
+import { ALIEN_KINDS, B, BUILDING_KINDS, buildingInfo, isExtractor } from './kinds.ts';
 import { CORE_OFFSET } from './balance.ts';
 import { TILE_ROCK, tileAt, type Terrain } from './terrain.ts';
 import type { Tuning } from './tuning.ts';
@@ -55,10 +55,9 @@ function setupStress(w: World) {
   for (const d of t.deposits) {
     if (w.placeBuilding(d.kind === 'mass' ? B.massExtractor : B.rareExtractor, d.tx, d.ty, true) >= 0) placed++;
   }
-  // Mixed kinds, excluding the extractors (they need deposits), the temporary turret and the gate
-  // (made from walls). Walls get extra weight.
-  // W29: and the core (only belts worlds have one).
-  const pool = BUILDING_KINDS.map((_, i) => i).filter((k) => k !== B.massExtractor && k !== B.rareExtractor && k !== B.tempTurret && k !== B.gate && k !== B.core);
+  // Mixed kinds, excluding the extractors (they need deposits) and the kinds never placed by command
+  // (placedBy: the temporary turret, the gate and, W29, the core). Walls get extra weight.
+  const pool = BUILDING_KINDS.map((_, i) => i).filter((k) => !isExtractor(k) && !buildingInfo(k).placedBy);
   pool.push(B.wall, B.wall, B.wall);
   let attempts = 0;
   while (placed < STRESS_BUILDINGS && attempts++ < 20000) {

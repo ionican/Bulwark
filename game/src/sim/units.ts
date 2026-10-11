@@ -131,8 +131,10 @@ function workOnSite(w: World, s: number, b: number, id: number, range: number, b
   if (distToBuilding(w, b, c.x[s]!, c.z[s]!) <= range) {
     c.state[s] = US_BUILDING;
     c.work[s] = id + 1;
-    if (repair) w.repairPower[b] = w.repairPower[b]! + buildRate;
-    else {
+    if (repair) {
+      w.repairPower[b] = w.repairPower[b]! + buildRate;
+      w.repairing = true;
+    } else {
       w.buildPower[b] = w.buildPower[b]! + buildRate;
       w.builderCount[b] = Math.min(255, w.builderCount[b]! + 1);
     }

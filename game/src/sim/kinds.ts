@@ -98,6 +98,12 @@ export interface BuildingInfo {
   tiers?: Array<{ hpMult: number; damageMult: number; cost: Cost; time: number }>;
   /** Hotkey in the build bar. */
   key: string;
+  /** Set: never placed or built by command; the text is the refusal reason (validate.ts). */
+  placedBy?: string;
+  /** W29 core: at 0 hp it is disabled (BF_DISABLED) and ignores damage, never removed (combat.ts damageBuilding). */
+  disablesAtZero?: true;
+  /** W29 core: impassable in every flow-field grid, never broken through or kept as a target (aliens attack it only in passing). */
+  impassable?: true;
 }
 
 // Projectile kinds.
@@ -161,7 +167,7 @@ const INFO: Record<BuildingKind, BuildingInfo> = {
   beam: { label: bd.beam.label, fw: 2, fh: 2, hp: bd.beam.hp, cost: costOf(bd.beam), buildTime: bd.beam.buildTime, role: 'defence', weapon: weapon(bd.beam.weapon!, P_BEAM, 0), key: '4' },
   heavy: { label: bd.heavy.label, fw: 3, fh: 3, hp: bd.heavy.hp, cost: costOf(bd.heavy), buildTime: bd.heavy.buildTime, role: 'defence', weapon: weapon(bd.heavy.weapon!, P_HEAVY, 18), tiers: [HEAVY_T2], key: '5' },
   shield: { label: bd.shield.label, fw: 2, fh: 2, hp: bd.shield.hp, cost: costOf(bd.shield), buildTime: bd.shield.buildTime, role: 'defence', key: '6' },
-  tempTurret: { label: 'Temporary turret', fw: 1, fh: 1, hp: map1.tempTurret.hp, cost: [0, 0, 0], buildTime: 1, role: 'defence', weapon: weapon(map1.tempTurret.weapon, P_BULLET, 30), key: '' },
+  tempTurret: { label: 'Temporary turret', fw: 1, fh: 1, hp: map1.tempTurret.hp, cost: [0, 0, 0], buildTime: 1, role: 'defence', weapon: weapon(map1.tempTurret.weapon, P_BULLET, 30), key: '', placedBy: 'the temporary turret is dropped by an engineer, not built' },
   // Belt pieces: not in W12. First-pass numbers; cheap so a chain is a layout question, not a cost one.
   belt: { label: 'Conveyor belt', fw: 1, fh: 1, hp: 100, cost: [BELT_COST_MASS, 0, 0], buildTime: 4, role: 'floor', key: 'b' },
   splitter: { label: 'Splitter', fw: 1, fh: 1, hp: 150, cost: [10, 20, 0], buildTime: 10, role: 'floor', key: 'v' },
@@ -179,10 +185,24 @@ const INFO: Record<BuildingKind, BuildingInfo> = {
     role: 'wall',
     tiers: tiersOf(bd.wall),
     key: '',
+    placedBy: 'a gate is made from finished walls (the gate command), not built',
   },
-  // W29: placed complete by createWorld on map 1 and in the sandbox; never built, reclaimed or
-  // upgraded. buildTime is the repair time (repair restores maxHp per construction time).
-  core: { label: 'Core', fw: 3, fh: 3, hp: CORE_HP, cost: [0, 0, 0], buildTime: CORE_REPAIR_TIME, role: 'core', key: '' },
+  // W29: placed complete by createWorld on map 1 and in the sandbox; never built, reclaimed (reclaim
+  // takes wrecks only) or upgraded (no tiers). buildTime is the repair time (repair restores maxHp per
+  // construction time).
+  core: {
+    label: 'Core',
+    fw: 3,
+    fh: 3,
+    hp: CORE_HP,
+    cost: [0, 0, 0],
+    buildTime: CORE_REPAIR_TIME,
+    role: 'core',
+    key: '',
+    placedBy: 'the core stands from the start; it is not built or placed',
+    disablesAtZero: true,
+    impassable: true,
+  },
 };
 /**
  * Every kind's fixed properties. `size` is W13's square footprint side, kept only because look/

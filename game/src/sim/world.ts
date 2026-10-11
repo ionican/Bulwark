@@ -276,6 +276,8 @@ export class World {
   deliveryCursor = 0;
   /** Repair power delivered to each building slot this tick (units.ts), applied by economy.ts stepRepair. */
   readonly repairPower: Float64Array;
+  /** Some slot of repairPower is non-zero (set with it in units.ts); stepRepair does nothing while false. */
+  repairing = false;
 
   // ---- research ----
   /** Bit i set: RESEARCH[i] done. Never cleared within a map. */
@@ -980,7 +982,7 @@ export class World {
         continue;
       }
       const kind = bc.kind[occ]!;
-      if (kind === B.core) {
+      if (buildingInfo(kind).impassable) {
         // W29 item 3a: impassable like rock in every grid, enabled or disabled, so routes go round
         // it and no alien tries to break through it (it is attacked only in passing: aliens.ts).
         this.cost[i] = -1;
@@ -1156,7 +1158,7 @@ export class World {
     for (let s = 0; s < b.highWater; s++) {
       if (!b.alive[s] || bc.hp[s]! > 0) continue;
       // W29: the core is disabled at 0 hp, never removed (combat.ts damageBuilding).
-      if (bc.kind[s] === B.core) continue;
+      if (buildingInfo(bc.kind[s]!).disablesAtZero) continue;
       if (this.debug.indestructible) {
         bc.hp[s] = 1;
         continue;
