@@ -26,6 +26,8 @@
 // migration as instant-economy worlds (belts off, no core): the new alien columns get their
 // defaults, and the per-kind arrays indexed past the building kinds are remapped, because the
 // core is appended to the building kinds (stats.ts statsFromOlderKinds; tuning only grows at its end).
+// From version 4 a save records its building, unit and alien kind counts (`kinds`), and the stats
+// are remapped whenever they differ from this build's; a save without them has the pre-W29 counts.
 
 import { World, type PendingGroup, type Route, type ScenarioName } from './world.ts';
 import type { WallRun } from './runs.ts';
@@ -35,8 +37,7 @@ import { map1Terrain, type Terrain } from './terrain.ts';
 import type { AnyTypedArray, FieldSpec, Table } from './table.ts';
 import type { StampedCommand } from './commands.ts';
 import type { Order } from './units.ts';
-import { statsFromOlderKinds } from './stats.ts';
-import { BUILDING_KINDS } from './kinds.ts';
+import { KIND_COUNTS, statsFromOlderKinds, type KindCounts } from './stats.ts';
 
 export const SAVE_MAGIC = 0x534b5742; // "BWKS"
 export const SAVE_VERSION = 4;
@@ -48,8 +49,8 @@ const READABLE: ReadonlyMap<number, readonly number[]> = new Map([
   [SAVE_VERSION, [SNAPSHOT_VERSION]],
 ]);
 
-/** Building kinds before W29 appended the core (save versions 2 and 3). */
-const PRE_W29_BUILDING_KINDS = BUILDING_KINDS.length - 1;
+/** Kind counts of a save that does not record them (versions 2 and 3, before W29 appended the core). */
+const PRE_W29_KINDS: KindCounts = { buildings: 19, units: 2, aliens: 4 };
 /** Alien columns W29 added; a version 2 or 3 save has none, so they start at 0 (no pass started). */
 const W29_ALIEN_COLUMNS = new Set(['pass', 'passUntil']);
 
@@ -153,6 +154,7 @@ export function serializeWorld(w: World): Uint8Array {
       ? 'map1'
       : { w: w.terrain.w, h: w.terrain.h, deposits: w.terrain.deposits, entries: w.terrain.entries, base: w.terrain.base },
     tables,
+    kinds: KIND_COUNTS,
     scalars: {
       parts: w.parts,
       upkeep: w.upkeep,
@@ -280,7 +282,9 @@ export function deserializeWorld(input: Uint8Array | ArrayBuffer): World {
   w.walk.set(get('walk'));
   w.fieldGoal.set(get('fieldGoal'));
   w.fieldDirty.set(get('fieldDirty'));
-  w.stats.set(version < 4 ? statsFromOlderKinds(get('stats'), PRE_W29_BUILDING_KINDS) : get('stats'));
+  const kinds: KindCounts = state.kinds ?? PRE_W29_KINDS;
+  const sameKinds = kinds.buildings === KIND_COUNTS.buildings && kinds.units === KIND_COUNTS.units && kinds.aliens === KIND_COUNTS.aliens;
+  w.stats.set(sameKinds ? get('stats') : statsFromOlderKinds(get('stats'), kinds));
   w.tuning.building.set(get('tuning.building'));
   w.tuning.alien.set(get('tuning.alien'));
   w.tuning.unit.set(get('tuning.unit'));
@@ -298,13 +302,9 @@ export function deserializeWorld(input: Uint8Array | ArrayBuffer): World {
     f.builtAt = state.fieldMeta[i].builtAt;
     f.goalCount = state.fieldMeta[i].goalCount;
   });
+  // Older saves' scalars carry no belts, coreId or deliveryCursor: they keep new World's defaults
+  // (belts off, no core, cursor 0), so they load as instant-economy worlds.
   Object.assign(w, state.scalars);
-  // W29: older saves are instant-economy worlds with no core (their scalars carry neither field)
-  if (version < 4) {
-    w.belts = false;
-    w.coreId = -1;
-    w.deliveryCursor = 0;
-  }
   w.researchQueue = state.researchQueue;
   w.orders.length = 0;
   w.orders.push(...(state.orders as Order[][]));
