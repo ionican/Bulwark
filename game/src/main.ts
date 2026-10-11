@@ -999,10 +999,10 @@ function drawnMap(pick: (name: string) => boolean): Texture | null {
  * W30 `__game.beltFlow()`: the belt clock and, read from the scene graph, the texture offset.y of
  * the material drawn on a straight belt, a corner and a join (null when none is drawn), whether
  * those share one texture and it is the renderer's scrolling one, whether the splitter's surface
- * scrolls, and the chevron texture's luminance down its centre column and down a column at u ≈ 0.12
- * (row r is v = r / h; the texture as drawn on the straight).
+ * scrolls, and with `withTexture` the chevron texture's luminance down its centre column and down a
+ * column at u ≈ 0.12 (row r is v = r / h; the texture as drawn on the straight).
  */
-function beltFlowReport() {
+function beltFlowReport(withTexture: boolean) {
   const flow = view.models.beltFlow;
   const scrolling = view.models.materials.w17.belt.map;
   const straight = drawnMap((n) => n === 'w17/belt/belt-cut');
@@ -1012,7 +1012,7 @@ function beltFlowReport() {
   const off = (t: Texture | null) => (t ? { offsetY: t.offset.y, uuid: t.uuid } : null);
   let texture: { w: number; h: number; centre: number[]; edge: number[] } | null = null;
   const img = straight?.image as OffscreenCanvas | HTMLCanvasElement | undefined;
-  if (img && 'getContext' in img) {
+  if (withTexture && img && 'getContext' in img) {
     const g = img.getContext('2d') as OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D | null;
     if (g) {
       const { width: w, height: h } = img;
@@ -2188,7 +2188,7 @@ const game = {
     return [...out].sort();
   },
   /** W30: the belt clock and the scrolling chevron texture as drawn (beltFlowReport). */
-  beltFlow: () => beltFlowReport(),
+  beltFlow: (withTexture = false) => beltFlowReport(withTexture),
   /** Debug (negative control): every belt drawn straight (true) or in the shape its neighbours give it. */
   beltShapesStraight: (on: boolean) => {
     view.models.belts.forceStraight(on);
