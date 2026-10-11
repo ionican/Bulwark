@@ -1577,6 +1577,12 @@ const game = {
   get selected() {
     return selection.map(describe);
   },
+  /**
+   * The ids of the selected entities of one type ('unit', 'building', …), in selection order. Unit
+   * and building ids are separate counters (since W29 the core is building 0, so a bare id can
+   * match either): checks compare ids through this.
+   */
+  selectedIds: (type: string) => selection.filter((p) => p.type === type).map((p) => p.id),
   get pool() {
     const g = interp.curr?.globals;
     if (!g) return null;

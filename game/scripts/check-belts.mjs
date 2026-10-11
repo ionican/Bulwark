@@ -39,190 +39,29 @@
 //      the idle-units column and the debug spawn box do not overlap; screenshot w29-hud.png
 // 0 console errors throughout. It always stops its server and closes only its own session.
 
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { ART_REF, screenshot } from './shots.mjs';
+import { BDX as DX, BDZ as DZ } from '../src/sim/kinds.ts';
+import { harness } from './harness.mjs';
 
-const GAME = fileURLToPath(new URL('..', import.meta.url));
-const PORT = 8841;
-const ORIGIN = `http://127.0.0.1:${PORT}`;
-const SESSION = 'w29belts';
-const args = process.argv.slice(2);
-const arg = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : null);
-const shotsDir = arg('--shots') ?? ART_REF;
+const h = harness({ name: 'check-belts', port: 8841, session: 'w29belts' });
+const { ORIGIN, fail, note, check, ab, js, sleep, frames, until, R, click, drag, shiftDown, shiftUp, press, clickEl, camera, buildings, units, queueOf, selectedUnitIds, speed, selectUnit, errorsNow, shot, load } = h;
 
-const failures = [];
-const fail = (msg) => {
-  failures.push(msg);
-  console.log(`FAIL ${msg}`);
-};
-const note = (msg) => console.log(msg);
-const check = (ok, pass, failMsg) => (ok ? note(`ok   ${pass}`) : fail(failMsg));
-
-function agentBrowser() {
-  const onPath = spawnSync('agent-browser', ['--version'], { encoding: 'utf8' });
-  if (onPath.status === 0) return 'agent-browser';
-  const nvm = join(homedir(), '.nvm', 'versions', 'node');
-  if (existsSync(nvm))
-    for (const v of readdirSync(nvm).sort().reverse()) {
-      const p = join(nvm, v, 'bin', 'agent-browser');
-      if (existsSync(p)) return p;
-    }
-  throw new Error('agent-browser not found (PATH or ~/.nvm/versions/node/*/bin)');
-}
-const AB = agentBrowser();
-
-function ab(...a) {
-  const r = spawnSync(AB, ['--session', SESSION, '--json', ...a], { encoding: 'utf8', maxBuffer: 1 << 26, timeout: 240_000 });
-  let out;
-  try {
-    out = JSON.parse(r.stdout.trim().split('\n').filter(Boolean).pop() ?? 'null');
-  } catch {
-    throw new Error(`agent-browser ${a[0]}: unreadable output: ${r.stdout?.slice(0, 500)} ${r.stderr?.slice(0, 500)}`);
-  }
-  if (!out?.success) throw new Error(`agent-browser ${a.join(' ')}: ${out?.error ?? r.stderr}`);
-  return out.data;
-}
-const js = (code) => ab('eval', code).result;
-const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
-const frames = (n) => js(`new Promise((res) => { let k = 0; const f = () => (++k >= ${n} ? res(true) : requestAnimationFrame(f)); requestAnimationFrame(f); })`);
-
-async function until(what, code, seconds) {
-  const t0 = Date.now();
-  for (;;) {
-    let v = null;
-    try {
-      v = js(code);
-    } catch {
-      v = null;
-    }
-    if (v) return v;
-    if (Date.now() - t0 > seconds * 1000) throw new Error(`timed out waiting for ${what}`);
-    await sleep(300);
-  }
-}
-
-// ---- real input (as check-panel.mjs) -----------------------------------------------------------
-
-const R = (v) => String(Math.round(v));
-async function click(x, y, button = 'left') {
-  ab('mouse', 'move', R(x), R(y));
-  ab('mouse', 'down', button);
-  ab('mouse', 'up', button);
-  await frames(3);
-}
-async function drag(a, b, steps = 10, button = 'left') {
-  ab('mouse', 'move', R(a.x), R(a.y));
-  ab('mouse', 'down', button);
-  for (let k = 1; k <= steps; k++) ab('mouse', 'move', R(a.x + ((b.x - a.x) * k) / steps), R(a.y + ((b.y - a.y) * k) / steps));
-  await frames(2);
-  ab('mouse', 'up', button);
-  await frames(3);
-}
 async function hover(p) {
   ab('mouse', 'move', R(p.x + 1), R(p.y));
   await frames(2);
   ab('mouse', 'move', R(p.x), R(p.y));
   await frames(4);
 }
-const shiftDown = () => ab('keydown', 'Shift');
-const shiftUp = () => ab('keyup', 'Shift');
-function key(k) {
-  ab('keydown', k);
-  ab('keyup', k);
-}
-function press(k) {
-  js('(document.activeElement && document.activeElement !== document.body && document.activeElement.blur(), true)');
-  key(k);
-}
-function centreOf(sel) {
-  const r = js(`(() => {
-    const e = document.querySelector(${JSON.stringify(sel)});
-    if (!e) return null;
-    const r = e.getBoundingClientRect();
-    if (!r.width || !r.height) return { hidden: true };
-    const x = r.x + r.width / 2, y = r.y + r.height / 2;
-    const top = document.elementFromPoint(x, y);
-    return { x, y, ok: !!top && (top === e || e.contains(top)), top: top ? top.tagName + '.' + top.className : null };
-  })()`);
-  if (!r) throw new Error(`no element ${sel}`);
-  if (r.hidden) throw new Error(`element ${sel} is not laid out (hidden)`);
-  if (!r.ok) throw new Error(`element ${sel} is covered by ${r.top}`);
-  return r;
-}
-async function clickEl(sel) {
-  const p = centreOf(sel);
-  await click(p.x, p.y);
-  return p;
-}
 /** Screen point of the centre of tile (x, z). */
 const tileScreen = (x, z) => js(`__game.worldToScreen(${x + 0.5}, ${z + 0.5})`);
-const camera = (rig) => js(`(__game.camera.set(${JSON.stringify(rig)}), true)`);
-const buildings = () => js(`__game.list('building')`);
-const units = () => js(`__game.list('unit')`);
-const queueOf = (id) => js(`(__game.queues.find((q) => q.id === ${id})?.orders ?? [])`);
-
-async function speed(n) {
-  js('(document.activeElement && document.activeElement !== document.body && document.activeElement.blur(), true)');
-  shiftDown();
-  key(String(n));
-  shiftUp();
-  await until(`speed ${n}`, `__game.speed === ${n}`, 10);
-}
-
-/** Selects unit `id` by a real click near its screen point (`add`: Shift held, added to the selection). */
-async function selectUnit(id, add = false) {
-  const tryClicks = async () => {
-    for (const [ox, oy] of [[0, -4], [0, 0], [2, -8], [-2, -2]]) {
-      const p = js(`__game.screenOf('unit', ${id})`);
-      if (!p) continue;
-      if (add) shiftDown();
-      await click(p.x + ox, p.y + oy);
-      if (add) shiftUp();
-      const sel = js(`__game.selected.filter((s) => s.type === 'unit').map((s) => s.id)`);
-      if (sel.includes(id)) return sel;
-    }
-    return null;
-  };
-  const sel = await tryClicks();
-  if (sel) return sel;
-  const rig = js('__game.camera.get()');
-  const u = units().find((x) => x.id === id);
-  if (u) {
-    camera({ x: u.x, z: u.z, distance: 18, yaw: rig.yaw, pitch: (80 * Math.PI) / 180 });
-    await frames(5);
-    const again = await tryClicks();
-    camera(rig);
-    await frames(5);
-    if (again) return again;
-  }
-  throw new Error(`could not select unit ${id} by clicking it`);
-}
-
-function errorsNow(label) {
-  const page = ab('errors').errors ?? [];
-  const c = ab('console');
-  const consoleErrs = (c.messages ?? c.logs ?? []).filter((m) => (m.type ?? m.level) === 'error');
-  const game = js('__game.errors');
-  check(!page.length && !consoleErrs.length && !game, `${label}: 0 console errors`, `${label}: ${page.length} page errors, ${consoleErrs.length} console errors, __game.errors ${game}: ${JSON.stringify([...page, ...consoleErrs]).slice(0, 600)}`);
-}
-
 /** The cursor off every building, so no hover readout shows (30 px in from the edge: within 6 px the camera pans). */
 const away = () => ab('mouse', 'move', '30', '450');
-async function shot(name) {
-  const path = await screenshot({ ab, js, frames }, join(shotsDir, name), { settle: 6 });
-  check(existsSync(path) && statSync(path).size > 0, `screenshot ${path}`, `screenshot ${path} not written`);
-  return path;
-}
-
-async function load(path) {
-  ab('open', `${ORIGIN}${path}`);
-  ab('set', 'viewport', '1440', '900');
-  await until(`${path} ready`, 'window.__game?.ready === true', 120);
-  await frames(10);
+/** The hover readout once it shows building `id` (thrown after 10 s). */
+const hoverReadout = (label, id) => until(label, `(() => { const h = __game.siteHover; return h.visible && h.id === ${id} ? h : null; })()`, 10);
+/** Whether tile (x, z) is open ground with no building on it (the buildings as they stand now). */
+function freeGround() {
+  const occupied = new Set();
+  for (const b of buildings()) for (let j = 0; j < b.fh; j++) for (let i = 0; i < b.fw; i++) occupied.add(`${b.tx + i},${b.ty + j}`);
+  return (x, z) => !occupied.has(`${x},${z}`) && js(`__game.tileInfo(${x + 0.5}, ${z + 0.5}).type`) === 'ground';
 }
 
 /**
@@ -240,10 +79,8 @@ const ECON = (route) => `(() => {
   return {
     tick: g.tick,
     mass: g.pool.mass,
-    rare: g.pool.rare,
     spent: e.spent.mass,
     delivered: e.delivered.mass,
-    deliveredRare: e.delivered.rare,
     income: e.commanderIncome.mass,
     laid: on.filter(Boolean).length,
     built: on.filter((b) => b && b.complete).length,
@@ -259,9 +96,6 @@ function balanceOf(a, b) {
 }
 
 // ---- 1: the core, the deposit and the route --------------------------------------------------------
-
-const DX = [1, 0, -1, 0];
-const DZ = [0, 1, 0, -1];
 
 /**
  * An L-shaped route from the 2 × 2 extractor at (ex, ey) to the 3 × 3 core at (cx, cy): the first
@@ -352,9 +186,7 @@ async function run() {
   const cc = [core.tx + 1.5, core.ty + 1.5];
   deposits.sort((a, b) => Math.hypot(a.tx + 1 - cc[0], a.ty + 1 - cc[1]) - Math.hypot(b.tx + 1 - cc[0], b.ty + 1 - cc[1]));
   const dep = deposits[0];
-  const occupied = new Set();
-  for (const b of buildings()) for (let j = 0; j < b.fh; j++) for (let i = 0; i < b.fw; i++) occupied.add(`${b.tx + i},${b.ty + j}`);
-  const free = (x, z) => !occupied.has(`${x},${z}`) && js(`__game.tileInfo(${x + 0.5}, ${z + 0.5}).type`) === 'ground';
+  const free = freeGround();
   const route = routes(dep.tx, dep.ty, core.tx, core.ty, free)[0];
   if (!route) throw new Error(`no L-shaped route on free ground from the deposit at ${dep.tx},${dep.ty} to the core`);
   note(`nearest mass deposit ${dep.tx},${dep.ty}; route: leg 1 ${route.legs[0][0]} → ${route.legs[0][1]} (dir ${route.d[0]}), leg 2 ${route.legs[1][0]} → ${route.legs[1][1]} (dir ${route.d[1]}), ${route.tiles.length} tiles`);
@@ -370,7 +202,7 @@ async function run() {
   const engs = us.filter((u) => u.kindName === 'engineer');
   await selectUnit(cmdr.id);
   for (const e of engs) await selectUnit(e.id, true);
-  const sel = js(`__game.selected.filter((s) => s.type === 'unit').map((s) => s.id)`);
+  const sel = selectedUnitIds();
   check(sel.length === 1 + engs.length, `the commander and ${engs.length} engineers selected by clicks`, `selected ${JSON.stringify(sel)}`);
   await clickEl('.bar button[data-kind="massExtractor"]');
   const ep = js(`__game.worldToScreen(${dep.tx + 1}, ${dep.ty + 1})`);
@@ -385,9 +217,9 @@ async function run() {
   const s0 = js(ECON(route.tiles));
   await clickEl('.bar button[data-kind="belt"]');
   const [l1, l2] = route.legs;
-  await drag(tileScreen(...l1[0]), tileScreen(...l1[1]));
+  await drag(tileScreen(...l1[0]), tileScreen(...l1[1]), 10);
   shiftDown();
-  await drag(tileScreen(...l2[0]), tileScreen(...l2[1]));
+  await drag(tileScreen(...l2[0]), tileScreen(...l2[1]), 10);
   shiftUp();
   await frames(5);
   press('Escape');
@@ -443,11 +275,11 @@ async function run() {
 
   // 5: hover readouts and screenshots
   await hover(js(`__game.worldToScreen(${ext.tx + 1}, ${ext.ty + 1}, __game.terrainInfo.height(${ext.tx + 1}, ${ext.ty + 1}) + 0.6)`));
-  const hx = await until('the extractor readout', `(() => { const h = __game.siteHover; return h.visible && h.id === ${ext.id} ? h : null; })()`, 10);
+  const hx = await hoverReadout('the extractor readout', ext.id);
   check(hx.lines[0] === 'Mass extractor' && hx.lines.some((l) => /^buffer \d+ \/ 180 mass$/.test(l)), `extractor hover: ${JSON.stringify(hx.lines)}`, `extractor hover: ${JSON.stringify(hx)}`);
   const coreScreen = () => js(`__game.worldToScreen(${core.tx + 1.5}, ${core.ty + 1.5}, __game.terrainInfo.height(${core.tx + 1.5}, ${core.ty + 1.5}) + 1)`);
   await hover(coreScreen());
-  const hc = await until('the core readout', `(() => { const h = __game.siteHover; return h.visible && h.id === ${core.id} ? h : null; })()`, 10);
+  const hc = await hoverReadout('the core readout', core.id);
   check(
     hc.lines[0] === 'Core' && hc.lines.includes('hp 4000 / 4000') && hc.lines.some((l) => /^delivered mass \d+ · rare 0$/.test(l)),
     `core hover: ${JSON.stringify(hc.lines)}`,
@@ -471,7 +303,7 @@ async function run() {
     `disabled core: ${JSON.stringify({ d1, d2 })}`,
   );
   await hover(coreScreen());
-  const hd = await until('the disabled readout', `(() => { const h = __game.siteHover; return h.visible && h.id === ${core.id} ? h : null; })()`, 10);
+  const hd = await hoverReadout('the disabled readout', core.id);
   check(hd.lines.includes('hp 0 / 4000') && hd.lines.some((l) => /DISABLED/.test(l)), `disabled core hover: ${JSON.stringify(hd.lines)}`, `disabled core hover: ${JSON.stringify(hd)}`);
   away();
   await frames(3);
@@ -481,18 +313,18 @@ async function run() {
   press('Escape');
   // the builders selected at the start are still selected; if not, a Shift box round the
   // engineers (they finish the belt standing side by side, so a click can land on the other one)
-  if (!engs.every((e) => js(`__game.selected.filter((s) => s.type === 'unit').map((s) => s.id)`).includes(e.id))) {
+  if (!engs.every((e) => selectedUnitIds().includes(e.id))) {
     const pts = engs.map((e) => js(`__game.screenOf('unit', ${e.id})`));
     shiftDown();
-    await drag({ x: Math.min(...pts.map((p) => p.x)) - 25, y: Math.min(...pts.map((p) => p.y)) - 35 }, { x: Math.max(...pts.map((p) => p.x)) + 25, y: Math.max(...pts.map((p) => p.y)) + 25 });
+    await drag({ x: Math.min(...pts.map((p) => p.x)) - 25, y: Math.min(...pts.map((p) => p.y)) - 35 }, { x: Math.max(...pts.map((p) => p.x)) + 25, y: Math.max(...pts.map((p) => p.y)) + 25 }, 10);
     shiftUp();
     await frames(5);
   }
-  const selE = js(`__game.selected.filter((s) => s.type === 'unit').map((s) => s.id)`);
+  const selE = selectedUnitIds();
   check(engs.every((e) => selE.includes(e.id)), `the engineers selected (selection ${JSON.stringify(selE)})`, `selected ${JSON.stringify(selE)}, engineers ${JSON.stringify(engs.map((e) => e.id))}`);
   const cp = coreScreen();
   await hover(cp);
-  const hr = await until('the repair hint', `(() => { const h = __game.siteHover; return h.visible && h.id === ${core.id} ? h : null; })()`, 10);
+  const hr = await hoverReadout('the repair hint', core.id);
   check(hr.lines.includes('right-click: repair'), 'over the disabled core with builders selected the hover says "right-click: repair"', `hover: ${JSON.stringify(hr.lines)}`);
   await click(cp.x, cp.y, 'right');
   const rq = await until('a repair order', `__game.queues.filter((q) => ${JSON.stringify(engs.map((e) => e.id))}.includes(q.id) && q.orders.some((o) => o.kind === 'repair' && o.target === ${core.id})).length`, 10);
@@ -526,13 +358,11 @@ const modelsAt = (x, z) => js(`__game.beltModelAt(${x}, ${z})`);
 async function beltLook(route) {
   const [cx, cz] = route.legs[1][0];
   const d2 = route.d[1];
-  const step = (x, z, d, n = 1) => [x + [1, 0, -1, 0][d] * n, z + [0, 1, 0, -1][d] * n];
+  const step = (x, z, d, n = 1) => [x + DX[d] * n, z + DZ[d] * n];
   js('__game.fillBuffers()');
   await until('items along the belt', `__game.beltItems.mass >= 8`, 60);
   // a line from the side into leg 2, 3–7 tiles past the corner, on whichever side is free
-  const occ = new Set();
-  for (const b of buildings()) for (let j = 0; j < b.fh; j++) for (let i = 0; i < b.fw; i++) occ.add(`${b.tx + i},${b.ty + j}`);
-  const ground = (x, z) => !occ.has(`${x},${z}`) && js(`__game.tileInfo(${x + 0.5}, ${z + 0.5}).type`) === 'ground';
+  const ground = freeGround();
   let join = null;
   for (let k = 3; k <= 7 && !join; k++) {
     const at = step(cx, cz, d2, k);
@@ -623,49 +453,4 @@ async function hudLayout() {
   errorsNow('W29b HUD');
 }
 
-async function main() {
-  let server = null;
-  if (!args.includes('--no-build')) {
-    console.log('building…');
-    execFileSync('npx', ['vite', 'build', '--logLevel', 'warn'], { cwd: GAME, stdio: 'inherit' });
-  }
-  mkdirSync(shotsDir, { recursive: true });
-  try {
-    server = spawn('npx', ['vite', 'preview', '--host', '127.0.0.1', '--port', String(PORT), '--strictPort'], { cwd: GAME, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
-    let serverOut = '';
-    server.stdout.on('data', (d) => (serverOut += d));
-    server.stderr.on('data', (d) => (serverOut += d));
-    const t0 = Date.now();
-    for (;;) {
-      try {
-        if ((await fetch(`${ORIGIN}/`)).ok) break;
-      } catch {
-        /* not up yet */
-      }
-      if (server.exitCode !== null) throw new Error(`vite preview exited: ${serverOut}`);
-      if (Date.now() - t0 > 30_000) throw new Error(`vite preview did not start on ${PORT}: ${serverOut}`);
-      await sleep(250);
-    }
-    note(`origin: ${ORIGIN} (this tree's build)`);
-    await run();
-  } catch (e) {
-    fail(String(e?.message ?? e));
-  } finally {
-    try {
-      spawnSync(AB, ['--session', SESSION, 'keyup', 'Shift'], { timeout: 10_000 });
-      spawnSync(AB, ['--session', SESSION, 'close'], { timeout: 30_000 });
-    } catch {
-      /* already closed */
-    }
-    if (server)
-      try {
-        process.kill(-server.pid, 'SIGTERM');
-      } catch {
-        /* already stopped */
-      }
-  }
-  console.log(failures.length ? `check-belts: ${failures.length} FAILED` : 'check-belts: all checks passed');
-  process.exit(failures.length ? 1 : 0);
-}
-
-await main();
+await h.main(run);

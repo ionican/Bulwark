@@ -85,7 +85,7 @@ import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { homedir, loadavg } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { judgeSamples, judgeWorkerWindow } from './benchGate.mjs';
+import { frameStats, judgeSamples, judgeWorkerWindow } from './benchGate.mjs';
 import { ART_REF, screenshot } from './shots.mjs';
 
 const GAME = fileURLToPath(new URL('..', import.meta.url));
@@ -481,14 +481,7 @@ async function measurePose(label, rig, zoomOut) {
   const loadStart = load1();
   const R = js(MEASURE_JS(25));
   const loadEnd = load1();
-  const t = R.times.filter((x) => x >= R.t0 + 5000 && x <= R.t0 + 25000);
-  const iv = [];
-  for (let i = 1; i < t.length; i++) iv.push(t[i] - t[i - 1]);
-  const secs = (t[t.length - 1] - t[0]) / 1000;
-  const worst = [...iv].sort((a, b) => b - a);
-  const n1 = Math.max(1, Math.ceil(iv.length / 100));
-  const avg = iv.length / secs;
-  const low = 1000 / (worst.slice(0, n1).reduce((a, b) => a + b, 0) / n1);
+  const { iv, worst, avg, low } = frameStats(R.times, R.t0);
   const cost = js('__game.renderCost(15)');
   const window = R.samples.filter((x) => x.s > 5);
   // the workload must be live, visible and active every second (scripts/benchGate.mjs)
@@ -548,29 +541,28 @@ async function gateNegatives() {
   );
 }
 
-/** A pose through the gate, with the load-average retry rule. */
-async function gatedPose(label, rig, zoomOut) {
-  const a = await measurePose(label, rig, zoomOut);
-  if (!a.problems.length) {
-    note(`ok   benchmark ${label}: passes`);
-    return;
-  }
+/**
+ * A measurement through the gate, with the load-average retry rule: a failure measured at a load
+ * average above GATE.load waits (up to 5 min) for the load to drop below it and measures once
+ * more, and that result stands; any other failure fails. `name` heads the messages;
+ * `measure(again)` returns { problems, loadStart, loadEnd }.
+ */
+async function gated(name, measure) {
+  const a = await measure(false);
+  if (!a.problems.length) return note(`ok   ${name}: passes`);
   const loadA = Math.max(a.loadStart, a.loadEnd);
-  if (loadA > GATE.load) {
-    note(`benchmark ${label} failed at load average ${loadA.toFixed(2)} (> ${GATE.load}): ${a.problems.slice(0, 6).join(' | ')}; waiting for load < ${GATE.load} (up to 5 min) to measure once more`);
-    const t0 = Date.now();
-    while (load1() >= GATE.load && Date.now() - t0 < 300_000) await sleep(10_000);
-    note(`load average now ${load1().toFixed(2)} after ${((Date.now() - t0) / 1000).toFixed(0)} s`);
-    const b = await measurePose(`${label} (re-measured)`, rig, zoomOut);
-    if (!b.problems.length) {
-      note(`ok   benchmark ${label}: passes when re-measured (first result: ${a.problems.slice(0, 3).join(' | ')})`);
-      return;
-    }
-    fail(`benchmark ${label}: ${b.problems.slice(0, 8).join(' | ')} (first measurement: ${a.problems.slice(0, 3).join(' | ')})`);
-    return;
-  }
-  fail(`benchmark ${label} at load average ${loadA.toFixed(2)}: ${a.problems.slice(0, 8).join(' | ')}`);
+  if (loadA <= GATE.load) return fail(`${name} at load average ${loadA.toFixed(2)}: ${a.problems.slice(0, 8).join(' | ')}`);
+  note(`${name} failed at load average ${loadA.toFixed(2)} (> ${GATE.load}): ${a.problems.slice(0, 6).join(' | ')}; waiting for load < ${GATE.load} (up to 5 min) to measure once more`);
+  const t0 = Date.now();
+  while (load1() >= GATE.load && Date.now() - t0 < 300_000) await sleep(10_000);
+  note(`load average now ${load1().toFixed(2)} after ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+  const b = await measure(true);
+  if (!b.problems.length) return note(`ok   ${name}: passes when re-measured (first result: ${a.problems.slice(0, 3).join(' | ')})`);
+  fail(`${name}: ${b.problems.slice(0, 8).join(' | ')} (first measurement: ${a.problems.slice(0, 3).join(' | ')})`);
 }
+
+/** A pose through the gate. */
+const gatedPose = (label, rig, zoomOut) => gated(`benchmark ${label}`, (again) => measurePose(again ? `${label} (re-measured)` : label, rig, zoomOut));
 
 /** A cold launch of the stress scene in a fresh browser (the session closed first), warm-up on or off. */
 async function coldLaunch(warm) {
@@ -648,7 +640,7 @@ async function run2b() {
     await frames(10);
     const p = js(`__game.screenOf('unit', ${cpos.id})`);
     await click(p.x, p.y);
-    picked = js('__game.selected').some((s) => s.id === cpos.id);
+    picked = js(`__game.selectedIds('unit')`).includes(cpos.id);
   }
   if (!picked) fail(`W27: could not select the commander by clicking it (${JSON.stringify(cpos)}, selected ${JSON.stringify(js('__game.selected'))})`);
   camera({ x: 60, z: 49, distance: 22, yaw: 0, pitch: (55 * Math.PI) / 180 });
@@ -732,7 +724,7 @@ async function run2b() {
       await frames(10);
       const s2 = js(`__game.screenOf('unit', ${eng.id})`);
       await click(s2.x, s2.y);
-      sel = js('__game.selected').some((s) => s.id === eng.id);
+      sel = js(`__game.selectedIds('unit')`).includes(eng.id);
     }
     const bx = gun.tx + gun.fw / 2;
     const bz = gun.ty - 0.7;
@@ -858,17 +850,20 @@ async function w29Items() {
   const filled = js('__game.fillBuffers()');
   if (!filled.ok) fail(`W29 fillBuffers refused: ${filled.reason}`);
   await until('mass and rare items on the belts', '__game.beltItems.mass > 2 && __game.beltItems.rare > 0', 60);
-  for (const [label, item, rig] of [
-    ['mass', 5, { x: 58, z: 54, distance: 24, yaw: 0 }],
-    ['rare', 6, { x: 70, z: 40, distance: 30, yaw: 0 }],
-  ]) {
-    camera(rig);
+  // each item kind: where to look, and the camera distance for the moving check and the pixel check
+  const KINDS = [
+    { label: 'mass', item: 5, x: 58, z: 54, moving: 24, pixels: 30 },
+    { label: 'rare', item: 6, x: 70, z: 40, moving: 30, pixels: 30 },
+  ];
+  for (const { label, item, x, z, moving } of KINDS) {
+    camera({ x, z, distance: moving, yaw: 0 });
     await until(`a drawn ${label} item`, `(__game.drawnItems()['overlay/item/${item}'] ?? []).length > 0`, 30);
     const a = drawnItems();
     await frames(12);
     const b = drawnItems();
     const name = `overlay/item/${item}`;
-    const others = Object.keys(b).filter((k) => k !== name && k.startsWith('overlay/item/') && k !== 'overlay/item/5' && k !== 'overlay/item/6');
+    // drawnItems holds overlay/item/* only; mass and rare are both on the belts, so any other kind drawn fails
+    const others = Object.keys(b).filter((k) => k !== 'overlay/item/5' && k !== 'overlay/item/6');
     check(
       moved(a[name] ?? [], b[name] ?? []) && !others.some((k) => (b[k] ?? []).length > 0),
       `W29: ${label} items drawn with ${name} (${(b[name] ?? []).length} instances) and moving between two frames; no other item mesh drawn`,
@@ -884,11 +879,8 @@ async function w29Items() {
     check(!moved(c[name] ?? [], d[name] ?? []), `W29 negative control: with the item meshes hidden the ${label} check fails`, `W29 negative control: hidden ${label} meshes still pass (${JSON.stringify(d[name]?.length)})`);
   }
   // W29b: the items are visible, by pixels (shown against hidden), with a negative control
-  for (const [label, item, rig] of [
-    ['mass', 5, { x: 58, z: 54, distance: 30, yaw: 0 }],
-    ['rare', 6, { x: 70, z: 40, distance: 30, yaw: 0 }],
-  ]) {
-    camera(rig);
+  for (const { label, item, x, z, pixels } of KINDS) {
+    camera({ x, z, distance: pixels, yaw: 0 });
     await frames(10);
     const on = itemPixels(item);
     const bar = (r) => r.tiles > 0 && r.over >= ITEM_PX * r.tiles;
@@ -930,7 +922,6 @@ async function measureDelivery(layout) {
   await load('/?sandbox=1');
   const refused = js(PLACE_ALL(layout.steps));
   if (refused.length) fail(`W29 delivery fixture refused: ${refused.join('; ')}`);
-  js('__game.fillBuffers()');
   await until('300 belt tiles carrying items', `(__game.fillBuffers(), __game.beltItems.occupied >= 300)`, 90);
   camera({ x: 64, z: 58, distance: 50, yaw: 0 });
   await frames(30);
@@ -956,14 +947,7 @@ async function measureDelivery(layout) {
     return R;
   })()`);
   const loadEnd = load1();
-  const t = R.times.filter((x) => x >= R.t0 + 5000 && x <= R.t0 + 25000);
-  const iv = [];
-  for (let i = 1; i < t.length; i++) iv.push(t[i] - t[i - 1]);
-  const secs = (t[t.length - 1] - t[0]) / 1000;
-  const worst = [...iv].sort((a, b) => b - a);
-  const n1 = Math.max(1, Math.ceil(iv.length / 100));
-  const avg = iv.length / secs;
-  const low = 1000 / (worst.slice(0, n1).reduce((a, b) => a + b, 0) / n1);
+  const { worst, avg, low } = frameStats(R.times, R.t0);
   const win = R.samples.filter((x) => x.s >= 5);
   const problems = [];
   if (!(avg >= GATE.gameAvg && low >= GATE.gameLow)) problems.push(`${avg.toFixed(1)} fps average / ${low.toFixed(1)} 1%-low (gate ${GATE.gameAvg} / ${GATE.gameLow})`);
@@ -989,18 +973,7 @@ async function w29DeliveryBench() {
     ['massExtractor', 50, 77], ['massExtractor', 74, 78], ['massExtractor', 36, 40], ['massExtractor', 92, 84],
     ['rareExtractor', 55, 26], ['rareExtractor', 73, 29], ['rareExtractor', 100, 59],
   ]);
-  const a = await measureDelivery(layout);
-  if (!a.problems.length) return note('ok   W29 delivery benchmark: passes');
-  const loadA = Math.max(a.loadStart, a.loadEnd);
-  if (loadA > GATE.load) {
-    note(`W29 delivery benchmark failed at load average ${loadA.toFixed(2)}: ${a.problems.join(' | ')}; waiting for load < ${GATE.load} (up to 5 min)`);
-    const t0 = Date.now();
-    while (load1() >= GATE.load && Date.now() - t0 < 300_000) await sleep(10_000);
-    const b = await measureDelivery(layout);
-    if (!b.problems.length) return note(`ok   W29 delivery benchmark: passes when re-measured (first: ${a.problems.join(' | ')})`);
-    return fail(`W29 delivery benchmark: ${b.problems.join(' | ')} (first: ${a.problems.join(' | ')})`);
-  }
-  fail(`W29 delivery benchmark at load average ${loadA.toFixed(2)}: ${a.problems.join(' | ')}`);
+  await gated('W29 delivery benchmark', () => measureDelivery(layout));
 }
 
 /** W24 run 2a: map 1, the sandbox inventory, input, the stress scene and the walking benchmark. */
@@ -1028,8 +1001,8 @@ async function run2a() {
   ab('mouse', 'move', String(Math.round(eng[0].x + 4)), String(Math.round(eng[0].y + 1)));
   ab('mouse', 'up', 'left');
   await frames(30);
-  const sel = js('__game.selected');
-  if (!(sel.length === 1 && sel[0].id === eng[0].id && rigNow() === before)) fail(`input: a 3-px click on engineer ${eng[0].id} selected ${JSON.stringify(sel)} and the camera ${rigNow() === before ? 'stayed' : 'moved'}`);
+  const sel = js(`__game.selectedIds('unit')`);
+  if (!(sel.length === 1 && sel[0] === eng[0].id && rigNow() === before)) fail(`input: a 3-px click on engineer ${eng[0].id} selected ${JSON.stringify(sel)} and the camera ${rigNow() === before ? 'stayed' : 'moved'}`);
   else note('input: a click (under 5 px) on an engineer selects it; the camera does not move');
   const xs = units.map((u) => u.x);
   const ys = units.map((u) => u.y);
