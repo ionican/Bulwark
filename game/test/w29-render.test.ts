@@ -165,6 +165,6 @@ describe('W29 hover readouts and the resource readout', () => {
   it('the resource readout says the mass and rare rates count delivered resources when belts are on', () => {
     const e: EconomyReadout = { pool: [600, 2000, 20], income: [2, 10, 0.25], spend: [0, 0, 0], short: [false, false, false], parts: 0, commanderHp: 6000, commanderMax: 6000, aliens: 0, kills: 0, upkeep: 1, lost: false, won: false };
     expect(economyText(e)).not.toMatch(/delivered/);
-    expect(economyText({ ...e, delivered: true })).toMatch(/mass and rare income: delivered at the core/);
+    expect(economyText({ ...e, delivered: true })).toMatch(/mass and rare income: delivered\s+at the core/);
   });
 });

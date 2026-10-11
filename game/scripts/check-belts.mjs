@@ -204,6 +204,8 @@ function errorsNow(label) {
   check(!page.length && !consoleErrs.length && !game, `${label}: 0 console errors`, `${label}: ${page.length} page errors, ${consoleErrs.length} console errors, __game.errors ${game}: ${JSON.stringify([...page, ...consoleErrs]).slice(0, 600)}`);
 }
 
+/** The cursor off every building, so no hover readout shows (30 px in from the edge: within 6 px the camera pans). */
+const away = () => ab('mouse', 'move', '30', '450');
 async function shot(name) {
   const path = await screenshot({ ab, js, frames }, join(shotsDir, name), { settle: 6 });
   check(existsSync(path) && statSync(path).size > 0, `screenshot ${path}`, `screenshot ${path} not written`);
@@ -352,7 +354,8 @@ async function run() {
   note(`nearest mass deposit ${dep.tx},${dep.ty}; route: leg 1 ${route.legs[0][0]} → ${route.legs[0][1]} (dir ${route.d[0]}), leg 2 ${route.legs[1][0]} → ${route.legs[1][1]} (dir ${route.d[1]}), ${route.tiles.length} tiles`);
   const midX = (dep.tx + 1 + cc[0]) / 2;
   const midZ = (dep.ty + 1 + cc[1]) / 2;
-  camera({ x: midX, z: midZ, distance: 30, yaw: 0 });
+  // 4 tiles south of the midpoint, so the core sits above the build bar in the screenshots
+  camera({ x: midX, z: midZ + 4, distance: 30, yaw: 0 });
   await frames(10);
 
   // 2
@@ -444,7 +447,7 @@ async function run() {
     `core hover: ${JSON.stringify(hc.lines)}`,
     `core hover: ${JSON.stringify(hc)}`,
   );
-  ab('mouse', 'move', '5', '450');
+  away();
   await frames(3);
   await shot('w29-core-delivering.png');
 
@@ -464,16 +467,23 @@ async function run() {
   await hover(coreScreen());
   const hd = await until('the disabled readout', `(() => { const h = __game.siteHover; return h.visible && h.id === ${core.id} ? h : null; })()`, 10);
   check(hd.lines.includes('hp 0 / 4000') && hd.lines.some((l) => /DISABLED/.test(l)), `disabled core hover: ${JSON.stringify(hd.lines)}`, `disabled core hover: ${JSON.stringify(hd)}`);
-  ab('mouse', 'move', '5', '450');
+  away();
   await frames(3);
   await shot('w29-core-disabled.png');
 
   // 7: repair by right-click with the engineers selected
   press('Escape');
-  await selectUnit(engs[0].id);
-  for (const e of engs.slice(1)) await selectUnit(e.id, true);
-  const selE = js('__game.selected.map((s) => s.id)').sort();
-  check(JSON.stringify(selE) === JSON.stringify(engs.map((e) => e.id).sort()), 'the engineers selected by clicks', `selected ${JSON.stringify(selE)}`);
+  // the builders selected at the start are still selected; if not, a Shift box round the
+  // engineers (they finish the belt standing side by side, so a click can land on the other one)
+  if (!engs.every((e) => js('__game.selected.map((s) => s.id)').includes(e.id))) {
+    const pts = engs.map((e) => js(`__game.screenOf('unit', ${e.id})`));
+    shiftDown();
+    await drag({ x: Math.min(...pts.map((p) => p.x)) - 25, y: Math.min(...pts.map((p) => p.y)) - 35 }, { x: Math.max(...pts.map((p) => p.x)) + 25, y: Math.max(...pts.map((p) => p.y)) + 25 });
+    shiftUp();
+    await frames(5);
+  }
+  const selE = js('__game.selected.map((s) => s.id)');
+  check(engs.every((e) => selE.includes(e.id)), `the engineers selected (selection ${JSON.stringify(selE)})`, `selected ${JSON.stringify(selE)}, engineers ${JSON.stringify(engs.map((e) => e.id))}`);
   const cp = coreScreen();
   await hover(cp);
   const hr = await until('the repair hint', `(() => { const h = __game.siteHover; return h.visible && h.id === ${core.id} ? h : null; })()`, 10);
