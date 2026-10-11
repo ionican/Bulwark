@@ -20,10 +20,12 @@ export const STRESS_BUILDINGS = 300;
 
 /**
  * A world at a scenario's start. `opts` (the sandbox reset): the terrain to use, and the tuning
- * and unlimited spending to carry over, set before any unit is created.
+ * and unlimited spending to carry over, set before any unit is created. `belts` (W29): map 1 and
+ * the sandbox deliver by belt and have the core unless it is false (tests about something else);
+ * the other scenarios never do.
  */
-export function createWorld(seed: number, scenario: ScenarioName, opts: { terrain?: Terrain; tuning?: Tuning; unlimited?: boolean } = {}): World {
-  const belts = scenario === 'map1' || scenario === 'sandbox';
+export function createWorld(seed: number, scenario: ScenarioName, opts: { terrain?: Terrain; tuning?: Tuning; unlimited?: boolean; belts?: boolean } = {}): World {
+  const belts = (scenario === 'map1' || scenario === 'sandbox') && opts.belts !== false;
   const w = new World(seed, opts.terrain, { waves: scenario !== 'sandbox', belts });
   w.scenario = scenario;
   if (opts.tuning) {
@@ -32,12 +34,12 @@ export function createWorld(seed: number, scenario: ScenarioName, opts: { terrai
     w.tuning.unit.set(opts.tuning.unit);
   }
   if (opts.unlimited) w.unlimited = true;
+  if (scenario === 'map1' || scenario === 'sandbox') w.spawnStartUnits();
+  else if (scenario === 'stress') setupStress(w);
   if (belts) {
-    w.spawnStartUnits();
     const { base } = w.terrain;
     if (w.placeBuilding(B.core, Math.floor(base.x) + CORE_OFFSET[0], Math.floor(base.z) + CORE_OFFSET[1], true) < 0) throw new Error('the core does not fit beside the base');
   }
-  else if (scenario === 'stress') setupStress(w);
   w.computeRoutes();
   return w;
 }

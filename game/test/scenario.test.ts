@@ -42,7 +42,8 @@ function reclaimAll(w: World) {
 
 describe('headless map 1 scenario', () => {
   it('builds, defends, reclaims, makes parts and fires them', () => {
-    const w = createWorld(11, 'map1');
+    // W29: about the salvage chain, so the instant economy (no belts, no core)
+    const w = createWorld(11, 'map1', { belts: false });
     // This M2 scenario predates research and waves: grant the heavy cannon, push the waves away.
     w.researchDone |= researchBit('heavy');
     w.waveTicks.fill(1e9);

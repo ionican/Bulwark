@@ -38,7 +38,7 @@ describe('W25c finding 3: orders have ids, and dequeue names one', () => {
     const snap = decodeSnapshot(encodeSnapshot(w));
     const row = Array.from(snap.units.id.subarray(0, snap.units.count)).indexOf(a);
     expect(queueOf(snap, row).map((q) => (q as { oid?: number }).oid)).toEqual(ids);
-    expect(SNAPSHOT_VERSION).toBe(6);
+    expect(SNAPSHOT_VERSION).toBe(7);
   });
 
   it('the review probe: after the first move completed, removing it is refused and the second move stays', () => {
