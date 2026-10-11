@@ -3,6 +3,10 @@
 // bank (CC0 downloads); the ivory armour maps are composed in code (assets/composite.ts).
 // Geometry UVs are box-projected in tile units (1 UV unit = 1 tile = 2 m), so each texture's
 // `repeat` sets its physical scale.
+// W30: belt surfaces carry flow UVs instead (kit.ts UvMap; v = progress along the flow in tiles,
+// u = across the belt, 0..1). The `belt` texture draws two forward-pointing chevrons per tile, tips
+// toward +v; the renderer scrolls it (models.ts, anim.ts BeltFlow). `beltStill` is the same rubber
+// without chevrons on its own texture, which nothing scrolls (the splitter).
 
 import { CanvasTexture, Color, Vector2, MeshStandardMaterial, NoColorSpace, RepeatWrapping, SRGBColorSpace, type Material, type Texture } from 'three';
 import { ivoryPanels, noiseTexture, type PanelMaps } from '../assets/composite.ts';
@@ -21,6 +25,7 @@ export type MatKey =
   | 'crystal'
   | 'ore'
   | 'belt'
+  | 'beltStill'
   | 'hot'
   | 'rock';
 
@@ -61,17 +66,58 @@ function addEdgeWear(m: MeshStandardMaterial, noise: Texture, substrate: string,
   m.customProgramCacheKey = () => key;
 }
 
+/**
+ * Belt rubber (and its colours: the base, the raised cleat, the cleat's dark leading edge). W30
+ * review: the rubber is lighter than the W17 stripes' #2b2927 and the chevron lighter than their
+ * #3b3835. On the darker rubber an item's shading changed fewer pixels (check-render's rare-item
+ * check fell from 57–66 to 35–48 px against its threshold of 40); this pair restores 62–71 and
+ * doubles the chevron's contrast with the rubber.
+ */
+const RUBBER = '#33302d';
+const CLEAT = '#5a554e';
+const CLEAT_EDGE = '#1a1918';
+/** Canvas size: u across (64 px), v along the flow (256 px = one tile, two chevrons). */
+const BELT_W = 64;
+const BELT_H = 256;
+
+/**
+ * W30: one tile of belt, v down the canvas (flipY off: canvas row 0 is v = 0). Two chevrons, each a
+ * V whose arms start at the belt's edges and whose tip, on the centre line, is DEPTH further along
+ * +v: the tip points the way the belt runs. Drawn again one canvas height either side so a chevron
+ * crossing the tile edge wraps.
+ */
 function beltTexture(): CanvasTexture<OffscreenCanvas> {
-  const c = new OffscreenCanvas(64, 256);
+  const c = new OffscreenCanvas(BELT_W, BELT_H);
   const g = c.getContext('2d')!;
-  g.fillStyle = '#2b2927';
-  g.fillRect(0, 0, 64, 256);
-  for (let y = 0; y < 256; y += 16) {
-    g.fillStyle = '#3b3835';
-    g.fillRect(0, y, 64, 9);
-    g.fillStyle = '#1a1918';
-    g.fillRect(0, y + 9, 64, 2);
-  }
+  g.fillStyle = RUBBER;
+  g.fillRect(0, 0, BELT_W, BELT_H);
+  const PERIOD = BELT_H / 2;
+  const DEPTH = 40;
+  const T = 22;
+  const EDGE = 4;
+  const vee = (y0: number, t: number) => {
+    g.beginPath();
+    g.moveTo(0, y0);
+    g.lineTo(BELT_W / 2, y0 + DEPTH);
+    g.lineTo(BELT_W, y0);
+    g.lineTo(BELT_W, y0 + t);
+    g.lineTo(BELT_W / 2, y0 + DEPTH + t);
+    g.lineTo(0, y0 + t);
+    g.closePath();
+    g.fill();
+  };
+  for (const wrap of [-BELT_H, 0, BELT_H])
+    for (let k = 0; k < 2; k++) {
+      const y0 = wrap + k * PERIOD + 20;
+      g.fillStyle = CLEAT;
+      vee(y0, T);
+      g.fillStyle = CLEAT_EDGE;
+      vee(y0 + T, EDGE);
+    }
+  return canvasTexture(c);
+}
+
+function canvasTexture(c: OffscreenCanvas): CanvasTexture<OffscreenCanvas> {
   const t = new CanvasTexture(c);
   t.wrapS = t.wrapT = RepeatWrapping;
   t.colorSpace = SRGBColorSpace;
@@ -89,6 +135,8 @@ export function createMaterials(bank: TextureBank): Mats {
   }
   beltTex = beltTexture();
   beltTex.repeat.set(1, 1);
+  // W30: the chevrons are seen at a grazing angle from the game camera
+  beltTex.anisotropy = bank.anisotropy;
   bank.derived.add(beltTex);
 
   const mp = (k: string) => withRepeat(bank.tex(`metal_plate_02/${k}`), 0.55);
@@ -177,18 +225,15 @@ export function createMaterials(bank: TextureBank): Mats {
     metalness: 0,
   });
   const belt = new MeshStandardMaterial({ name: 'belt', map: beltTex, roughness: 0.8, metalness: 0.1 });
+  const beltStill = new MeshStandardMaterial({ name: 'beltStill', color: RUBBER, roughness: 0.8, metalness: 0.1 });
   for (const t of [panels.normal]) t.colorSpace = NoColorSpace;
-  return { ivory, trim, copper, glow, glass, void: voidM, pad, hull, alienGlow, crystal, ore, belt, hot, rock };
+  return { ivory, trim, copper, glow, glass, void: voidM, pad, hull, alienGlow, crystal, ore, belt, beltStill, hot, rock };
 }
 
 /** Rebuild the code-composed maps after a texture-quality change (same Texture objects). */
 export function rebuildComposites(bank: TextureBank): void {
   if (!panels) return;
   panels = ivoryPanels(bank.pixels('Metal016/diff'), bank.pixels('Metal016/nor'), bank.pixels('Metal016/rough'), IVORY, bank.anisotropy, panels);
-}
-
-export function beltTextureRef(): Texture | null {
-  return beltTex;
 }
 
 export type { Material };

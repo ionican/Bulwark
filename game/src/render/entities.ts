@@ -17,7 +17,7 @@ import { BELT_STRAIGHT, itemOnBelt, type BeltShapes } from './beltShapes.ts';
 import { BELT_SURFACE_Y } from './workshop/models/procedural/buildings.ts';
 import { slotOf } from '../sim/table.ts';
 import type { Snapshot } from '../sim/snapshot.ts';
-import type { EffectTime } from './anim.ts';
+import type { BeltFrame, EffectTime } from './anim.ts';
 import { barGeometry, constructionFrameGeometry, dashedRingGeometry, itemGeometries, selectionMarkerGeometry, shieldDomeGeometry } from './geometry.ts';
 import { FRAME_MATERIAL, ITEM_MATERIAL } from './debugRender.ts';
 import { LOD_ICON, chooseLod } from './lod.ts';
@@ -158,6 +158,8 @@ export interface FrameInput {
   dt?: number;
   /** W24 run 2b: the effect clock (anim.ts EffectClock; its `reset` marks a global reset). */
   time?: EffectTime;
+  /** W30: the raw frame for the belt clock (models.ts; anim.ts frameTimes). */
+  belt?: BeltFrame;
 }
 
 /** Scratch for itemOnBelt. */

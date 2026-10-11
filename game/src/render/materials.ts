@@ -14,7 +14,9 @@
 //   outline reserved sites (no build power yet): unlit, drawn over the scene.
 //
 // In the browser the textures come from the CC0 bank (public/assets); tests use name-only
-// stand-ins, so the same renderer code runs in Node with the same names on its meshes.
+// stand-ins, so the same renderer code runs in Node with the same names on its meshes. W30: the two
+// belt surfaces' stand-ins carry an empty texture each, so a test can read the belt's scroll offset
+// and tell the scrolling surface from the still one.
 
 import { Color, MeshBasicMaterial, MeshDepthMaterial, MeshStandardMaterial, Texture, type Material, type WebGLProgramParametersWithUniforms, type WebGLRenderer } from 'three';
 import type { TextureBank } from './workshop/assets/textures.ts';
@@ -132,7 +134,7 @@ export function createRenderMaterials(bank: TextureBank): RenderMaterials {
   return { asset, w17, alien, depth: asset.depth, plinth, outline: outlineMaterial() };
 }
 
-const W17_KEYS: W17Key[] = ['ivory', 'trim', 'copper', 'glow', 'glass', 'void', 'pad', 'hull', 'alienGlow', 'crystal', 'ore', 'belt', 'hot', 'rock'];
+const W17_KEYS: W17Key[] = ['ivory', 'trim', 'copper', 'glow', 'glass', 'void', 'pad', 'hull', 'alienGlow', 'crystal', 'ore', 'belt', 'beltStill', 'hot', 'rock'];
 const ASSET_KEYS: MatKey[] = ['ceramic', 'gunmetal', 'bronze', 'dark', 'glow'];
 
 /** Name-only stand-ins (Node tests): the same material names, no textures or shader patches. */
@@ -142,7 +144,7 @@ export function standInMaterials(): RenderMaterials {
   const depth = new MeshDepthMaterial();
   const asset: AssetMats = { byKey, depth, noise: new Texture(), all: Object.values(byKey) };
   const w17 = {} as Mats;
-  for (const k of W17_KEYS) w17[k] = new MeshStandardMaterial({ name: `${k}-cut` });
+  for (const k of W17_KEYS) w17[k] = new MeshStandardMaterial({ name: `${k}-cut`, map: k === 'belt' ? new Texture() : null });
   const alien = { ...w17, hull: new MeshStandardMaterial({ name: 'alienHull-cut' }), trim: new MeshStandardMaterial({ name: 'alienTrim-cut' }) };
   return { asset, w17, alien, depth, plinth: new MeshStandardMaterial({ name: 'plinth' }), outline: outlineMaterial() };
 }

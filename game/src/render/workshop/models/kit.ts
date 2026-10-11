@@ -3,7 +3,8 @@
 // bevel segment), tapered blocks, gears, lathes and tubes. A Builder collects parts per material,
 // box-projects UVs in tile units and merges them into one geometry with one group per material.
 // Chamfer faces get the vertex attribute `wear` = 1, which the ivory and hull materials turn into
-// chipped edges.
+// chipped edges. W30: a part added with a `uv` mapper gets its UVs from that mapper instead (run after
+// the box projection, before the merge), so a belt surface carries flow UVs.
 
 import {
   BufferAttribute,
@@ -251,17 +252,32 @@ function finish(g: BufferGeometry, wearEdges: boolean): BufferGeometry {
   return ng;
 }
 
+/** W30: UVs from a vertex's position in builder space (after the part's transform). */
+export type UvMap = (x: number, y: number, z: number) => readonly [number, number];
+
+/** Overwrites the UVs `finish` gave a part with `map` of each vertex position. */
+function mapUvs(g: BufferGeometry, map: UvMap): BufferGeometry {
+  const p = g.getAttribute('position') as BufferAttribute;
+  const uv = g.getAttribute('uv') as BufferAttribute;
+  for (let i = 0; i < p.count; i++) {
+    const [u, v] = map(p.getX(i), p.getY(i), p.getZ(i));
+    uv.setXY(i, u, v);
+  }
+  return g;
+}
+
 export class Builder {
   private byMat = new Map<MatKey, BufferGeometry[]>();
   constructor(private mats: Mats) {}
 
-  add(mat: MatKey, geo: BufferGeometry, t: Tf | Matrix4 = {}, opts: { wear?: boolean } = {}): this {
+  add(mat: MatKey, geo: BufferGeometry, t: Tf | Matrix4 = {}, opts: { wear?: boolean; uv?: UvMap } = {}): this {
     const m = t instanceof Matrix4 ? t : tfMatrix(t);
     const g = geo.clone();
     g.applyMatrix4(m);
     const wear = opts.wear ?? (mat === 'ivory' || mat === 'hull');
     const list = this.byMat.get(mat) ?? [];
-    list.push(finish(g, wear));
+    const done = finish(g, wear);
+    list.push(opts.uv ? mapUvs(done, opts.uv) : done);
     this.byMat.set(mat, list);
     return this;
   }

@@ -9,7 +9,8 @@
 //                               snapshot target; submitted to the shared part batches, one batch per
 //                               part × material × level shared by every kind (W22 strategy B)
 //   generator … shield, belt    W17 procedural models (w17Batches.ts)
-//   splitter, merger            W17 belt plus a distinct top marker each (fan-out / fan-in chevrons)
+//   splitter, merger            W17 belt plus a distinct top marker each (fan-out / fan-in chevrons);
+//                               W30: the splitter has its own model, the belt on still rubber
 //   commander, engineer         W23 rigs, placed and posed at rest each frame (no gait yet)
 //   rusher … saboteur           W17/W21 alien models, 1.5 × (W21's scale), tilted to the ground
 //   wrecks                      W21's debris model
@@ -34,6 +35,11 @@
 // model plus one model per moving part, keyed `<model>/<part>`. The lab dish and shield ring stay
 // static. W27: `previewRun` sends buildings' draws to a capture instead of the batches, so the
 // placement ghost and the drag preview are the same geometry at the same matrices.
+//
+// W30: belts show their direction. Every belt surface (straights, corners, joins, the merger; built
+// and started sites alike, since both draw the `belt` material) carries flow UVs, and the one chevron
+// texture they share scrolls by `beltFlow` (anim.ts BeltFlow): offset.y = −(phase mod 1), set once a
+// frame whatever the belt count. The splitter's surface is the still `beltStill` material.
 
 import { BoxGeometry, Frustum, Group, InstancedBufferAttribute, InstancedMesh, Matrix4, MeshStandardMaterial, Quaternion, Sphere, Vector3, type BufferGeometry, type PerspectiveCamera, type Texture } from 'three';
 import { ALIEN_KINDS, B, U, buildingFootprint, isBelt } from '../sim/kinds.ts';
@@ -49,7 +55,7 @@ import type { MobileView } from './interp.ts';
 import type { RenderMaterials } from './materials.ts';
 import { W17Batches, bakeModel, type BakedModel } from './w17Batches.ts';
 import { WallLayout, leafMatrices, type BuildingRows } from './wallLayout.ts';
-import { ALIEN_AIM_HEIGHT, ALIEN_SCALE, Animator, REST_YAW, beamOf, carryLoad, flatPitch, gateWanted, isMachine, isTurret, recoils, runsWhenComplete, type EffectTime } from './anim.ts';
+import { ALIEN_AIM_HEIGHT, ALIEN_SCALE, Animator, BeltFlow, REST_YAW, beamOf, carryLoad, flatPitch, gateWanted, isMachine, isTurret, recoils, runsWhenComplete, type BeltFrame, type EffectTime } from './anim.ts';
 import { Effects } from './effects.ts';
 import { SimpleBatch } from './simpleBatch.ts';
 import { barrelPoint } from './workshop/stress/turretPose.ts';
@@ -121,7 +127,7 @@ export const W17_BUILDING_MODEL: ReadonlyMap<number, string> = new Map([
   [B.assembler, 'assembler'],
   [B.shield, 'shield'],
   [B.belt, 'belt'],
-  [B.splitter, 'belt'],
+  [B.splitter, 'splitter'],
   [B.merger, 'belt'],
   [B.core, 'core'],
 ]);
@@ -239,6 +245,8 @@ export interface ModelFrame {
   /** Run 2b: projectile rows (interpolated), and the effect clock (its `reset` marks a global reset). */
   projectiles?: MobileView;
   time?: EffectTime;
+  /** W30: the raw frame for the belt clock (anim.ts frameTimes); absent, the belts do not move. */
+  belt?: BeltFrame;
 }
 
 export interface ModelCounts {
@@ -269,8 +277,9 @@ function assetOf(id: string): AssetKind {
 
 /**
  * Splitter and merger top markers: a raised hub on the belt with arrowhead plates on it, so neither
- * is ever drawn like a plain belt. Splitter: one arrow in from the back, three out (front, left,
- * right). Merger: three in (back, left, right), one out at the front. Model +x is the belt's flow.
+ * is ever drawn like a plain belt. Splitter: one arrow in from the back, two out (left, right; W30:
+ * the forward arrow went, as no item leaves a splitter's front, sim/kinds.ts outputDirs). Merger:
+ * three in (back, left, right), one out at the front. Model +x is the belt's flow.
  */
 function beltMarker(mats: RenderMaterials['w17'], kind: 'splitter' | 'merger'): ModelDef {
   const b = new Builder(mats);
@@ -283,7 +292,7 @@ function beltMarker(mats: RenderMaterials['w17'], kind: 'splitter' | 'merger'): 
   };
   if (kind === 'splitter') {
     arrow(0, -0.2, 0.85);
-    for (const a of [0, Math.PI / 2, -Math.PI / 2]) arrow(a, 0.42, 1);
+    for (const a of [Math.PI / 2, -Math.PI / 2]) arrow(a, 0.42, 1);
   } else {
     for (const a of [Math.PI, Math.PI / 2, -Math.PI / 2]) arrow(a + Math.PI, -0.22, 0.85);
     arrow(0, 0.44, 1.15);
@@ -416,6 +425,8 @@ export class ModelRenderer {
   private iconYaw = 0;
   /** W29b: each belt tile's shape, worked out again when the belts change. */
   readonly belts: BeltShapes;
+  /** W30: the belts' shared phase; the `belt` material's texture is scrolled by it each frame. */
+  readonly beltFlow = new BeltFlow();
   private readonly ground: (x: number, z: number) => number;
 
   constructor(
@@ -737,6 +748,9 @@ export class ModelRenderer {
     // the effect clock (anim.ts): a reset drops every effect state and clears the effects
     const time = f.time ?? { t: 0, dt, reset: false };
     const reset = this.anim.begin(snap.tick, time);
+    if (f.belt) this.beltFlow.advance(f.belt, snap.tick);
+    const chevrons = this.materials.w17.belt.map;
+    if (chevrons) chevrons.offset.y = this.beltFlow.offset;
     this.effects.begin(this.camPos, cam, this.wppd, this.anim.t, this.anim.dt, reset);
     this.effects.visible = this.visibleAt;
     this.drawBuildings(f);

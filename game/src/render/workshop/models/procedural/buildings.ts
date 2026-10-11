@@ -6,12 +6,12 @@
 // with stubby up-angled tube (area cannon), tall needle pylon (beam), heavy turret with a very
 // long barrel (heavy cannon), petal cradle round an orb (shield generator).
 
-import { Builder, bolt, cbox, cyl, gear, lathe, prism, profile, slab, sphere, taper, torus, tubeX } from '../kit.ts';
-import type { Mats } from '../materials.ts';
+import { Builder, bolt, cbox, cyl, gear, lathe, prism, profile, slab, sphere, taper, torus, tubeX, type UvMap } from '../kit.ts';
+import type { MatKey, Mats } from '../materials.ts';
 import type { ModelDef, PartDef } from '../types.ts';
 import type { BuildingKind } from '../../../../sim/kinds.ts';
 import { octBase, part } from './common.ts';
-import { OctahedronGeometry, type BufferGeometry } from 'three';
+import { BufferGeometry, Float32BufferAttribute, OctahedronGeometry, Vector3 } from 'three';
 
 type Make = (m: Mats) => ModelDef;
 
@@ -372,12 +372,22 @@ function railZ(b: Builder, z0: number, z1: number, x: number): void {
 }
 
 /**
+ * W30: flow UVs of the straight piece's surfaces (model +x is the flow; v in tiles, u across 0..1).
+ * The main surface runs back to front, v = x + ½ (0 at the back edge, 1 at the front). A join lane
+ * runs inward from the tile edge, v = ½ − |z|: 0 at the outer edge, where the belt feeding it ends a
+ * tile (v ≡ 0 mod 1), rising to 0.19 at the main surface, where the phase may change (PLAN-W30).
+ */
+const STRAIGHT_UV: UvMap = (x, _y, z) => [z / (2 * HALF) + 0.5, x + 0.5];
+const LANE_UV: UvMap = (x, _y, z) => [x / (2 * HALF) + 0.5, 0.5 - Math.abs(z)];
+
+/**
  * The straight piece. `open` lists the sides a joining lane runs in from: +1 the model's +z side
  * (the right of the flow), −1 its −z side. On an open side the rail breaks for the lane's width,
  * the lane's belt surface runs in from the tile edge, and its rails turn to meet the main rail ends,
- * so the joining belt reads as running into this one rather than stopping at a rail.
+ * so the joining belt reads as running into this one rather than stopping at a rail. `surface` is
+ * the belt surface's material (W30: `beltStill` on the splitter, whose items leave sideways).
  */
-function straightBelt(m: Mats, name: string, open: number[] = []): ModelDef {
+function straightBelt(m: Mats, name: string, open: number[] = [], surface: MatKey = 'belt'): ModelDef {
   const b = new Builder(m);
   for (const side of [-1, 1]) {
     const z = side * RAIL;
@@ -393,14 +403,16 @@ function straightBelt(m: Mats, name: string, open: number[] = []): ModelDef {
       railZ(b, side > 0 ? RAIL : -0.5, side > 0 ? 0.5 : -RAIL, x);
       b.add('trim', cbox(0.08, 0.18, 0.08, 0.01), { x, z });
     }
-    b.add('belt', cbox(2 * HALF, 0.04, 0.5 - HALF, 0.0, 0), { y: BELT_SURFACE_Y - 0.04, z: side * (HALF + 0.5) / 2 });
+    b.add(surface, cbox(2 * HALF, 0.04, 0.5 - HALF, 0.0, 0), { y: BELT_SURFACE_Y - 0.04, z: side * (HALF + 0.5) / 2 }, { uv: LANE_UV });
   }
-  b.add('belt', cbox(1.0, 0.04, 2 * HALF, 0.0, 0), { y: BELT_SURFACE_Y - 0.04 });
+  b.add(surface, cbox(1.0, 0.04, 2 * HALF, 0.0, 0), { y: BELT_SURFACE_Y - 0.04 }, { uv: STRAIGHT_UV });
   for (const x of [-0.45, 0, 0.45]) b.add('trim', cyl(0.05, 0.05, 0.64, 8), { x, y: 0.2, z: -0.32, rx: Math.PI / 2 });
   return { name, parts: [part('base', b)], radius: 0.8, height: 0.35 };
 }
 
 const belt: Make = (m) => straightBelt(m, 'belt');
+/** W30: the splitter's own model: the straight piece on still rubber (its marker, models.ts, shows where items go). */
+const splitter: Make = (m) => straightBelt(m, 'splitter', [], 'beltStill');
 
 /**
  * An annular sector round (cx, cz) from angle a0 to a1 < a0 + π (radians in the XZ plane, x = cos,
@@ -421,6 +433,68 @@ function arc(cx: number, cz: number, r0: number, r1: number, a0: number, a1: num
 }
 
 /**
+ * W30: an annular sector round (cx, cz) from angle a0 to a1 (either order), extruded up h, as a strip
+ * of `segs` radial quads (top, bottom, inner and outer walls, end caps). Unlike arc()'s slab, whose
+ * outline triangulation spans the whole sector with long triangles, every triangle lies within one
+ * thin wedge, so a UV that follows the angle interpolates to within 0.02 of it anywhere on the top.
+ */
+function arcStrip(cx: number, cz: number, r0: number, r1: number, a0: number, a1: number, h: number, segs = 48): BufferGeometry {
+  const pos: number[] = [];
+  const at = (r: number, a: number, y: number) => new Vector3(cx + r * Math.cos(a), y, cz + r * Math.sin(a));
+  const n = new Vector3();
+  const e1 = new Vector3();
+  const e2 = new Vector3();
+  /** A triangle facing `out` (wound so its front face is on that side). */
+  const tri = (a: Vector3, b: Vector3, c: Vector3, out: Vector3) => {
+    n.crossVectors(e1.subVectors(b, a), e2.subVectors(c, a));
+    const [p, q] = n.dot(out) >= 0 ? [b, c] : [c, b];
+    for (const v of [a, p, q]) pos.push(v.x, v.y, v.z);
+  };
+  const quad = (a: Vector3, b: Vector3, c: Vector3, d: Vector3, out: Vector3) => {
+    tri(a, b, c, out);
+    tri(a, c, d, out);
+  };
+  const up = new Vector3(0, 1, 0);
+  const down = new Vector3(0, -1, 0);
+  for (let i = 0; i < segs; i++) {
+    const p = a0 + ((a1 - a0) * i) / segs;
+    const q = a0 + ((a1 - a0) * (i + 1)) / segs;
+    const mid = (p + q) / 2;
+    const radial = new Vector3(Math.cos(mid), 0, Math.sin(mid));
+    quad(at(r0, p, h), at(r1, p, h), at(r1, q, h), at(r0, q, h), up);
+    quad(at(r0, p, 0), at(r1, p, 0), at(r1, q, 0), at(r0, q, 0), down);
+    quad(at(r1, p, 0), at(r1, q, 0), at(r1, q, h), at(r1, p, h), radial);
+    quad(at(r0, p, 0), at(r0, q, 0), at(r0, q, h), at(r0, p, h), radial.clone().negate());
+  }
+  // end caps face away from the sector: back along the sweep at a0, onward at a1
+  const s = Math.sign(a1 - a0);
+  for (const [a, k] of [
+    [a0, -s],
+    [a1, s],
+  ] as const)
+    quad(at(r0, a, 0), at(r1, a, 0), at(r1, a, h), at(r0, a, h), new Vector3(-Math.sin(a) * k, 0, Math.cos(a) * k));
+  const g = new BufferGeometry();
+  g.setAttribute('position', new Float32BufferAttribute(pos, 3));
+  return g;
+}
+
+/**
+ * W30: flow UVs on a corner's surface: v = the angle fraction from a0 (the input edge, 0) to a1 (the
+ * front edge, 1) round (cx, cz), the p beltShapes.ts itemOnBelt moves items by; u across the belt
+ * from radius r0 (0) to r1 (1). Every tile of a corner is one tile of v, so its edges meet the
+ * straight pieces' (v ≡ 0 mod 1 at both).
+ */
+function cornerUv(cx: number, cz: number, r0: number, r1: number, a0: number, a1: number): UvMap {
+  const mid = (a0 + a1) / 2;
+  return (x, _y, z) => {
+    let a = Math.atan2(z - cz, x - cx);
+    while (a < mid - Math.PI) a += 2 * Math.PI;
+    while (a >= mid + Math.PI) a -= 2 * Math.PI;
+    return [(Math.hypot(x - cx, z - cz) - r0) / (r1 - r0), (a - a0) / (a1 - a0)];
+  };
+}
+
+/**
  * The corner piece: fed from the model's +z side (`side` 1, a right turn) or −z side (−1, a left
  * turn), out along +x. Belt surface, rails, caps and rollers sweep the quarter circle of radius ½
  * round the tile corner between the input edge and the front edge, in the straight piece's parts.
@@ -434,7 +508,8 @@ function cornerBelt(m: Mats, name: string, side: 1 | -1): ModelDef {
   const a1 = Math.PI + (Math.PI / 2) * side;
   const lo = Math.min(a0, a1);
   const hi = Math.max(a0, a1);
-  b.add('belt', arc(cx, cz, 0.5 - HALF, 0.5 + HALF, lo, hi, 0.04), { y: BELT_SURFACE_Y - 0.04 });
+  // W30: the surface as a strip of radial quads with flow UVs (rails and caps keep arc())
+  b.add('belt', arcStrip(cx, cz, 0.5 - HALF, 0.5 + HALF, a0, a1, 0.04), { y: BELT_SURFACE_Y - 0.04 }, { uv: cornerUv(cx, cz, 0.5 - HALF, 0.5 + HALF, a0, a1) });
   for (const r of [0.5 - RAIL, 0.5 + RAIL]) {
     b.add('trim', arc(cx, cz, r - 0.04, r + 0.04, lo, hi, 0.1), { y: 0.18 });
     const rc = 0.5 + (r - 0.5) * 1.04;
@@ -568,7 +643,7 @@ export const BUILDING_MAKERS: Record<BuildingKind, Make> = {
   shield,
   tempTurret,
   belt,
-  splitter: belt,
+  splitter,
   merger: belt,
   gate: gatePlaceholder,
   core,
