@@ -64,11 +64,13 @@
 //     positions move between two frames; a negative control hides those meshes and the same check
 //     then fails. A full extractor (no belt, buffers filled by the sandbox `fillBuffers` command)
 //     draws the same matrices on two frames a tick apart, while a belted extractor's do not.
-//   W29b items visible, by pixels: at the game camera (distance 30, yaw 0) over each belt, one
-//     plain render (no post stack) of the belt tiles carrying that item kind's screen rectangle
-//     with the items shown and one with them hidden; the luminance must differ by more than 8 on
-//     at least ITEM_PX pixels per carrying tile. Negative control: the items lowered into the belt
-//     (`__game.itemDrop(true)`), the same measure must fall below the bar.
+//   W29b items visible, by pixels, item by item: at the game camera (distance 30, yaw 0), the game
+//     paused, up to ITEM_SAMPLES carrying tiles in view (a corner among them). Each item is measured
+//     on its own: two plain renders (no post stack) of its tile's screen rectangle, one with it
+//     drawn and one with it hidden (`__game.hideItemsOn`); the luminance must differ by more than
+//     8 on at least ITEM_PX pixels for every sampled item. Negative controls: the items lowered
+//     into the belt (`__game.itemDrop(true)`), every sample fails; every other item hidden (the
+//     corner one included), exactly those samples fail and the rest pass.
 //   delivery load, gated: every map-1 extractor (8 mass, 3 rare) belted to the core in the
 //     sandbox, at least 300 belt tiles carrying an item at every sample and the delivered count
 //     rising every second of the 20 s window (buffers kept full by `fillBuffers` once a second);
@@ -807,36 +809,65 @@ function moved(a, b) {
   return a.length > 0 && b.length > 0 && b.some((p) => !before.has(key(p)));
 }
 
-/** W29b: pixels a carrying belt tile's item must change at the game camera (distance 30), shown against hidden. */
+/** W29b: pixels each sampled belt item must change at the game camera (distance 30), shown against hidden. */
 const ITEM_PX = 40;
+/** At most this many carrying tiles sampled per item kind (corner tiles first). */
+const ITEM_SAMPLES = 8;
 /**
- * The screen rectangle of the belt tiles now carrying `item` (each tile's corners at the belt top,
- * 0.4 tile around), rendered twice in one call with the item meshes shown and hidden (no post
- * stack; nothing moves between the two): luminance differences, and the tiles counted.
+ * The carrying tiles of `item` to sample, at the current (paused) snapshot: belts whose tile, from
+ * the belt top to a tile above it with 0.3 tile round it, is wholly on screen; corner tiles first.
  */
-const itemPixels = (item) =>
+const itemSamples = (item) =>
   js(`(() => {
     const g = __game;
     const tiles = g.list('building').filter((b) => b.kindName === 'belt' && b.item === ${item});
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, n = 0;
+    const out = [];
     for (const t of tiles) {
-      const h = g.terrainInfo.height(t.tx + 0.5, t.ty + 0.5) + 0.3;
-      const pts = [[-0.4, -0.4], [1.4, -0.4], [1.4, 1.4], [-0.4, 1.4]].map(([a, b]) => g.worldToScreen(t.tx + a, t.ty + b, h));
+      const h = g.terrainInfo.height(t.tx + 0.5, t.ty + 0.5);
+      const pts = [];
+      for (const y of [h + 0.25, h + 1]) for (const [a, b] of [[-0.3, -0.3], [1.3, -0.3], [1.3, 1.3], [-0.3, 1.3]]) pts.push(g.worldToScreen(t.tx + a, t.ty + b, y));
       if (!pts.every((p) => p.x >= 0 && p.y >= 0 && p.x <= innerWidth && p.y <= innerHeight)) continue;
-      n++;
-      for (const p of pts) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
+      const corner = g.beltModelAt(t.tx, t.ty).some((m) => m.startsWith('beltCorner'));
+      out.push({ id: t.id, x: t.tx, z: t.ty, corner, rect: { x0: Math.min(...pts.map((p) => p.x)), y0: Math.min(...pts.map((p) => p.y)), x1: Math.max(...pts.map((p) => p.x)), y1: Math.max(...pts.map((p) => p.y)) } });
     }
-    if (!n) return { tiles: 0, over: 0, px: 0, mean: 0, max: 0 };
-    const r = { x0, y0, x1, y1 };
-    g.hideItemMeshes(false);
-    const a = g.debugRender.capture(r);
-    g.hideItemMeshes(true);
-    const b = g.debugRender.capture(r);
-    g.hideItemMeshes(false);
-    let sum = 0, max = 0, over = 0;
-    for (let i = 0; i < a.data.length; i++) { const v = Math.abs(a.data[i] - b.data[i]); sum += v; max = Math.max(max, v); if (v > 8) over++; }
-    return { tiles: n, over, px: a.data.length, mean: sum / Math.max(1, a.data.length), max: Math.round(max) };
+    out.sort((a, b) => Number(b.corner) - Number(a.corner));
+    return out.slice(0, ${ITEM_SAMPLES});
   })()`);
+/**
+ * Each sampled item measured on its own, at the same (paused) snapshot: its tile's rectangle
+ * rendered (no post stack) with every item drawn except those on the belts in `hidden`, then again
+ * with this item hidden as well, so only this item differs between the two; the pixels whose
+ * luminance changed by more than 8.
+ */
+const itemPixelsEach = (samples, hidden = []) =>
+  js(`(async () => {
+    const g = __game;
+    const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const hidden = ${JSON.stringify(hidden)};
+    const out = [];
+    for (const s of ${JSON.stringify(samples)}) {
+      g.hideItemsOn(hidden);
+      await frame();
+      const a = g.debugRender.capture(s.rect);
+      g.hideItemsOn([...hidden, s.id]);
+      await frame();
+      const b = g.debugRender.capture(s.rect);
+      let over = 0;
+      for (let i = 0; i < a.data.length; i++) if (Math.abs(a.data[i] - b.data[i]) > 8) over++;
+      out.push({ id: s.id, x: s.x, z: s.z, corner: s.corner, over, px: a.data.length });
+    }
+    g.hideItemsOn([]);
+    await frame();
+    return out;
+  })()`);
+const pauseGame = async () => {
+  js(`(__game.paused || __game.control.pause(), true)`);
+  await until('paused', '__game.paused === true', 10);
+};
+const resumeGame = async () => {
+  js(`(__game.paused && __game.control.pause(), true)`);
+  await until('running', '__game.paused === false', 10);
+};
 
 async function w29Items() {
   await load('/?sandbox=1');
@@ -879,35 +910,48 @@ async function w29Items() {
     js('__game.hideItemMeshes(false)');
     check(!moved(c[name] ?? [], d[name] ?? []), `W29 negative control: with the item meshes hidden the ${label} check fails`, `W29 negative control: hidden ${label} meshes still pass (${JSON.stringify(d[name]?.length)})`);
   }
-  // W29b: the items are visible, by pixels (shown against hidden), with a negative control
+  // W29b, per item (Codex review): at one paused snapshot, each sampled carrying tile's item (a
+  // corner among them) must change ITEM_PX pixels on its own. Negative controls: every item lowered
+  // into the belt fails each sample; with only some items hidden (the corner one included), exactly
+  // those samples fail and the rest still pass.
   for (const { label, item, x, z, pixels } of KINDS) {
     camera({ x, z, distance: pixels, yaw: 0 });
     await frames(10);
-    const on = itemPixels(item);
-    const bar = (r) => r.tiles > 0 && r.over >= ITEM_PX * r.tiles;
-    const fmt = (r) => `${r.over} px of ${r.px} changed by > 8 (mean ${r.mean.toFixed(2)}, max ${r.max}) over ${r.tiles} carrying tiles, ${(r.over / Math.max(1, r.tiles)).toFixed(0)} per tile`;
-    check(bar(on), `W29b: ${label} items are visible on the belt at the game camera (${fmt(on)})`, `W29b: ${label} items not visible: ${fmt(on)}`);
-    try {
-      js('__game.itemDrop(true)');
-    } catch (e) {
-      fail(`W29b negative control: __game.itemDrop: ${e.message}`);
+    let samples = [];
+    for (let k = 0; k < 40; k++) {
+      await pauseGame();
+      samples = itemSamples(item);
+      if (samples.some((t) => t.corner) && samples.length >= 4) break;
+      await resumeGame();
+      await frames(10);
+    }
+    if (!samples.some((t) => t.corner) || samples.length < 4) {
+      fail(`W29b: ${label}: no paused moment with at least 4 carrying tiles in view and a corner among them (${JSON.stringify(samples.map((t) => [t.x, t.z, t.corner]))})`);
+      await resumeGame();
       continue;
     }
+    const pass = (r) => r.over >= ITEM_PX;
+    const fmt = (rs) => rs.map((r) => `${r.x},${r.z}${r.corner ? ' (corner)' : ''} ${r.over}`).join('; ');
+    const span = (rs) => `min ${Math.min(...rs.map((r) => r.over))}, max ${Math.max(...rs.map((r) => r.over))} px`;
+    const on = itemPixelsEach(samples);
+    check(on.every(pass), `W29b: each of ${on.length} sampled ${label} items is visible on its own at the game camera (${span(on)} changed by > 8; per item: ${fmt(on)})`, `W29b: ${label} items not visible on their own (threshold ${ITEM_PX}): ${fmt(on.filter((r) => !pass(r)))} (all: ${fmt(on)})`);
+    js('__game.itemDrop(true)');
     await frames(3);
-    const sunk = itemPixels(item);
+    const sunk = itemPixelsEach(samples);
     js('__game.itemDrop(false)');
     await frames(3);
-    check(!bar(sunk), `W29b negative control: with the ${label} items lowered into the belt the pixel check fails (${fmt(sunk)})`, `W29b negative control: lowered ${label} items still pass (${fmt(sunk)})`);
-    // Codex review: a partial negative control. Half the carrying tiles in view (a corner first)
-    // have their item hidden; the check must fail for them.
-    const carrying = js(`__game.list('building').filter((b) => b.kindName === 'belt' && b.item === ${item}).map((b) => ({ id: b.id, corner: __game.beltModelAt(b.tx, b.ty).some((m) => m.startsWith('beltCorner')) }))`);
-    const hide = [...carrying.filter((b) => b.corner), ...carrying.filter((b) => !b.corner)].slice(0, Math.ceil(carrying.length / 2)).map((b) => b.id);
-    js(`__game.hideItemsOn(${JSON.stringify(hide)})`);
-    await frames(3);
-    const part = itemPixels(item);
-    js('__game.hideItemsOn([])');
-    await frames(3);
-    check(!bar(part), `W29 partial negative control: with ${hide.length} of ${carrying.length} ${label} items hidden the check fails (${fmt(part)})`, `W29 partial negative control: ${hide.length} of ${carrying.length} ${label} items hidden (a corner among them: ${carrying.some((b) => b.corner)}) and the check still passes (${fmt(part)})`);
+    check(!sunk.some(pass), `W29b negative control: with the ${label} items lowered into the belt every sample fails (${span(sunk)})`, `W29b negative control: lowered ${label} items still pass: ${fmt(sunk.filter(pass))}`);
+    // hide every other sample from the start, the corner (sorted first) among them
+    const hidden = samples.filter((_, i) => i % 2 === 0).map((t) => t.id);
+    const part = itemPixelsEach(samples, hidden);
+    const hid = part.filter((r) => hidden.includes(r.id));
+    const shown = part.filter((r) => !hidden.includes(r.id));
+    check(
+      hid.length > 0 && hid.some((r) => r.corner) && !hid.some(pass) && shown.every(pass),
+      `W29b partial negative control: ${hid.length} of ${part.length} ${label} items hidden (a corner among them) fail on their own (${span(hid)}); the ${shown.length} shown still pass (${span(shown)})`,
+      `W29b partial negative control (${label}): hidden ${fmt(hid)}; shown ${fmt(shown)}`,
+    );
+    await resumeGame();
   }
   // the full extractor stands still; the belted one moves
   const ext = js(`__game.list('building').filter((b) => b.kindName === 'massExtractor').map((b) => ({ id: b.id, tx: b.tx, ty: b.ty, idle: b.idle }))`);
