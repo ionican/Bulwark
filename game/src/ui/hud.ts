@@ -83,6 +83,11 @@ export class Hud {
     this.res.textContent = economyText(e);
   }
 
+  /** W29b: the resource panel's bottom edge (CSS px), for the right-hand column stacked below it. */
+  resBottom(): number {
+    return this.res.getBoundingClientRect().bottom;
+  }
+
   showSelection(lines: string[]): void {
     if (!lines.length) {
       this.sel.style.display = 'none';

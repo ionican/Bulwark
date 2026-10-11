@@ -578,19 +578,24 @@ export function entryGeometry(): BufferGeometry {
 
 // ---- M2: items, wrecks, projectiles, beams, shields, construction, routes, ghost -------------
 
-/** Belt items, indexed by item kind (0 unused): salvage chunk, scrap cube, alloy ingot, part. */
+/**
+ * Belt items, indexed by item kind (0 unused): salvage chunk, scrap cube, alloy ingot, part, mass
+ * ingot, rare crystal. Each stands on y = 0, which entities.ts puts on the belt's top surface (W29b:
+ * at y 0.12 above the ground they were inside the belt model and hidden). Sizes fit between the
+ * rails (0.62 apart) and read at the game camera (distance 30).
+ */
 export function itemGeometries(): BufferGeometry[] {
   const P = PALETTE;
   return [
     merge([part(box(0.1, 0.1, 0.1), P.ink)]),
-    merge([part(new DodecahedronGeometry(0.17, 0), '#b07a4a', { y: 0.17 })]),
-    merge([part(box(0.24, 0.24, 0.24), '#a8a8a0', { y: 0.16 })]),
-    merge([part(box(0.36, 0.12, 0.2), '#d9c27a', { y: 0.1 })]),
-    merge([part(cyl(0.18, 0.18, 0.1, 6), P.pale, { y: 0.1 }), part(cyl(0.07, 0.07, 0.12, 6), P.ink, { y: 0.11 })]),
-    // W29 mass: an ingot (a long block with a narrower top), told from the scrap cube by its shape
-    merge([part(box(0.34, 0.1, 0.18), '#9a9a94', { y: 0.05 }), part(box(0.26, 0.08, 0.12), '#b8b8b0', { y: 0.14 })]),
+    merge([part(new DodecahedronGeometry(0.17, 0), '#b07a4a', { y: 0.15 })]),
+    merge([part(box(0.24, 0.24, 0.24), '#a8a8a0', { y: 0.12 })]),
+    merge([part(box(0.36, 0.16, 0.2), '#d9c27a', { y: 0.08 })]),
+    merge([part(cyl(0.18, 0.18, 0.1, 6), P.pale, { y: 0.05 }), part(cyl(0.07, 0.07, 0.12, 6), P.ink, { y: 0.06 })]),
+    // W29 mass: an ingot (a long block with a narrower raised top), told from the scrap cube by its shape
+    merge([part(box(0.5, 0.12, 0.28), '#9a9a94', { y: 0.06 }), part(box(0.38, 0.1, 0.18), '#c8c8c0', { y: 0.17 })]),
     // W29 rare: a tall crystal (a stretched octahedron)
-    merge([part(new OctahedronGeometry(0.13), P.crystal, { y: 0.2, sy: 1.8 })]),
+    merge([part(new OctahedronGeometry(0.16), P.crystal, { y: 0.256, sy: 1.6 })]),
   ];
 }
 

@@ -61,7 +61,8 @@ import { TurretRig } from './workshop/bench/turretRig.ts';
 import { buildKit, type Kind, type Kit } from './workshop/kit/kit.ts';
 import { writePart, writePivots } from './workshop/kit/pose.ts';
 import { Builder, cbox, prism } from './workshop/models/kit.ts';
-import { BUILDING_MAKERS, SMELTER_CHIMNEY_TOPS } from './workshop/models/procedural/buildings.ts';
+import { BELT_SHAPE_MAKERS, BUILDING_MAKERS, SMELTER_CHIMNEY_TOPS } from './workshop/models/procedural/buildings.ts';
+import { BELT_CORNER_L, BELT_CORNER_R, BELT_SHAPE_MODEL, BeltShapes } from './beltShapes.ts';
 import { ALIEN_MAKERS } from './workshop/models/procedural/aliens.ts';
 import type { ModelDef, Motion } from './workshop/models/types.ts';
 import { Rand } from './workshop/noise.ts';
@@ -413,6 +414,8 @@ export class ModelRenderer {
   private readonly pose: ExtractorPose = { spin: 0, slide: 0, fill: 0, light: 0, flow: [] };
   private wppd = 0;
   private iconYaw = 0;
+  /** W29b: each belt tile's shape, worked out again when the belts change. */
+  readonly belts: BeltShapes;
   private readonly ground: (x: number, z: number) => number;
 
   constructor(
@@ -472,6 +475,8 @@ export class ModelRenderer {
       }
       if (list.length) this.movingParts.set(name, list);
     }
+    // W29b: the belt's corner and join shapes (beltShapes.ts picks one per tile)
+    for (const [name, make] of Object.entries(BELT_SHAPE_MAKERS)) addModel(name, make(w));
     addModel('splitterMarker', beltMarker(w, 'splitter'));
     addModel('mergerMarker', beltMarker(w, 'merger'));
     // aliens: one batch per distinct part geometry (W21: a rusher's four legs share one), each part
@@ -512,6 +517,7 @@ export class ModelRenderer {
     this.outlines.mesh.renderOrder = 14;
     this.group.add(this.plinths.mesh, this.outlines.mesh);
     this.walls = new WallLayout(terrain);
+    this.belts = new BeltShapes(terrain.w, terrain.h);
     const L = (n: number) => new Uint8Array(n).fill(LEVEL_NEW);
     this.lv = { b: L(C.buildings), bId: new Uint32Array(C.buildings), a: L(C.aliens), aId: new Uint32Array(C.aliens), u: L(C.units), uId: new Uint32Array(C.units), w: L(C.wrecks), wId: new Uint32Array(C.wrecks), d: L(deposits) };
     this.anim = new Animator(C.buildings);
@@ -715,6 +721,7 @@ export class ModelRenderer {
       rowIndex(this.pRow, snap.projectiles);
       rowIndex(this.aSnapRow, snap.aliens);
       this.walls.update(rowsOf(snap));
+      this.belts.update(snap);
     }
     if (f.aliens.id !== this.alienIdsFor || f.aliens.count !== this.alienCountFor) {
       this.alienIdsFor = f.aliens.id;
@@ -934,8 +941,10 @@ export class ModelRenderer {
       const cut = cutOf();
       this.pushKit(k, cx, top, cz, P.yaw, s, lv, damage, cut, P.pitch, P.recoil, sink);
     } else {
-      const name = W17_BUILDING_MODEL.get(kind);
+      let name = W17_BUILDING_MODEL.get(kind);
       if (name === undefined) return;
+      // W29b: a belt is drawn in the shape its neighbours give it (corner, join or straight)
+      if (kind === B.belt) name = BELT_SHAPE_MODEL[this.belts.shapeAt(tile)] ?? name;
       const mi = this.modelIndex.get(name)!;
       const yaw = isBelt(kind) ? BELT_YAW[dir & 3]! : 0;
       _m.makeRotationY(yaw).setPosition(cx, top, cz);
@@ -1018,7 +1027,11 @@ export class ModelRenderer {
       const alongZ = snap.buildings.cols.dir[r] === 1;
       return this.icon('gate', cx, y, cz, 3.2, 0, alongZ ? 0 : Math.PI / 2);
     }
-    if (isBelt(kind)) return this.icon(BUILDING_ICON[kind]!, cx, y, cz, 0.9, ICON_PX.belt, BELT_YAW[snap.buildings.cols.dir[r]! & 3]!);
+    if (isBelt(kind)) {
+      const shape = kind === B.belt ? this.belts.shapeAt(snap.buildings.cols.ty[r]! * this.terrain.w + snap.buildings.cols.tx[r]!) : 0;
+      const name = shape === BELT_CORNER_R ? 'beltCornerR' : shape === BELT_CORNER_L ? 'beltCornerL' : BUILDING_ICON[kind]!;
+      return this.icon(name, cx, y, cz, 0.9, ICON_PX.belt, BELT_YAW[snap.buildings.cols.dir[r]! & 3]!);
+    }
     if (TURRET_KINDS.has(kind)) return this.icon(BUILDING_ICON[kind]!, cx, y, cz, Math.max(fw, fh) * 0.9, ICON_PX.building, yaw);
     this.icon(BUILDING_ICON[kind]!, cx, y, cz, Math.max(fw, fh) * 0.9, ICON_PX.building);
   }

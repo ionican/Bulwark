@@ -28,6 +28,7 @@ import { OVERLAY_NAMES, hideOverlay, overlayMeshes, setOverlayDepthTest } from '
 import { RouteView } from './render/routeView.ts';
 import { WorkerWindow } from './workerWindow.ts';
 import { footprintRange, groundHeight } from './render/ground.ts';
+import { BELT_SURFACE_Y } from './render/workshop/models/procedural/buildings.ts';
 import { INSPECT_FRAME, drawnMeshes, entitiesOf, inspectScene, submissionFloor, type InspectFrame } from './render/inspect.ts';
 import { LOD_THRESHOLDS } from './render/lod.ts';
 import { Interpolator, type MobileView } from './render/interp.ts';
@@ -294,6 +295,9 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
   // the worker's clock, on this page's (both count from their own time origin)
   const t = msg.timing;
   workerWindow.record({ ...t, startedAt: t.startedAt - performance.timeOrigin, endedAt: t.endedAt - performance.timeOrigin });
+  // W29b: the debug spawn box sits below the resource panel (which grew a line with belts); the
+  // idle units column places itself below both (ui/idleColumn.ts)
+  if (debugBox) debugBox.style.top = `${Math.round(Math.max(118, hud.resBottom() + 8))}px`;
   // W26: the idle units column follows each snapshot
   idleNow = idleUnits(snap);
   idleColumn.update(idleNow);
@@ -2118,6 +2122,47 @@ const game = {
       n++;
     });
     return n;
+  },
+  // ---- W29b: how belts look
+  /** The belt models (w17/<model> meshes, splitter and merger markers aside) with an instance at tile (x, z)'s centre, sorted. */
+  beltModelAt: (x: number, z: number) => {
+    const out = new Set<string>();
+    for (const d of drawnMeshes(scene)) {
+      if (!d.name.startsWith('w17/belt')) continue;
+      for (let i = 0; i < d.count; i++)
+        if (Math.abs(d.worlds[i * 16 + 12]! - (x + 0.5)) < 0.05 && Math.abs(d.worlds[i * 16 + 14]! - (z + 0.5)) < 0.05) out.add(d.name.split('/')[1]!);
+    }
+    return [...out].sort();
+  },
+  /** Debug (negative control): every belt drawn straight (true) or in the shape its neighbours give it. */
+  beltShapesStraight: (on: boolean) => {
+    view.models.belts.forceStraight(on);
+    return true;
+  },
+  /** Debug (negative control): belt items lowered into the belt, their tops under its surface. */
+  itemDrop: (on: boolean) => {
+    entities.itemDrop = on;
+    return true;
+  },
+  /** Each drawn belt item's bottom and top (world y) and the belt surface under it (its tile's top + BELT_SURFACE_Y). */
+  itemHeights: () => {
+    const out: Array<{ item: number; x: number; z: number; bottom: number; top: number; surface: number }> = [];
+    scene.traverseVisible((o) => {
+      if (!(o instanceof InstancedMesh) || !o.name.startsWith('overlay/item/')) return;
+      const g = o.geometry;
+      if (!g.boundingBox) g.computeBoundingBox();
+      const m = new Matrix4();
+      for (let i = 0; i < o.count; i++) {
+        o.getMatrixAt(i, m);
+        const x = m.elements[12]!;
+        const y = m.elements[13]!;
+        const z = m.elements[14]!;
+        const surface = footprintRange(terrain, Math.floor(x), Math.floor(z), 1, 1).top + BELT_SURFACE_Y;
+        const r3 = (v: number) => Math.round(v * 1000) / 1000;
+        out.push({ item: Number(o.name.slice('overlay/item/'.length)), x: r3(x), z: r3(z), bottom: r3(y + g.boundingBox!.min.y), top: r3(y + g.boundingBox!.max.y), surface: r3(surface) });
+      }
+    });
+    return out;
   },
   /**
    * Drawn instances of meshes in `group` (building, unit, alien, wreck) whose position is in the

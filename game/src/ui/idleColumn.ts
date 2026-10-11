@@ -59,6 +59,8 @@ export class IdleColumn {
 
   /** Shows the counts of `idle`; a type with none is hidden. */
   update(idle: IdleUnits): void {
+    // placed on every snapshot: the panels above it change height without the counts changing
+    this.place();
     const key = `${idle.commander.length},${idle.engineer.length}`;
     if (key === this.shown) return;
     this.shown = key;
@@ -69,14 +71,17 @@ export class IdleColumn {
       n.textContent = `× ${count}`;
       b.dataset.count = String(count);
     }
-    this.place();
   }
 
-  /** Below the debug spawn panel (ui/buildbar.ts `.dbg`), or where it would be. */
+  /**
+   * Below the resource panel (ui/hud.ts `.hud.res`) and the debug spawn box (ui/buildbar.ts `.dbg`),
+   * whichever is lower; a hidden one counts as absent (W29b: with the box hidden the column went to
+   * the top and covered the resource panel's per-second rates).
+   */
   private place(): void {
-    const dbg = document.querySelector('.dbg');
-    const top = dbg ? dbg.getBoundingClientRect().bottom + 8 : 118;
-    this.el.style.top = `${Math.round(top)}px`;
+    const bottom = (sel: string) => document.querySelector(sel)?.getBoundingClientRect().bottom ?? 0;
+    const b = Math.max(bottom('.hud.res'), bottom('.dbg'));
+    this.el.style.top = `${Math.round(b > 0 ? b + 8 : 118)}px`;
   }
 }
 
