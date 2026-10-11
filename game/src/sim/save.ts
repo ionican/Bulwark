@@ -239,8 +239,9 @@ export function deserializeWorld(input: Uint8Array | ArrayBuffer): World {
   const jsonLen = dv.getUint32(12, true);
   const state = JSON.parse(new TextDecoder().decode(bytes.subarray(16, 16 + jsonLen)), reviver);
   const head = 16 + ((jsonLen + 7) & ~7);
-  // Copy the blob area so typed-array views are aligned whatever the input's offset.
-  const area = bytes.slice(head).buffer;
+  // Copy the blob area so typed-array views are aligned whatever the input's offset. An explicit
+  // copy: a Node Buffer's slice() is a view into its pool, so its .buffer is the whole pool.
+  const area = new Uint8Array(bytes.subarray(head)).buffer;
   const blob = new Map<string, ArrayLike<number>>();
   for (const r of state.blobs as BlobRef[]) blob.set(r.name, view(r.type, area, r.offset, r.length));
   const get = (name: string) => {

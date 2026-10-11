@@ -217,6 +217,19 @@ export const CARRY_CAPACITY = 20;
 export const START_ENGINEERS = map1.engineer.startCount;
 export const isBelt = (kind: number): boolean => kind === B.belt || kind === B.splitter || kind === B.merger;
 
+/** Belt direction 0..3: +x, +z, −x, −z (a tile step per direction). */
+export const BDX = [1, 0, -1, 0] as const;
+export const BDZ = [0, 1, 0, -1] as const;
+
+/**
+ * The directions a belt piece of `kind` facing `dir` puts items out to: a splitter to its left and
+ * right (never its front), a belt or merger to its front. The conveyor (conveyor.ts) and the belt
+ * shapes the renderer draws (render/beltShapes.ts) both read this.
+ */
+export function outputDirs(kind: number, dir: number): readonly number[] {
+  return kind === B.splitter ? [(dir + 1) & 3, (dir + 3) & 3] : [dir & 3];
+}
+
 // ---- Aliens --------------------------------------------------------------------------------
 
 // Target categories: one flow field each.

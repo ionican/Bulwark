@@ -16,16 +16,13 @@
 // item, and everything while disabled, so the belt backs up.
 
 import { BF_ACTIVE, BF_COMPLETE, BF_DISABLED, BF_STARVED } from './schema.ts';
-import { B, BELT_TILES_PER_SECOND, ITEM_MASS, ITEM_NONE, ITEM_PART, ITEM_RARE, ITEM_SALVAGE, TICK_SECONDS, buildingInfo, isBelt } from './kinds.ts';
+import { B, BDX, BDZ, BELT_TILES_PER_SECOND, ITEM_MASS, ITEM_NONE, ITEM_PART, ITEM_RARE, ITEM_SALVAGE, TICK_SECONDS, buildingInfo, isBelt, outputDirs } from './kinds.ts';
 import type { World } from './world.ts';
 
 const DT = TICK_SECONDS;
 const SPEED = BELT_TILES_PER_SECOND * DT;
 /** An extractor buffer this close to 1 holds a whole item (f32 sums of 0.1 land either side of 1). */
 const WHOLE = 1 - 1e-4;
-/** Belt direction 0..3: +x, +z, -x, -z. */
-export const BDX = [1, 0, -1, 0] as const;
-export const BDZ = [0, 1, 0, -1] as const;
 
 function frontCell(w: World, s: number, d: number): number {
   const c = w.buildings.cols;
@@ -50,7 +47,7 @@ function computeOrder(w: World): void {
     if (known !== undefined) return known;
     if (visiting.has(s)) return 0; // a loop: break it anywhere
     visiting.add(s);
-    const outs = c.kind[s] === B.splitter ? [(c.dir[s]! + 1) & 3, (c.dir[s]! + 3) & 3] : [c.dir[s]!];
+    const outs = outputDirs(c.kind[s]!, c.dir[s]!);
     let d = 0;
     for (const o of outs) {
       const cell = frontCell(w, s, o);
@@ -211,7 +208,7 @@ export function stepConveyors(w: World): void {
     const carry = 0;
     let taken = false;
     if (c.kind[s] === B.splitter) {
-      const outs = [(c.dir[s]! + 1) & 3, (c.dir[s]! + 3) & 3];
+      const outs = outputDirs(B.splitter, c.dir[s]!);
       for (let k = 0; k < 2 && !taken; k++) {
         const o = outs[(c.rr[s]! + k) & 1]!;
         if (offer(w, here, frontCell(w, s, o), item, carry)) {

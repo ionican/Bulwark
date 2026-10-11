@@ -11,7 +11,7 @@
 // the +x model by BELT_YAW). Splitters and mergers keep their own models. Rows are keyed per tile,
 // and the shapes are worked out again only when the key changes (a belt laid, removed, turned).
 
-import { B } from '../sim/kinds.ts';
+import { B, BDX as DX, BDZ as DZ, outputDirs } from '../sim/kinds.ts';
 import { BF_COMPLETE, BF_STARTED } from '../sim/schema.ts';
 import type { Snapshot } from '../sim/snapshot.ts';
 
@@ -32,8 +32,6 @@ export const BELT_SHAPE_MODEL: Readonly<Record<number, string>> = {
   [BELT_JOIN_R | BELT_JOIN_L]: 'beltJoinLR',
 };
 
-const DX = [1, 0, -1, 0];
-const DZ = [0, 1, 0, -1];
 const KIND_BELT = 1;
 const KIND_SPLITTER = 2;
 const KIND_MERGER = 3;
@@ -94,9 +92,8 @@ export class BeltShapes {
     if (x < 0 || z < 0 || x >= this.w || z >= this.h) return false;
     const k = this.key[z * this.w + x]!;
     if (!k) return false;
-    const d = k >> 2;
-    // a splitter puts out to its front and both sides; a belt and a merger to the front only
-    return (k & 3) === KIND_SPLITTER ? toward !== (d + 2) % 4 : toward === d;
+    const kind = (k & 3) === KIND_SPLITTER ? B.splitter : (k & 3) === KIND_MERGER ? B.merger : B.belt;
+    return outputDirs(kind, k >> 2).includes(toward);
   }
 
   private rebuild(): void {
