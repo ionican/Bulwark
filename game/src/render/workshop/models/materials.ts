@@ -67,9 +67,15 @@ function addEdgeWear(m: MeshStandardMaterial, noise: Texture, substrate: string,
   m.customProgramCacheKey = () => key;
 }
 
-/** Belt rubber (and its colours: the base, the raised cleat, the cleat's dark leading edge). */
-const RUBBER = '#2b2927';
-const CLEAT = '#3b3835';
+/**
+ * Belt rubber (and its colours: the base, the raised cleat, the cleat's dark leading edge). W30
+ * review: the rubber is lighter than the W17 stripes' #2b2927 and the chevron lighter than their
+ * #3b3835. On the darker rubber an item's shading changed fewer pixels (check-render's rare-item
+ * check fell from 57–66 to 35–48 px against its threshold of 40); this pair restores 62–71 and
+ * doubles the chevron's contrast with the rubber.
+ */
+const RUBBER = '#33302d';
+const CLEAT = '#5a554e';
 const CLEAT_EDGE = '#1a1918';
 /** Canvas size: u across (64 px), v along the flow (256 px = one tile, two chevrons). */
 const BELT_W = 64;
