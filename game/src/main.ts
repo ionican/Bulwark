@@ -6,7 +6,7 @@
 // ?quality=high (default medium). W24 run 3 removed the second renderer and its URL switch.
 // The scenario shown is the one in the snapshot: loading a save switches to the save's scenario.
 
-import { Box3, InstancedMesh, Matrix4, Mesh, PerspectiveCamera, Vector3, type Material } from 'three';
+import { Box3, InstancedMesh, Matrix4, Mesh, PerspectiveCamera, Vector3, type Material, type MeshStandardMaterial, type Texture } from 'three';
 import { createRenderer, type Quality } from './render/adapter.ts';
 import { measureRenderCost } from './render/cost.ts';
 import { Orbit, applyRig, clampRig, pitchFor, worldPerPixel, type Rig } from './render/cameraRig.ts';
@@ -36,7 +36,7 @@ import { maxStepPerTick } from './mobileStep.ts';
 import { boxSelect, buildOccupancy, buildingAtScreen, pickScreen, screenToGround, type GroundHit, type Pick, type PickView } from './render/picking.ts';
 import { createView, NO_WARMUP, type WarmupReport } from './render/view.ts';
 import { inspectPreview } from './render/preview.ts';
-import { EffectClock } from './render/anim.ts';
+import { EffectClock, frameTimes as beltFrameTimes } from './render/anim.ts';
 import { idleUnits, nextIdle, type IdleUnits } from './render/idle.ts';
 import { IdleColumn, stackRightColumn, type IdleType } from './ui/idleColumn.ts';
 import { buildingRightClick } from './rightClick.ts';
@@ -985,6 +985,58 @@ function captureRect(r: { x0: number; y0: number; x1: number; y1: number }) {
   return { w, h, data };
 }
 
+/** W30: the map of the first drawn instanced mesh whose name passes `pick`, or null. */
+function drawnMap(pick: (name: string) => boolean): Texture | null {
+  let t: Texture | null = null;
+  scene.traverseVisible((o) => {
+    if (t || !(o instanceof InstancedMesh) || o.count <= 0 || !pick(o.name) || Array.isArray(o.material)) return;
+    t = (o.material as MeshStandardMaterial).map ?? null;
+  });
+  return t;
+}
+
+/**
+ * W30 `__game.beltFlow()`: the belt clock and, read from the scene graph, the texture offset.y of
+ * the material drawn on a straight belt, a corner and a join (null when none is drawn), whether
+ * those share one texture and it is the renderer's scrolling one, whether the splitter's surface
+ * scrolls, and the chevron texture's luminance down its centre column and down a column at u ≈ 0.12
+ * (row r is v = r / h; the texture as drawn on the straight).
+ */
+function beltFlowReport() {
+  const flow = view.models.beltFlow;
+  const scrolling = view.models.materials.w17.belt.map;
+  const straight = drawnMap((n) => n === 'w17/belt/belt-cut');
+  const corner = drawnMap((n) => /^w17\/beltCorner[LR]\/belt-cut$/.test(n));
+  const join = drawnMap((n) => /^w17\/beltJoin(L|R|LR)\/belt-cut$/.test(n));
+  const splitter = drawnMap((n) => /^w17\/splitter\/belt/.test(n));
+  const off = (t: Texture | null) => (t ? { offsetY: t.offset.y, uuid: t.uuid } : null);
+  let texture: { w: number; h: number; centre: number[]; edge: number[] } | null = null;
+  const img = straight?.image as OffscreenCanvas | HTMLCanvasElement | undefined;
+  if (img && 'getContext' in img) {
+    const g = img.getContext('2d') as OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D | null;
+    if (g) {
+      const { width: w, height: h } = img;
+      const column = (x: number) => {
+        const d = g.getImageData(x, 0, 1, h).data;
+        return Array.from({ length: h }, (_, r) => 0.2126 * d[r * 4]! + 0.7152 * d[r * 4 + 1]! + 0.0722 * d[r * 4 + 2]!);
+      };
+      texture = { w, h, centre: column(Math.floor(w / 2)), edge: column(Math.round(w * 0.12)) };
+    }
+  }
+  return {
+    phase: flow.phase,
+    step: flow.step,
+    frozen: flow.frozen,
+    reversed: flow.reversed,
+    straight: off(straight),
+    corner: off(corner),
+    join: off(join),
+    shared: !!straight && straight === corner && straight === scrolling && (!join || join === straight),
+    splitterScrolls: splitter ? splitter === scrolling : null,
+    texture,
+  };
+}
+
 const _corner = new Vector3();
 /** Screen rectangle (CSS px) of the projected corners of boxes; null when none is in front of the camera. */
 function screenRect(corners: (v: Vector3, k: number) => boolean): { x0: number; y0: number; x1: number; y1: number } | null {
@@ -1247,7 +1299,9 @@ function frame(now: number) {
   requestAnimationFrame(frame);
   if (costRunning) return;
   const cpu0 = performance.now();
-  const dt = Math.min(0.1, (now - lastFrame) / 1000);
+  // W30: the belt clock gets the raw frame time; everything else keeps the 0.1 s-capped dt
+  const times = beltFrameTimes(now, lastFrame, runnerInfo);
+  const dt = times.dt;
   lastFrame = now;
   frameTimes.push(now);
   while (frameTimes.length && frameTimes[0]! < now - 1000) frameTimes.shift();
@@ -1271,6 +1325,7 @@ function frame(now: number) {
         // walking advances by distance; paused, nothing moves and the feet do not settle
         dt: runnerInfo.paused ? 0 : dt,
         time: effectClock,
+        belt: times.belt,
       },
       rig.distance,
       (x, y, z) => worldPerPixel(camera, Math.hypot(x - camera.position.x, y - camera.position.y, z - camera.position.z), vh),
@@ -2066,6 +2121,16 @@ const game = {
     capture: (rect: { x0: number; y0: number; x1: number; y1: number }) => captureRect(rect),
     screenBox: (id: number) => buildingScreenBox(id),
     overlayScreenBox: (name: string) => overlayScreenBox(name),
+    /** W30 negative control (scripts/check-belt-flow.mjs): the belt phase stops (true) or runs again (false). */
+    beltFlowFrozen: (on: boolean) => {
+      view.models.beltFlow.frozen = on;
+      return true;
+    },
+    /** W30 negative control: the belt phase runs backwards (true) or forwards (false). */
+    beltFlowReversed: (on: boolean) => {
+      view.models.beltFlow.reversed = on;
+      return true;
+    },
   },
   /** Removes order `order` (its id, as `queues` lists it) from unit `id`'s queue (resolves with the final result). */
   dequeue: (id: number, order: number) => commandResult({ t: 'dequeue', id, order }),
@@ -2122,6 +2187,8 @@ const game = {
       if (p.d.name.startsWith('w17/belt') && Math.abs(p.x - (x + 0.5)) < 0.05 && Math.abs(p.z - (z + 0.5)) < 0.05) out.add(p.d.name.split('/')[1]!);
     return [...out].sort();
   },
+  /** W30: the belt clock and the scrolling chevron texture as drawn (beltFlowReport). */
+  beltFlow: () => beltFlowReport(),
   /** Debug (negative control): every belt drawn straight (true) or in the shape its neighbours give it. */
   beltShapesStraight: (on: boolean) => {
     view.models.belts.forceStraight(on);
