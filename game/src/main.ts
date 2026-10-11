@@ -15,6 +15,8 @@ import { Ghost } from './render/ghost.ts';
 import { DASH_NAMES, QUEUE_MAX_INSTANCES, QueueOverlay, canvasLabel, inspectQueue } from './render/queueView.ts';
 import { WaitOverlay, canvasWaitMark, inspectWaiting } from './render/waitView.ts';
 import { siteReadout, type SiteReadout } from './render/siteReadout.ts';
+import { buildingReadout } from './render/buildingReadout.ts';
+import { CoreOverlay, canvasCoreMark, inspectCore } from './render/coreView.ts';
 import { SiteHover } from './ui/siteHover.ts';
 import { waitingCounts, waitingState } from './render/waiting.ts';
 import { DragPreview, inspectDrag } from './render/dragPreview.ts';
@@ -49,9 +51,12 @@ import {
   buildingInfo,
   buildingFootprint,
   isBelt,
+  COMMANDER_INCOME,
+  ITEM_MASS,
+  ITEM_RARE,
   type BuildingKind,
 } from './sim/kinds.ts';
-import { BF_COMPLETE, BF_UPGRADING, Q_BUILD, Q_MOVE, Q_PRODUCE, Q_RECLAIM, Q_RUN, constructionState, isReserved } from './sim/schema.ts';
+import { BF_COMPLETE, BF_DISABLED, BF_IDLE, BF_UPGRADING, G_BELTS, G_CORE_ID, G_CORE_MASS, G_CORE_RARE, G_SPENT, Q_BUILD, Q_MOVE, Q_PRODUCE, Q_RECLAIM, Q_REPAIR, Q_RUN, constructionState, isReserved } from './sim/schema.ts';
 import {
   G_COMMANDER_HP,
   G_COMMANDER_ID,
@@ -152,8 +157,15 @@ const queueView = new QueueOverlay(scene, terrain, canvasLabel());
 const waitView = new WaitOverlay(scene, terrain, canvasWaitMark());
 // W28: the construction hover readout (render/siteReadout.ts) in a panel by the cursor (ui/siteHover.ts)
 const siteHover = new SiteHover();
+// W29: the disabled core's marker (hazard sign and DISABLED)
+const coreView = new CoreOverlay(scene, terrain, canvasCoreMark());
+/**
+ * What the hover panel shows: a site's readout (W28), or a complete building's (W29,
+ * render/buildingReadout.ts: extractor buffer, the core, hit points and the repair hint).
+ */
+type HoverReadout = { id: number; lines: string[]; intake?: SiteReadout['intake']; intakeNote?: SiteReadout['intakeNote'] };
 /** The readout shown, the tick of the snapshot it was worked out on, and whether the previous snapshot is of the same world. */
-let siteShown: { readout: SiteReadout; tick: number } | null = null;
+let siteShown: { readout: HoverReadout; tick: number } | null = null;
 let samePrevWorld = false;
 let lastRunnerWorld = -1;
 const dragPreview = new DragPreview(scene, terrain, view.models);
@@ -785,7 +797,7 @@ function updateSiteHover(moved = false): void {
     siteHover.move(mouse!.x, mouse!.y);
     return;
   }
-  const readout = id >= 0 ? siteReadout(samePrevWorld ? interp.prev : null, curr!, id) : null;
+  const readout: HoverReadout | null = id >= 0 ? (siteReadout(samePrevWorld ? interp.prev : null, curr!, id) ?? buildingReadout(curr!, id, selectedBuilders().length > 0)) : null;
   if (!readout) {
     siteShown = null;
     siteHover.hide();
@@ -804,7 +816,10 @@ canvas.addEventListener(
   { passive: false },
 );
 
-/** Right click with units selected: reclaim a wreck, help an unfinished site, or move. */
+/**
+ * Right click with units selected: reclaim a wreck, help an unfinished site (or an upgrade under
+ * way), repair a complete damaged building (W29), or move.
+ */
 function rightClick(x: number, y: number, queue: boolean) {
   const ids = selectedBuilders();
   if (!ids.length) return;
@@ -823,6 +838,10 @@ function rightClick(x: number, y: number, queue: boolean) {
     const c = interp.curr!.buildings.cols;
     if (r >= 0 && (!(c.flags[r]! & BF_COMPLETE) || c.flags[r]! & BF_UPGRADING)) {
       command({ t: 'assist', ids, target: p.id, queue });
+      return;
+    }
+    if (r >= 0 && c.hp[r]! < c.maxHp[r]!) {
+      command({ t: 'repair', ids, target: p.id, queue });
       return;
     }
   }
@@ -1032,6 +1051,12 @@ function queueItemText(s: Snapshot, it: QueueItem): string {
   if (it.kind === Q_MOVE) return `Move to ${it.x.toFixed(0)}, ${it.z.toFixed(0)}`;
   if (it.kind === Q_PRODUCE) return 'Produce an engineer';
   if (it.kind === Q_RECLAIM) return 'Reclaim a wreck';
+  if (it.kind === Q_REPAIR) {
+    const r = Array.prototype.indexOf.call(s.buildings.id, it.target);
+    if (r < 0) return 'Repair (gone)';
+    const c = s.buildings.cols;
+    return `Repair ${buildingInfo(c.kind[r]!).label} ${Math.ceil(c.hp[r]!)}/${Math.round(c.maxHp[r]!)} hp`;
+  }
   if (it.kind === Q_RUN) {
     for (let i = 0; i < s.runs.length; i += 4) if (s.runs[i] === it.run) return `Wall run: ${s.runs[i + 2]}/${s.runs[i + 1]} tiles built`;
     return 'Wall run';
@@ -1265,6 +1290,7 @@ function frame(now: number) {
     b.stamps.push(now);
   } else if (snap) queueView.update({ camera, viewportHeight: vh, snapshot: snap, units: interp.units, selection });
   if (snap) waitView.update({ camera, viewportHeight: vh, snapshot: snap });
+  if (snap) coreView.update({ camera, viewportHeight: vh, snapshot: snap });
   updateDragPreview();
   updateGhost();
   // W24 run 3: a tool the scenario stopped allowing is dropped; the panel and the routes follow the snapshot
@@ -1321,6 +1347,7 @@ function frame(now: number) {
       upkeep: g[G_UPKEEP]!,
       lost: g[G_OUTCOME] === 1,
       won: g[G_OUTCOME] === 2,
+      delivered: g[G_BELTS] === 1,
     });
     refreshSelectionPanel();
     queuePanel.update(selectedQueues(), hud.aboveSelection());
@@ -1453,6 +1480,9 @@ function list(type: EntityType) {
       item: b.cols.item[r]!,
       stock: b.cols.stock[r]!,
       inBuf: b.cols.inBuf[r]!,
+      // W29: the core at 0 hp; an extractor with a full buffer (not digging)
+      disabled: (b.cols.flags[r]! & BF_DISABLED) !== 0,
+      idle: (b.cols.flags[r]! & BF_IDLE) !== 0,
     }));
   }
   if (type === 'wreck') {
@@ -1917,7 +1947,7 @@ const game = {
   get queues() {
     const s = interp.curr;
     if (!s) return [];
-    const names = ['move', 'build', 'run', 'produce', 'reclaim'];
+    const names = ['move', 'build', 'run', 'produce', 'reclaim', 'repair'];
     return Array.from({ length: s.units.count }, (_, row) => ({
       id: s.units.id[row]!,
       orders: queueOf(s, row).map((it) => ({ kind: names[it.kind] ?? String(it.kind), target: it.target, run: it.run, x: it.x, z: it.z, oid: it.oid, text: queueItemText(s, it) })),
@@ -1957,7 +1987,7 @@ const game = {
       id: r?.id ?? -1,
       tick: siteShown?.tick ?? -1,
       lines: [...siteHover.el.children].map((d) => d.textContent ?? ''),
-      intake: r ? Object.fromEntries(r.intake.map((i) => [i.resource, i.perSecond])) : {},
+      intake: r ? Object.fromEntries((r.intake ?? []).map((i) => [i.resource, i.perSecond])) : {},
       note: r?.intakeNote ?? '',
     };
   },
@@ -1994,6 +2024,8 @@ const game = {
     h: terrain.h,
     base: { ...terrain.base },
     entries: terrain.entries.map((e) => ({ name: e.name, x: e.x, z: e.z })),
+    /** W29: the deposits (anchor tiles of their 2 × 2 patches). */
+    deposits: terrain.deposits.map((d) => ({ kind: d.kind, tx: d.tx, ty: d.ty })),
     footprintTop: (tx: number, ty: number, fw: number, fh: number) => footprintRange(terrain, tx, ty, fw, fh).top,
     height: (x: number, z: number) => groundHeight(terrain, x, z),
   },
@@ -2031,6 +2063,78 @@ const game = {
   /** Removes order `order` (its id, as `queues` lists it) from unit `id`'s queue (resolves with the final result). */
   dequeue: (id: number, order: number) => commandResult({ t: 'dequeue', id, order }),
   clearQueue: (ids: number[]) => commandResult({ t: 'clearQueue', ids }),
+  // ---- W29: belts and the core
+  /**
+   * Belts and the core from the snapshot: belts on, the core's id, mass and rare the core has taken,
+   * exact cumulative spending per resource, and the commander's income per second (instant).
+   */
+  get economy() {
+    const g = interp.curr?.globals;
+    if (!g) return null;
+    return {
+      belts: g[G_BELTS] === 1,
+      coreId: g[G_CORE_ID]!,
+      delivered: { mass: g[G_CORE_MASS]!, rare: g[G_CORE_RARE]! },
+      spent: { mass: g[G_SPENT]!, energy: g[G_SPENT + 1]!, rare: g[G_SPENT + 2]! },
+      commanderIncome: { mass: COMMANDER_INCOME[0], energy: COMMANDER_INCOME[1], rare: COMMANDER_INCOME[2] },
+    };
+  },
+  /** Belt tiles carrying an item (any, mass, rare), from the snapshot. */
+  get beltItems() {
+    const s = interp.curr;
+    const out = { occupied: 0, mass: 0, rare: 0 };
+    if (!s) return out;
+    const c = s.buildings.cols;
+    for (let r = 0; r < s.buildings.count; r++) {
+      if (!isBelt(c.kind[r]!) || c.item[r] === 0) continue;
+      out.occupied++;
+      if (c.item[r] === ITEM_MASS) out.mass++;
+      else if (c.item[r] === ITEM_RARE) out.rare++;
+    }
+    return out;
+  },
+  /** Sandbox debug: `amount` hit points of damage to building `id` (the sim's damage rule, as a hit). */
+  damage: (id: number, amount: number) => commandResult({ t: 'damage', target: id, amount }),
+  /** Sandbox debug: every complete extractor's buffer to its cap. */
+  fillBuffers: () => commandResult({ t: 'fillBuffers' }),
+  /** The disabled-core marker read back from the scene graph (render/coreView.ts inspectCore). */
+  inspectCore: () => inspectCore(scene),
+  /** Drawn belt items: per item mesh (overlay/item/<kind>), the ground positions [x, z] of its instances last frame. */
+  drawnItems: () => {
+    const out: Record<string, Array<[number, number]>> = {};
+    for (const d of drawnMeshes(scene)) {
+      if (!d.name.startsWith('overlay/item/')) continue;
+      const list = (out[d.name] ??= []);
+      for (let i = 0; i < d.count; i++) list.push([d.worlds[i * 16 + 12]!, d.worlds[i * 16 + 14]!]);
+    }
+    return out;
+  },
+  /** The negative control of the item check (scripts/check-render.mjs): hides the item meshes' materials, or restores them. */
+  hideItemMeshes: (hide: boolean) => {
+    let n = 0;
+    scene.traverse((o) => {
+      if (!(o instanceof Mesh) || !o.name.startsWith('overlay/item/')) return;
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) m.visible = !hide;
+      n++;
+    });
+    return n;
+  },
+  /**
+   * Drawn instances of meshes in `group` (building, unit, alien, wreck) whose position is in the
+   * ground rectangle [x0, x1) × [z0, z1): mesh name and world matrix (rounded), in scene order.
+   */
+  drawnNear: (x0: number, z0: number, x1: number, z1: number, group: string) => {
+    const out: Array<[string, number[]]> = [];
+    for (const d of drawnMeshes(scene)) {
+      if (d.group !== group) continue;
+      for (let i = 0; i < d.count; i++) {
+        const x = d.worlds[i * 16 + 12]!;
+        const z = d.worlds[i * 16 + 14]!;
+        if (x >= x0 && x < x1 && z >= z0 && z < z1) out.push([d.name, Array.from(d.worlds.subarray(i * 16, i * 16 + 16), (v) => Math.round(v * 1e4) / 1e4)]);
+      }
+    }
+    return out;
+  },
 };
 
 declare global {

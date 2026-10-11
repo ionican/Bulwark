@@ -122,6 +122,7 @@ export const W17_BUILDING_MODEL: ReadonlyMap<number, string> = new Map([
   [B.belt, 'belt'],
   [B.splitter, 'belt'],
   [B.merger, 'belt'],
+  [B.core, 'core'],
 ]);
 export const KIT_IDS = ['bastion', 'anvil', 'lantern', 'rampart', 'lookout'] as const;
 /** Alien draw scale (anim.ts, where the turrets' aim height uses it). */
@@ -158,6 +159,7 @@ const BUILDING_ICON: Record<number, IconName> = {
   [B.splitter]: 'splitter',
   [B.merger]: 'merger',
   [B.gate]: 'gate',
+  [B.core]: 'core',
 };
 const ALIEN_ICON: IconName[] = ['rusher', 'hunter', 'breaker', 'saboteur'];
 const ALIEN_MODEL_NAMES = ['rusher', 'hunter', 'breaker', 'saboteur'] as const;

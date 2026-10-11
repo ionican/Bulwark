@@ -113,6 +113,8 @@ export interface EconomyReadout {
   upkeep: number;
   lost: boolean;
   won: boolean;
+  /** W29: belts on, so the mass and rare rates are what the core took (the line under the rows says so). */
+  delivered?: boolean;
 }
 
 /**
@@ -129,6 +131,7 @@ export function economyText(e: EconomyReadout): string {
     `${names[k]} ${e.pool[k]!.toFixed(k === 2 ? 1 : 0).padStart(7)} +${e.income[k]!.toFixed(1).padStart(5)}/s -${e.spend[k]!.toFixed(1).padStart(5)}/s${e.short[k] ? ` ▲SHORT${waitNote(k)}` : ''}`;
   return (
     `${row(0)}\n${row(1)}\n${row(2)}\n` +
+    (e.delivered ? 'mass and rare income: delivered at the core (10 s average)\n' : '') +
     `PARTS ${e.parts.toFixed(0)}   COMMANDER ${Math.max(0, e.commanderHp).toFixed(0)}/${e.commanderMax}\n` +
     `ALIENS ${e.aliens}   KILLS ${e.kills}` +
     (e.upkeep < 0.999 ? `   ENERGY UPKEEP ${(e.upkeep * 100).toFixed(0)}%` : '') +

@@ -422,6 +422,35 @@ const gatePlaceholder: Make = (m) => {
   return { name: 'gate', parts: [part('base', b)], radius: 1.6, height: 1.6 };
 };
 
+// ---- W29 core: where belts deliver mass and rare ------------------------------------------------
+// A 3 × 3 stepped block in the W19 style (ivory structure, gunmetal trim, cyan light strips): a
+// wide base, a chamfered body with a light strip round it, a tower with a ring, and an intake
+// chute in the middle of each side where the belts come in.
+const core: Make = (m) => {
+  const b = new Builder(m);
+  b.add('trim', cbox(2.94, 0.1, 2.94, 0.02, 0.3));
+  b.add('ivory', cbox(2.7, 0.7, 2.7, 0.05, 0.4), { y: 0.1 });
+  b.add('glow', cbox(2.72, 0.04, 2.72, 0, 0.4), { y: 0.62 });
+  b.add('trim', cbox(2.3, 0.12, 2.3, 0.02, 0.3), { y: 0.8 });
+  b.add('ivory', taper(cbox(1.7, 1.0, 1.7, 0.05, 0.25), 0.75), { y: 0.92 });
+  b.add('trim', cbox(1.1, 0.1, 1.1, 0.02, 0.12), { y: 1.92 });
+  b.add('copper', cyl(0.28, 0.34, 0.5, 8), { y: 2.0 });
+  b.add('glow', new OctahedronGeometry(0.22), { y: 2.75 });
+  for (let i = 0; i < 4; i++) {
+    const a = (i * Math.PI) / 2;
+    const cx = Math.cos(a);
+    const cz = Math.sin(a);
+    // intake chute: a dark mouth in a trim frame, a light strip above it
+    b.add('trim', cbox(0.3, 0.34, 0.62, 0.02), { x: cx * 1.36, y: 0.12, z: cz * 1.36, ry: -a });
+    b.add('hull', cbox(0.08, 0.2, 0.42, 0.01), { x: cx * 1.5, y: 0.18, z: cz * 1.5, ry: -a });
+    b.add('glow', cbox(0.02, 0.04, 0.5, 0.004), { x: cx * 1.36, y: 0.52, z: cz * 1.36, ry: -a });
+    // light strips up the tower faces
+    b.add('glow', cbox(0.02, 0.6, 0.06, 0.004), { x: cx * 0.78, y: 1.2, z: cz * 0.78, ry: -a });
+  }
+  b.add('trim', torus(0.5, 0.05, 6, 28), { y: 2.4, rx: Math.PI / 2 });
+  return { name: 'core', parts: [part('base', b)], radius: 2.1, height: 2.9 };
+};
+
 export const BUILDING_MAKERS: Record<BuildingKind, Make> = {
   massExtractor,
   generator,
@@ -442,4 +471,5 @@ export const BUILDING_MAKERS: Record<BuildingKind, Make> = {
   splitter: belt,
   merger: belt,
   gate: gatePlaceholder,
+  core,
 };

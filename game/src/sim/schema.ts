@@ -147,6 +147,12 @@ export const UNIT_MOVING = US_MOVING;
 export const G_SHORT = 13;
 /** Snapshot globals index of the research-done bit mask over RESEARCH (here for the same reason: snapshotRules.ts). */
 export const G_RESEARCH_DONE = 28;
+/** W29 snapshot globals (here for the same reason: the hover readouts and the HUD read them). */
+export const G_BELTS = 46; // 1 when extractor output travels by belt to the core
+export const G_CORE_ID = 47; // the core's building id, -1 when none
+export const G_CORE_MASS = 48; // mass the core has taken off belts
+export const G_CORE_RARE = 49; // rare the core has taken off belts
+export const G_SPENT = 50; // 50..52: exact cumulative spending, mass, energy, rare
 
 export const Q_MOVE = 0;
 export const Q_BUILD = 1;

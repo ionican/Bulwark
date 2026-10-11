@@ -22,7 +22,7 @@
 // The bytes depend on simulation state only (no timings), so equal state gives byte-identical
 // snapshots — the determinism tests compare them.
 
-import { ALIEN_FIELDS, BF_COMPLETE, BUILDING_FIELDS, G_RESEARCH_DONE, G_SHORT, PROJECTILE_FIELDS, UNIT_FIELDS, WRECK_FIELDS } from './schema.ts';
+import { ALIEN_FIELDS, BF_COMPLETE, BUILDING_FIELDS, G_BELTS, G_CORE_ID, G_CORE_MASS, G_CORE_RARE, G_RESEARCH_DONE, G_SHORT, G_SPENT, PROJECTILE_FIELDS, UNIT_FIELDS, WRECK_FIELDS } from './schema.ts';
 import { BYTES, makeArray, type AnyTypedArray, type ArrayFor, type FieldSpec, type Table } from './table.ts';
 import { SCENARIO_NAMES, type World } from './world.ts';
 import { STAT_COUNT } from './stats.ts';
@@ -109,11 +109,8 @@ export const G_RESPAWN_TICK = 42; // sandbox: tick the next commander appears, -
 export const G_COMMANDER_DEATHS = 43; // sandbox: commanders lost so far
 export const G_QUEUE_ORDERS = 44; // W25: orders in the queue section, all units
 export const G_QUEUE_BYTES = 45; // W25c: length of the queue section in bytes
-export const G_BELTS = 46; // W29: 1 when extractor output travels by belt to the core
-export const G_CORE_ID = 47; // W29: the core's building id, -1 when none
-export const G_CORE_MASS = 48; // W29: mass the core has taken off belts
-export const G_CORE_RARE = 49; // W29: rare the core has taken off belts
-export const G_SPENT = 50; // W29: 50..52 exact cumulative spending, mass, energy, rare
+// W29 globals 46–52 are in schema.ts (render code reads them): G_BELTS, G_CORE_ID, G_CORE_MASS, G_CORE_RARE, G_SPENT
+export { G_BELTS, G_CORE_ID, G_CORE_MASS, G_CORE_RARE, G_SPENT };
 
 
 type SnapFields<S extends readonly FieldSpec[]> = Exclude<S[number], { snap: false }>;

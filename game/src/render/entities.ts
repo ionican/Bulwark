@@ -9,7 +9,7 @@
 // drawn ground (ground.ts).
 
 import { DoubleSide, Frustum, InstancedMesh, Matrix4, MeshBasicMaterial, MeshLambertMaterial, Sphere, Vector3, type BufferGeometry, type Material, type PerspectiveCamera, type Scene } from 'three';
-import { B, ITEM_PART, SHIELD, U, alienInfo, isBelt, unitInfo } from '../sim/kinds.ts';
+import { B, ITEM_RARE, SHIELD, U, alienInfo, isBelt, unitInfo } from '../sim/kinds.ts';
 import { BF_COMPLETE, BF_UPGRADING, isReserved } from '../sim/schema.ts';
 import type { Terrain } from '../sim/terrain.ts';
 import { groundHeight as heightAt } from './ground.ts';
@@ -188,7 +188,8 @@ export class EntityRenderer {
     const model = new MeshLambertMaterial({ vertexColors: true, flatShading: true });
     const flat = new MeshBasicMaterial({ vertexColors: true });
     // Starting sizes as before; each grows up to what the simulation's tables allow.
-    this.items = new Batch(scene, itemGeometries(), [model], 1536, 0, C.buildings);
+    // one mesh per item kind (W29: mass and rare have their own), named overlay/item/<kind>
+    this.items = new Batch(scene, itemGeometries(), [model], 1536, 0, C.buildings, 'overlay/item');
     const dome = new MeshBasicMaterial({ color: '#cfe6ff', transparent: true, opacity: 0.12, depthWrite: false, side: DoubleSide });
     this.shields = new Batch(scene, [shieldDomeGeometry(), dashedRingGeometry()], [dome, flat], 128, 0, C.buildings);
     // W24 run 3 (D1): frames are depth-tested on their own material (a building in front hides the
@@ -305,7 +306,7 @@ export class EntityRenderer {
         // Belt item.
         if (belt && c.item[r]! !== 0) {
           const p = c.itemPos[r]! - 0.5;
-          this.items.push(Math.min(ITEM_PART, c.item[r]!), rc, rs, 1, 1, 1, x + BDX[c.dir[r]!]! * p, y + 0.12, z + BDZ[c.dir[r]!]! * p);
+          this.items.push(Math.min(ITEM_RARE, c.item[r]!), rc, rs, 1, 1, 1, x + BDX[c.dir[r]!]! * p, y + 0.12, z + BDZ[c.dir[r]!]! * p);
         }
         if (c.hp[r]! < c.maxHp[r]! - 0.5 && complete && !belt) this.bar(x, y + 2.4, z, c.hp[r]! / c.maxHp[r]!, size * 0.9, yc, ys);
       }

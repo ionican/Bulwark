@@ -44,7 +44,7 @@
 // replayed as a new shot. A new id in a building slot drops that slot's state. Pause resets nothing.
 
 import { ALIEN_KINDS, B, CARRY_CAPACITY, U, alienInfo } from '../sim/kinds.ts';
-import { BF_ACTIVE, BF_COMPLETE, BF_FIRING, BF_STARVED, US_BUILDING, US_RECLAIMING } from '../sim/schema.ts';
+import { BF_ACTIVE, BF_COMPLETE, BF_FIRING, BF_IDLE, BF_STARVED, US_BUILDING, US_RECLAIMING } from '../sim/schema.ts';
 import { wrapPi } from './walk.ts';
 import { smoothstep } from './workshop/noise.ts';
 
@@ -345,7 +345,8 @@ export class Animator {
    */
   motion(s: number, kind: number, flags: number, work: number): number {
     let speed = 0;
-    if (runsWhenComplete(kind)) speed = flags & BF_COMPLETE ? 1 : 0;
+    // W29: an extractor with a full buffer (BF_IDLE) is not digging, so it stands still
+    if (runsWhenComplete(kind)) speed = flags & BF_COMPLETE && !(flags & BF_IDLE) ? 1 : 0;
     else if (isMachine(kind)) {
       if (this.tick !== this.workTick[s]) {
         const ticks = this.tick - this.workTick[s]!;
