@@ -144,7 +144,7 @@ export function standInMaterials(): RenderMaterials {
   const depth = new MeshDepthMaterial();
   const asset: AssetMats = { byKey, depth, noise: new Texture(), all: Object.values(byKey) };
   const w17 = {} as Mats;
-  for (const k of W17_KEYS) w17[k] = new MeshStandardMaterial({ name: `${k}-cut`, map: k === 'belt' || k === 'beltStill' ? new Texture() : null });
+  for (const k of W17_KEYS) w17[k] = new MeshStandardMaterial({ name: `${k}-cut`, map: k === 'belt' ? new Texture() : null });
   const alien = { ...w17, hull: new MeshStandardMaterial({ name: 'alienHull-cut' }), trim: new MeshStandardMaterial({ name: 'alienTrim-cut' }) };
   return { asset, w17, alien, depth, plinth: new MeshStandardMaterial({ name: 'plinth' }), outline: outlineMaterial() };
 }

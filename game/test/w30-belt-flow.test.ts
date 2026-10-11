@@ -11,8 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { InstancedMesh, MeshStandardMaterial, Vector3, type Material, type Scene, type Texture } from 'three';
 import { B, BELT_TILES_PER_SECOND } from '../src/sim/kinds.ts';
 import { BELT_CORNER_L, BELT_CORNER_R, itemOnBelt } from '../src/render/beltShapes.ts';
-import { EffectClock } from '../src/render/anim.ts';
-import * as anim from '../src/render/anim.ts';
+import { EffectClock, frameTimes, type BeltFrame } from '../src/render/anim.ts';
 import { standInMaterials } from '../src/render/materials.ts';
 import { W17_BUILDING_MODEL, type ModelRenderer } from '../src/render/models.ts';
 import { bakeModel } from '../src/render/w17Batches.ts';
@@ -238,7 +237,6 @@ describe('W30 the splitter', () => {
 
 describe('W30 belt phase', () => {
   const runner = { speed: 1, paused: false, world: 0 };
-  type BeltFrame = { seconds: number; speed: number; paused: boolean; world: number };
   /** The straight belt mesh's texture offset (the shared scrolling texture, as drawn). */
   const offsetY = (scene: Scene): number => {
     let y = NaN;
@@ -300,13 +298,11 @@ describe('W30 belt phase', () => {
 
   it('main.ts’s frame path: a single 200 ms raw frame advances 0.2 at 1× (the cap) and at ¼× (0.1 with the 0.1 s-capped dt)', () => {
     const { r, scene, snap } = setup();
-    const times = (anim as unknown as { frameTimes?: (now: number, last: number, run: typeof runner) => { dt: number; belt: BeltFrame } }).frameTimes;
-    expect(typeof times, 'anim.ts frameTimes (main.ts’s per-frame time inputs)').toBe('function');
-    const t = times!(1200, 1000, runner);
+    const t = frameTimes(1200, 1000, runner);
     expect(t.dt, 'main.ts’s own dt stays capped at 0.1 s').toBeCloseTo(0.1, 9);
     expect(t.belt.seconds, 'the belt gets the raw frame time').toBeCloseTo(0.2, 9);
     expect(frame(r, scene, snap, t.belt, t.dt), '200 ms at 1×').toBeCloseTo(0.2, 6);
-    const q = times!(1200, 1000, { ...runner, speed: 0.25 });
+    const q = frameTimes(1200, 1000, { ...runner, speed: 0.25 });
     expect(frame(r, scene, snap, q.belt, q.dt), '200 ms at ¼×').toBeCloseTo(0.2, 6);
   });
 });

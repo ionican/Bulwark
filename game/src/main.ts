@@ -959,6 +959,9 @@ function toolText(): string {
  * row by row from the top. The same scene renders to the same pixels, so two captures differ only
  * by what was changed between them (an overlay hidden).
  */
+/** Rec. 709 luminance of the RGBA pixel at byte `i`. */
+const luminance = (d: ArrayLike<number>, i: number): number => 0.2126 * d[i]! + 0.7152 * d[i + 1]! + 0.0722 * d[i + 2]!;
+
 function captureRect(r: { x0: number; y0: number; x1: number; y1: number }) {
   const R = adapter.renderer;
   const dpr = R.getPixelRatio();
@@ -980,19 +983,19 @@ function captureRect(r: { x0: number; y0: number; x1: number; y1: number }) {
   for (let y = 0; y < h; y++)
     for (let x = 0; x < w; x++) {
       const i = ((h - 1 - y) * w + x) * 4;
-      data[y * w + x] = 0.2126 * buf[i]! + 0.7152 * buf[i + 1]! + 0.0722 * buf[i + 2]!;
+      data[y * w + x] = luminance(buf, i);
     }
   return { w, h, data };
 }
 
-/** W30: the map of the first drawn instanced mesh whose name passes `pick`, or null. */
-function drawnMap(pick: (name: string) => boolean): Texture | null {
-  let t: Texture | null = null;
+/** W30: the material of the first drawn instanced mesh whose name passes `pick`, or null. */
+function drawnMaterial(pick: (name: string) => boolean): MeshStandardMaterial | null {
+  let m: MeshStandardMaterial | null = null;
   scene.traverseVisible((o) => {
-    if (t || !(o instanceof InstancedMesh) || o.count <= 0 || !pick(o.name) || Array.isArray(o.material)) return;
-    t = (o.material as MeshStandardMaterial).map ?? null;
+    if (m || !(o instanceof InstancedMesh) || o.count <= 0 || !pick(o.name) || Array.isArray(o.material)) return;
+    m = o.material as MeshStandardMaterial;
   });
-  return t;
+  return m;
 }
 
 /**
@@ -1005,11 +1008,12 @@ function drawnMap(pick: (name: string) => boolean): Texture | null {
 function beltFlowReport(withTexture: boolean) {
   const flow = view.models.beltFlow;
   const scrolling = view.models.materials.w17.belt.map;
-  const straight = drawnMap((n) => n === 'w17/belt/belt-cut');
-  const corner = drawnMap((n) => /^w17\/beltCorner[LR]\/belt-cut$/.test(n));
-  const join = drawnMap((n) => /^w17\/beltJoin(L|R|LR)\/belt-cut$/.test(n));
-  const splitter = drawnMap((n) => /^w17\/splitter\/belt/.test(n));
-  const off = (t: Texture | null) => (t ? { offsetY: t.offset.y, uuid: t.uuid } : null);
+  const map = (pick: (name: string) => boolean) => drawnMaterial(pick)?.map ?? null;
+  const straight = map((n) => n === 'w17/belt/belt-cut');
+  const corner = map((n) => /^w17\/beltCorner[LR]\/belt-cut$/.test(n));
+  const join = map((n) => /^w17\/beltJoin(L|R|LR)\/belt-cut$/.test(n));
+  const splitter = drawnMaterial((n) => /^w17\/splitter\/belt/.test(n));
+  const off = (t: Texture | null) => (t ? { offsetY: t.offset.y } : null);
   let texture: { w: number; h: number; centre: number[]; edge: number[] } | null = null;
   const img = straight?.image as OffscreenCanvas | HTMLCanvasElement | undefined;
   if (withTexture && img && 'getContext' in img) {
@@ -1018,7 +1022,7 @@ function beltFlowReport(withTexture: boolean) {
       const { width: w, height: h } = img;
       const column = (x: number) => {
         const d = g.getImageData(x, 0, 1, h).data;
-        return Array.from({ length: h }, (_, r) => 0.2126 * d[r * 4]! + 0.7152 * d[r * 4 + 1]! + 0.0722 * d[r * 4 + 2]!);
+        return Array.from({ length: h }, (_, r) => luminance(d, r * 4));
       };
       texture = { w, h, centre: column(Math.floor(w / 2)), edge: column(Math.round(w * 0.12)) };
     }
@@ -1026,13 +1030,11 @@ function beltFlowReport(withTexture: boolean) {
   return {
     phase: flow.phase,
     step: flow.step,
-    frozen: flow.frozen,
-    reversed: flow.reversed,
     straight: off(straight),
     corner: off(corner),
     join: off(join),
     shared: !!straight && straight === corner && straight === scrolling && (!join || join === straight),
-    splitterScrolls: splitter ? splitter === scrolling : null,
+    splitterScrolls: splitter ? splitter.map === scrolling : null,
     texture,
   };
 }

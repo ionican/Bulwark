@@ -36,7 +36,6 @@ const IVORY: [number, number, number] = [232, 211, 174];
 let panels: PanelMaps | null = null;
 let wearNoise: CanvasTexture<OffscreenCanvas> | null = null;
 let beltTex: CanvasTexture<OffscreenCanvas> | null = null;
-let beltStillTex: CanvasTexture<OffscreenCanvas> | null = null;
 
 function withRepeat(t: Texture, r: number): Texture {
   t.repeat.set(r, r);
@@ -118,15 +117,6 @@ function beltTexture(): CanvasTexture<OffscreenCanvas> {
   return canvasTexture(c);
 }
 
-/** W30: the same rubber with no chevrons (a surface that must not show a direction: the splitter). */
-function beltStillTexture(): CanvasTexture<OffscreenCanvas> {
-  const c = new OffscreenCanvas(BELT_W, BELT_W);
-  const g = c.getContext('2d')!;
-  g.fillStyle = RUBBER;
-  g.fillRect(0, 0, BELT_W, BELT_W);
-  return canvasTexture(c);
-}
-
 function canvasTexture(c: OffscreenCanvas): CanvasTexture<OffscreenCanvas> {
   const t = new CanvasTexture(c);
   t.wrapS = t.wrapT = RepeatWrapping;
@@ -148,8 +138,6 @@ export function createMaterials(bank: TextureBank): Mats {
   // W30: the chevrons are seen at a grazing angle from the game camera
   beltTex.anisotropy = bank.anisotropy;
   bank.derived.add(beltTex);
-  beltStillTex = beltStillTexture();
-  bank.derived.add(beltStillTex);
 
   const mp = (k: string) => withRepeat(bank.tex(`metal_plate_02/${k}`), 0.55);
   const cu = (k: string) => withRepeat(bank.tex(`Metal047B/${k}`), 1.4);
@@ -237,7 +225,7 @@ export function createMaterials(bank: TextureBank): Mats {
     metalness: 0,
   });
   const belt = new MeshStandardMaterial({ name: 'belt', map: beltTex, roughness: 0.8, metalness: 0.1 });
-  const beltStill = new MeshStandardMaterial({ name: 'beltStill', map: beltStillTex, roughness: 0.8, metalness: 0.1 });
+  const beltStill = new MeshStandardMaterial({ name: 'beltStill', color: RUBBER, roughness: 0.8, metalness: 0.1 });
   for (const t of [panels.normal]) t.colorSpace = NoColorSpace;
   return { ivory, trim, copper, glow, glass, void: voidM, pad, hull, alienGlow, crystal, ore, belt, beltStill, hot, rock };
 }
@@ -246,11 +234,6 @@ export function createMaterials(bank: TextureBank): Mats {
 export function rebuildComposites(bank: TextureBank): void {
   if (!panels) return;
   panels = ivoryPanels(bank.pixels('Metal016/diff'), bank.pixels('Metal016/nor'), bank.pixels('Metal016/rough'), IVORY, bank.anisotropy, panels);
-}
-
-/** The chevron texture the `belt` material draws (and the renderer scrolls); null before createMaterials. */
-export function beltTextureRef(): Texture | null {
-  return beltTex;
 }
 
 export type { Material };

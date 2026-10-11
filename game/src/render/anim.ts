@@ -216,7 +216,7 @@ export interface BeltFrame {
 /** Per-frame time inputs from two rAF timestamps (ms): main.ts's own dt (capped at 0.1 s) and the belt clock's raw frame. */
 export function frameTimes(nowMs: number, lastMs: number, runner: { speed: number; paused: boolean; world: number }): { dt: number; belt: BeltFrame } {
   const seconds = (nowMs - lastMs) / 1000;
-  return { dt: Math.min(0.1, seconds), belt: { seconds: Math.max(0, seconds), speed: runner.speed, paused: runner.paused, world: runner.world } };
+  return { dt: Math.min(MAX_STEP, seconds), belt: { seconds: Math.max(0, seconds), speed: runner.speed, paused: runner.paused, world: runner.world } };
 }
 
 /**
@@ -227,16 +227,15 @@ export class BeltFlow {
   phase = 0;
   /** This frame's step (tiles). */
   step = 0;
-  reset = false;
   frozen = false;
   reversed = false;
   private readonly watch = new ResetWatch();
 
   /** Advances by one frame; `tick` is the current snapshot's tick. */
   advance(f: BeltFrame, tick: number): this {
-    this.reset = this.watch.check(tick, f.world);
+    const reset = this.watch.check(tick, f.world);
     const s = f.seconds * f.speed * BELT_TILES_PER_SECOND;
-    const step = this.reset || f.paused || !(s > 0) ? 0 : Math.min(BELT_FLOW_MAX_STEP, s);
+    const step = reset || f.paused || !(s > 0) ? 0 : Math.min(BELT_FLOW_MAX_STEP, s);
     this.step = this.frozen ? 0 : this.reversed ? -step : step;
     this.phase += this.step;
     return this;
