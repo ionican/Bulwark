@@ -30,7 +30,8 @@ border:1px solid rgba(244,239,230,.35);border-radius:4px;padding:6px 9px;pointer
 export class Hud {
   private readonly stats: HTMLDivElement;
   private readonly sel: HTMLDivElement;
-  private readonly res: HTMLDivElement;
+  /** The resource panel (`.hud.res`); ui/idleColumn.ts stackRightColumn stacks the panels below it. */
+  readonly res: HTMLDivElement;
   private help!: HTMLDivElement;
 
   toggleHelp(): void {
@@ -81,11 +82,6 @@ export class Hud {
   /** Resource pool, rates and shortages; text only ("SHORT" is a word, not a colour). */
   updateEconomy(e: EconomyReadout): void {
     this.res.textContent = economyText(e);
-  }
-
-  /** W29b: the resource panel's bottom edge (CSS px), for the right-hand column stacked below it. */
-  resBottom(): number {
-    return this.res.getBoundingClientRect().bottom;
   }
 
   showSelection(lines: string[]): void {

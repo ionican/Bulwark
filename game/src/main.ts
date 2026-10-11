@@ -38,7 +38,7 @@ import { createView, NO_WARMUP, type WarmupReport } from './render/view.ts';
 import { inspectPreview } from './render/preview.ts';
 import { EffectClock } from './render/anim.ts';
 import { idleUnits, nextIdle, type IdleUnits } from './render/idle.ts';
-import { IdleColumn, type IdleType } from './ui/idleColumn.ts';
+import { IdleColumn, stackRightColumn, type IdleType } from './ui/idleColumn.ts';
 import {
   ALIEN_INFO,
   ALIEN_KINDS,
@@ -295,9 +295,8 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
   // the worker's clock, on this page's (both count from their own time origin)
   const t = msg.timing;
   workerWindow.record({ ...t, startedAt: t.startedAt - performance.timeOrigin, endedAt: t.endedAt - performance.timeOrigin });
-  // W29b: the debug spawn box sits below the resource panel (which grew a line with belts); the
-  // idle units column places itself below both (ui/idleColumn.ts)
-  if (debugBox) debugBox.style.top = `${Math.round(Math.max(118, hud.resBottom() + 8))}px`;
+  // W29b: the resource panel, the debug spawn box and the idle units column, stacked
+  stackRightColumn(hud.res, debugBox, idleColumn.el);
   // W26: the idle units column follows each snapshot
   idleNow = idleUnits(snap);
   idleColumn.update(idleNow);
