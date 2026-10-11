@@ -1,0 +1,25 @@
+{
+  "name": "bulwark-game",
+  "version": "0.1.0",
+  "private": true,
+  "description": "W13: Bulwark greybox playable slice (browser, Three.js, simulation in a Web Worker)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 8822 --strictPort",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "tsc --noEmit && vitest run"
+  },
+  "dependencies": {
+    "n8ao": "2.0.1",
+    "postprocessing": "6.39.5",
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.1",
+    "@types/three": "0.186.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.3",
+    "vitest": "5.0.3"
+  }
+}

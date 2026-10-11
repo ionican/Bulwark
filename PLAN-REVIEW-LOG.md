@@ -1,0 +1,439 @@
+# W24 plan review log (append-only)
+
+Plan drafted by Claude (Opus 5.5 · high) via `/spec`, 2026-10-08 16:3x BST. Verify command confirmed red on the current tree (vitest exit 1, no matching test files); baseline `npm test` 77 of 77 pass.
+
+## Round 1 — Codex (GPT-6.1 Sol · high, thread 01a11c08-21e2-7100-b6ef-27f8bd7be7dc)
+
+The plan needs revision: several requirements conflict with existing code, and the verification can fail on missing files while still accepting a weak implementation.
+
+Read-only checks run this session: the missing W24 tests produced **“No test files found, exiting with code 1”**; game typechecking passed; the existing balanced plan won at tick **31,624**, with **5,880 commander HP**. Existing Vitest suites could not execute because their temporary-directory creation was denied (`EPERM`). No files were modified.
+
+1. **“Keep the simulation as it is” conflicts with construction passability.** Every occupied non-belt tile blocks both player movement and alien movement, regardless of completion. Executed probe: an untouched wall site had `progress: 0, walk: 0, open: 0`. Queued sites also reserve occupancy immediately, whereas W23 joins a tile when building starts. Sources: [world.ts:587](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/world.ts:587), [aliens.ts:17](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/aliens.ts:17), [W23 world.ts:154](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/w23/world.ts:154).  
+   **Fix:** Define reserved, started and complete states explicitly; test joining and both actors’ passability at each transition, including completion under a moving entity.
+
+2. **Appending `gate` breaks the supposedly frozen `look/` package.** `look` imports the game’s `BuildingKind`, and its `BUILDING_MAKERS: Record<BuildingKind, Make>` has no gate entry. The proposed game-only verification will miss this downstream type error. Sources: [layout.ts:5](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/world/layout.ts:5), [buildings.ts:405](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/models/procedural/buildings.ts:405).  
+   **Fix:** Resolve the workshop’s dependency on evolving game types before adding the kind, and include `look` typechecking in verification.
+
+3. **A gate cannot use the existing ordinary-building footprint machinery.** Buildings have one square `size`; placement requires empty ground, removal clears that square, and attack distances and picking use it. A rotated `3 × depth` gate replaces occupied walls. Sources: [world.ts:447](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/world.ts:447), [combat.ts:64](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/combat.ts:64), [picking.ts:41](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/picking.ts:41).  
+   **Fix:** Specify one footprint representation shared by occupancy, replacement, removal, distance calculations, ghosts, picking and snapshots.
+
+4. **Gate conversion leaves critical ownership and economy rules to the author.** Replacing planned walls can invalidate queued build IDs; replacing damaged or mixed-tier walls can heal them or grant upgrades. W23’s instantaneous painter conversion takes the highest footprint tier and clears damage—it supplies no construction-cost policy. Source: [grid.ts:294](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/w23/walls/grid.ts:294).  
+   **Fix:** Initially allow conversion only on finished walls, with explicit HP, tier, additional cost and atomic replacement rules.
+
+5. **“Straight run” understates W23’s actual placement restrictions.** W23 requires continuation beyond **both ends on every row**, plus clear ground immediately before and behind the footprint. Executed probe: a three-tile straight wall refused a gate; extending it to five tiles accepted one. Source: [grid.ts:244](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/w23/walls/grid.ts:244).  
+   **Fix:** Adopt the complete predicate and test both axes, depths 1–4, ends, side joins, excessive depth and placement-state changes before application.
+
+6. **Gate passability and flow cost need more than a kind check.** Opening the entire three-column footprint lets player paths cross pylons; changing the shared alien `open` grid could permit diagonal alien crossings. If one gate owns all rows, charging its full HP cost on every row overprices breaking an entity destroyed once. Sources: [layout.ts:170](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/w23/walls/layout.ts:170), [world.ts:606](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/world.ts:606).  
+   **Fix:** Define a conservative friendly corridor, separate alien corner blocking, and a documented gate-cost approximation; test pylons, diagonals, deep gates and destruction.
+
+7. **Long wall runs exceed existing order limits.** Each unit holds at most 64 orders; `giveOrder` rejects further additions after sites may already have been created. Executed probe: 70 assignments queued 64 and rejected six. Even a normal 128-tile drag exceeds this limit. Sources: [world.ts:57](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/world.ts:57), [world.ts:422](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/world.ts:422).  
+   **Fix:** Represent a run as one resumable order, or preflight available queue/table capacity before creating any sites.
+
+8. **Wall-run ordering and tiers are underspecified.** “Nearest the builders” does not define the reference point for multiple builders, ties or assignments. Ordinary placement always creates tier 1; tier 2/3 normally require researched upgrades and additional costs. Sources: [world.ts:453](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/world.ts:453), [balance.ts:62](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/balance.ts:62).  
+   **Fix:** Freeze endpoint/depth conventions and deterministic tie-breaks, and construct selected tiers through the existing paid upgrade sequence.
+
+9. **Sandbox identity is absent from persistent world state.** `ScenarioName` chooses initialisation but is not stored on `World`; loading reconstructs a world from terrain and wave availability. A scenario check attached only to the URL or worker initialisation will misclassify loaded saves. Sources: [scenarios.ts:15](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/scenarios.ts:15), [save.ts:206](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/save.ts:206).  
+   **Fix:** Persist and snapshot scenario identity, and test loading sandbox and map1 saves through both entry modes.
+
+10. **The sandbox can permanently stop accepting useful commands.** Commander death sets loss; `World.step()` then returns before applying commands, and the runner stops advancing. Executed probe: a queued command remained queued after loss. Wave completion can also end a sandbox if implemented using the normal schedule. Sources: [world.ts:270](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/world.ts:270), [runner.ts:67](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/runner.ts:67).  
+    **Fix:** Explicitly choose sandbox end-state behaviour and provide a tested reset/restart path, including wave replay and pending-spawn clearing.
+
+11. **Exact non-overlapping spawning is not always possible.** The requested radius is undefined; the point may be blocked, surrounded, outside the map or already crowded. Alien allocation throws when its fixed table fills. Sources: [world.ts:528](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/world.ts:528), [table.ts:84](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/table.ts:84).  
+    **Fix:** Define bounded deterministic placement search, radius/spacing and capacity limits, with atomic refusal when the full count cannot fit.
+
+12. **Arbitrary spawn routes will not appear in the existing overlay.** Snapshots contain traces from map entry points only; neither the route structure nor `computeRoutes()` describes arbitrary spawn origins. Saboteurs also temporarily pursue nearby engineers instead of following their field. Sources: [world.ts:704](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/world.ts:704), [aliens.ts:118](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/aliens.ts:118).  
+    **Fix:** Snapshot bounded traces from selected spawn origins and distinguish predicted field routes from opportunistic pursuit in acceptance tests.
+
+13. **Tuning lacks a supported-field matrix, units and safe bounds.** Alien damage is `dps`, range is `reach`, attack interval is a constant, and movement speeds are stored in tiles **per tick**. Buildings and units have fields that do not apply to every kind. Large HP values expand the flow-field bucket allocation; tiny turret intervals hit the ten-shot-per-tick guard. Sources: [kinds.ts:185](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/kinds.ts:185), [aliens.ts:15](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/aliens.ts:15), [flowfield.ts:44](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/flowfield.ts:44).  
+    **Fix:** Specify world-local overrides, applicable fields, display/internal units and finite bounds, including research/tier composition and reset semantics.
+
+14. **Acceptance criteria 5 and 6 contradict existing mechanics.** Doubling raw gun damage does not generally double HP loss: executed against a breaker, 30 → 60 damage produced **5 → 35 HP loss**. Unlimited spending also cannot leave the pool unchanged while income continues: the normal start gained `0.1 mass` and `1 energy` in one tick. Heavy ammunition comes from `parts`, a separate inventory. Sources: [combat.ts:178](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/combat.ts:178), [economy.ts:20](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/economy.ts:20), [combat.ts:248](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/combat.ts:248).  
+    **Fix:** Assert raw damage or armour-adjusted expected loss, define tuning of in-flight shots, and test unlimited as zero expenditure with normal income and ammunition bypass.
+
+15. **Stats cannot reliably attribute hits with the current projectile schema.** Projectiles store targets but no source entity/kind. Delayed impacts, splash, destroyed shooters and reused slots require retained attribution; summed live-building stats lose historical damage. Commander kills also invalidate “building totals equal all deaths” unless isolated. Sources: [schema.ts:114](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/schema.ts:114), [combat.ts:331](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/combat.ts:331).  
+    **Fix:** Carry source identity/kind through projectiles, retain historical aggregates, and define overkill, shields, kill ownership, clears and reset boundaries.
+
+16. **Snapshot/save verification is too narrow.** Layout changes require a snapshot-version change; saves explicitly enumerate additional state. A terminal snapshot omits paths, cooldowns and other future-affecting state, so two terminal snapshots can match despite broken continuation—or ignored commands. Sending stats less frequently also needs a deterministic retention contract. Sources: [schema.ts:1](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/schema.ts:1), [save.ts:107](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/save.ts:107), [determinism.test.ts:22](/Users/codepanda/Projects/worktrees/bulwark-w24/game/test/determinism.test.ts:22).  
+    **Fix:** Version the formats, verify command effects and tick advancement, compare intermediate snapshots, and test save/load continuation through gates, tuning, queued runs and in-flight combat.
+
+17. **The renderer port includes a different terrain model and prototype simulation logic.** W17’s mesh uses an analytic canyon heightfield with fixed demo-building flattening; picking uses W13’s rolling heightfield. W23 units advance tasks and construction themselves, while W21 aliens have their own simulation. Copying those controllers violates snapshot-only rendering. Sources: [terrainMesh.ts:14](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/world/terrainMesh.ts:14), [heightfield.ts:134](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/world/heightfield.ts:134), [units.ts:123](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/w23/units.ts:123).  
+    **Fix:** Port geometry/materials and pure rigs behind snapshot adapters, use one ground source for mesh/picking/feet, and freeze mappings from game turret kinds to W22 kit models.
+
+18. **Performance acceptance can pass a depleted or mostly invisible scene.** Counts are specified only initially; combat can remove entities. “Hold 55 fps” lacks duration, warm-up, frame-time percentile, visible counts and DPR. The existing game allows DPR 2, while workshop medium caps it at 1. Wall-grid damage changes can trigger full instance-layout rebuilding. Sources: [adapter.ts:20](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/adapter.ts:20), [post.ts:25](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/stress/post.ts:25), [world.ts:222](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/w23/world.ts:222).  
+    **Fix:** Automate fixed-camera, sustained-population benchmarks with DPR, visible counts, average/1% low FPS and worker timings; separate topology rebuilds from damage/progress updates.
+
+19. **The browser fixture is expensive and does not force wall interaction.** Twenty walls cost 2,000 mass against 600 starting mass and 1/s initial income. An executed equivalent fixture took **1,400.1 simulated seconds**. A short free-standing wall can be bypassed, and the script never explicitly builds the turret whose kills it expects. Source: [map1.ts:35](/Users/codepanda/Projects/worktrees/bulwark-w24/model/data/map1.ts:35), [map1.ts:85](/Users/codepanda/Projects/worktrees/bulwark-w24/model/data/map1.ts:85).  
+    **Fix:** Use a funded, bounded fixture with an enclosure or rock-bounded corridor, a specified turret, explicit command acknowledgements and separate tests for resource drain.
+
+20. **The Verify command fails the unbuilt tree but does not discriminate implementation quality.** Missing files cause failure; placeholder tests could remove that failure. The command does not start its server, establish build identity, automate performance, or exercise actual dragging and panel controls—`__game.buildRun` bypasses them. M2 can retain greybox assets and still satisfy the listed automated assertions. Source: [PLAN.md:94](/Users/codepanda/Projects/worktrees/bulwark-w24/PLAN.md:94).  
+    **Fix:** Use locked installation, launch/clean up a strict-port server from the tested tree, freeze behavioural assertions, exercise real controls, and require deliberate no-op/solidity mutations to fail.
+
+21. **One author run contains too many independently risky integrations.** M1 alone combines footprint replacement, order management, persistence, tuning, spawning, research overrides and combat attribution; M2 then changes terrain, animation, materials and rendering before those contracts have settled. Source: [PLAN.md:105](/Users/codepanda/Projects/worktrees/bulwark-w24/PLAN.md:105).  
+    **Fix:** Make mechanics with greybox rendering, snapshot-driven asset integration, and controls/performance three separately reviewed author runs, with contracts frozen between them.
+
+VERDICT: REVISE
+### Claude's response
+
+All 21 findings accepted; the cited lines were spot-checked this session (W23 `checkGateAxis` at `look/src/w23/walls/grid.ts:240–290` read; `look` typecheck passes today, rc 0). PLAN.md rewritten:
+
+- 1 → explicit reserved / started / complete table, displacement rule, transition tests.
+- 2 → `gate` entry added to `look`'s `BUILDING_MAKERS`; `look` typecheck in Verify.
+- 3 → rectangular `fw × fh` footprints everywhere `size` was used, with an unchanged-behaviour test per kind.
+- 4 → conversion on complete walls only, atomic, tier 1, no refund, cost and hit-point rules fixed.
+- 5 → W23 predicate ported verbatim, each refusal case tested.
+- 6 → 1-tile friendly corridor (centre column), outer columns solid, no diagonal alien crossing, gate cost spread over depth.
+- 7 → one run order per builder over a 32-entry run table; refusal before creation.
+- 8 → geometry, tie-breaks and order frozen; drags tier 1 only, upgrades through the paid path.
+- 9 → scenario stored in world state, saves and snapshots; tested both directions.
+- 10 → no end state in the sandbox; commander respawns after 100 ticks; `resetSandbox`.
+- 11 → spiral search, radius 6, spacing 0.8, atomic refusal, count 1–50.
+- 12 → up to 8 spawn origins with route traces in the snapshot; route tests avoid saboteurs.
+- 13 → tuning as 0.1–10× multipliers with a field matrix; in-flight shots keep their damage.
+- 14 → criteria now assert raw damage per shot and zero expenditure with income continuing, parts included.
+- 15 → shooter kind and id carried on projectiles; historical per-kind counters; overkill, splash, shields, clears defined.
+- 16 → format versions bumped; hash every 100 ticks; save/load continuation test.
+- 17, 18, 19, 20 → moved into the run 2 and run 3 outlines (renderer port from snapshots with one ground source; benchmark spec; funded bounded browser fixture; real controls). Not built in run 1.
+- 21 → the work is split into three author runs; this plan locks run 1 only.
+
+Rejected: the "mutation testing" half of finding 20 (deliberate no-op mutations must fail). Out of proportion for a personal prototype; the session's own per-criterion read of each test file and its own browser probes cover the same risk.
+
+No round 2: Richard's standing rule is one plan review plus one post-build review for work at this stake (29 Sep). The plan is locked for run 1.
+
+## Act 3 — Build (run 1)
+
+`author` subagent (Opus 5.5 · high), 51 min, commits `b94cd7a`..`1b2ab8f`. Calling session's out-of-band check, 2026-10-08 17:0x: frozen Verify exit 0 (W24 files 8/8, 94 tests; `npm test` 171/171; game build; `look` tsc clean). Test bodies read for stats (sums checked every tick; ≥18 of 20 kills accepted because the sums are exact) and gate passage (route crosses gate, no alien on gate tiles incl. diagonals, passes after destruction). Browser probes on :8822: 26-tile depth-2 run built with free spending (spend 0, mass up by income only); 3 × 2 gate built; engineer crossed only at x = 64.5; 20 rushers spawned and killed, gun credited 6 kills; sandbox commands refused on map 1; 0 errors. Post-build `/adversarial-review` not yet run.
+
+## Act 3 — /simplify and post-build adversarial review (run 1)
+
+`/simplify`: four read-only reviewers (reuse, simplification, efficiency, altitude); 17 merged fixes applied by the run 1 author in `b2d503a`. Calling session's check: frozen Verify green (171/171), 0 test assertion lines changed, 112 snapshot/save fingerprint hashes identical before and after (temporary worktree at `37cb7c6` with the same script), balanced plan tick 31,468, commander 6,000 HP. Skipped by decision: scenario-rules table, full passability unification, footprint-scaling kind property.
+
+`/adversarial-review` (Codex GPT-6.1 Sol · high, thread 01a11c8a-de94-7d00-a707-07c81e7d4ce8), verdict needs-attention, four reproduced failures:
+- high: startWave at alien capacity throws 'entity table full' and stops the worker (validate.ts:139).
+- high: speed tuning lets a saboteur cross a complete gate in one tick (aliens.ts:91; movement checks only the destination tile).
+- medium: apply-time refusals are never reported (worker.ts:65).
+- medium: the reservation draw batch caps at 1,024 while three valid max runs make 1,536 (entities.ts:215).
+All four accepted; sent to the author test-first. Run 2 waits for these fixes.
+
+### Adversarial findings fixed (run 1)
+
+Author commits `e8167ad` (regression tests) and `60ebba6` (fixes). Calling session's check: the new `test/w24-review.test.ts` run on `e8167ad` → 9 of 14 fail (all four findings represented); on `60ebba6` frozen Verify green, `npm test` 185/185; balanced plan wins at tick 31,452, commander 6,000 HP (was 31,468: one engineer move at tick 22,208 used to cut 0.17 tiles across a heavy-cannon corner and now stops short — author's trace, not re-derived); browser on :8822: three conflicting spawnAt → 1 applied, 2 refused with the reason delivered, 0 errors. Run 1 closed.
+
+## Run 2 plan — Round 1, Codex (GPT-6.1 Sol · high, thread 01a11ca2-38f1-79b1-ae59-c638270b2ad4)
+
+Run 2 needs revision. The five turret IDs exist, but several porting and verification contracts remain incomplete.
+
+Read-only checks this session: game and workshop typechecks passed; all five workshop test files passed; the probes below executed successfully. Git status and diff were empty. Workshop performance figures below are recorded results, not measurements rerun here.
+
+1. **Projectile snapshots cannot reliably trigger firing effects.** A gun probe produced `afterFire: 1, afterProjectileStep: 0`: the shot hit before snapshot encoding. The beam probe produced no projectile at all. Worker catch-up also publishes only after several ticks. Shooter attribution exists, but missed shots cannot be reconstructed from it. Sources: [combat.ts:287](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/combat.ts:287), [worker.ts:35](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/worker.ts:35).  
+   **Fix:** Explicitly accept best-effort flashes from `BF_FIRING` once per newly observed tick, or separately authorise persistent shot/impact events.
+
+2. **W20 aiming and W21 shells describe different physics from the game.** `solveIntercept` assumes gravity and ballistic flight; game projectiles move horizontally towards a continuously updated target. W21 `ShellPool.update` independently determines alien and ground collisions. Snapshots omit projectile target, destination, speed and flight age, so porting that behaviour would invent trajectories and impacts. Sources: [aim.ts:126](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/bench/aim.ts:126), [effects.ts:97](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/stress/effects.ts:97), [schema.ts:139](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/schema.ts:139), [combat.ts:329](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/combat.ts:329).  
+   **Fix:** Specify direct visual aiming for the existing game physics and port effect drawing/pooling without workshop collision or ballistic simulation.
+
+3. **“One ground” currently fails mathematically.** The game uses bilinear heights; its mesh uses two planar triangles per tile. Executed across every map cell centre, 498 exceeded the proposed tolerance; at `(75.5, 13.5)`, mesh height was `2.708135`, sampler height `2.533147`, difference `0.174988` tiles. W21’s `Ground` also interpolates bilinearly. Sources: [terrainView.ts:96](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/terrainView.ts:96), [terrain.ts:220](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/terrain.ts:220), [world.ts:70](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/stress/world.ts:70).  
+   **Fix:** Use one sampler matching the actual mesh triangles, and test rock boundaries, real screen rays and transformed planted-foot contacts—not merely three height helpers.
+
+4. **The terrain decision leaves substantial new geometry unspecified.** W17’s builder obtains heights and `dark/pave/cliff` shader masks from the analytic field, which imports workshop layout and flattens its fixed buildings. Keeping game terrain is workable, but does not supply those masks, terraced outcrops, an exterior transition or foundations for arbitrary placements on slopes. Equal centre heights cannot prevent a wide building floating or intersecting the ground. Sources: [terrainMesh.ts:49](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/world/terrainMesh.ts:49), [heightfield.ts:134](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/world/heightfield.ts:134), [entities.ts:359](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/entities.ts:359).  
+   **Fix:** Define game-derived shader masks, rock/scenery geometry, edge stitching and cosmetic foundations while retaining one explicit playable ground surface.
+
+5. **Wall layout depends on more than the occupied tile set.** W23 selects tier-specific faces and joints; `WallGrid.set` increments its version on tier changes. A tier upgrade leaves the tile set unchanged, so the frozen rebuild rule would retain obsolete parts. Reserved-to-started joining and wall-to-gate replacement likewise need explicit structural treatment. Sources: [grid.ts:153](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/w23/walls/grid.ts:153), [layout.ts:107](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/w23/walls/layout.ts:107), [schema.ts:54](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/schema.ts:54).  
+   **Fix:** Version layout by joining eligibility, tier, wall/gate identity and gate axis/footprint, with tests for each transition while HP-only changes remain rebuild-free.
+
+6. **The turret table mixes incompatible drawing contracts.** W21’s `InstancedTurrets` uses the single W20 model’s `base/pinion/yaw/cradle/barrel` slots; W22 kinds use six pivots, per-part offsets and recoil scaling. The mappings are valid IDs, but their existence test cannot prove that anvil, lantern or rampart are actually assembled correctly. Sources: [turretLevels.ts:140](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/stress/turretLevels.ts:140), [kit.ts:51](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/kit/kit.ts:51), [strategies.ts:62](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/kit/strategies.ts:62).  
+   **Fix:** Select W22 strategy B explicitly, batch by part × material × level, and verify each mapping’s actual parts, footprint transform and muzzle position through yaw/pitch/recoil changes.
+
+7. **The lighting/post port needs an adapter redesign, and the camera source changes controls.** `Lighting` and `StressPost` require a concrete `WebGLRenderer`; the game adapter hides it and exposes no quality or frame-time interface. The listed workshop camera installs `OrbitControls`, unlike the game’s strategic rig and input handling. Sources: [adapter.ts:7](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/adapter.ts:7), [lighting.ts:46](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/render/lighting.ts:46), [post.ts:40](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/stress/post.ts:40), [camera.ts:28](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/render/camera.ts:28).  
+   **Fix:** Specify the adapter’s composer, quality, resize and timing lifecycle, retaining the game camera and controls.
+
+8. **W20 construction is neither snapshot-driven nor independently instanced.** `Construction` advances its own fixed-duration clock, creates ghost objects around one `TurretRig`, and writes the shared `build` control. Using it directly would synchronise unrelated sites or advance them independently of simulation progress. W23’s per-instance cut and custom depth material provide the appropriate mechanism. Sources: [construction.ts:24](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/bench/construction.ts:24), [construction.ts:52](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/bench/construction.ts:52), [batches.ts:66](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/w23/batches.ts:66).  
+   **Fix:** Use snapshot `flags/progress` for per-instance construction cuts and shadows; test two simultaneous sites at different progress values.
+
+9. **Animation adaptation lacks state, time and reset rules.** `AlienRenderer.update` requires `AlienSim` arrays including height, heading, phase and seed; these need render-side derivation. Extractor `working` is not `BF_ACTIVE`—income extractors never receive that flag. Unit `work` refers to either a building or wreck, distinguished by unit state. Stateful planted feet and recoil also need resets after teleport, rewind, load and ID reuse. Sources: [aliens.ts:347](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/stress/aliens.ts:347), [economy.ts:62](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/economy.ts:62), [schema.ts:107](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/schema.ts:107), [biped.ts:202](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/w23/rig/biped.ts:202).  
+   **Fix:** Freeze a per-kind animation input matrix, simulation-time clock and generation-aware reset policy, including reclaiming, pause, speed changes and discontinuities.
+
+10. **“Every kind” coverage cannot come solely from the named assets.** W23 icons cover its workshop assets; kit icons cover turrets, leaving other buildings and aliens without the promised source icons. W17 maps both splitter and merger to the ordinary belt model, so “uses its named source” can pass while concealing their different functions. Sources: [icons.ts:20](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/w23/icons.ts:20), [buildings.ts:432](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/models/procedural/buildings.ts:432).  
+   **Fix:** Freeze the complete model/icon/fallback inventory before authoring, including explicit distinguishable splitter and merger representations.
+
+11. **The workshop timings do not establish combined-scene performance.** W21 measured turrets plus aliens; W23 measured walls, builders and extractors separately. Both reused the same expensive terrain/post stack. Recorded W21 terrain cost was about 5 ms at the game camera and 13 ms at full zoom; medium still casts terrain shadows. The new terrain/scenery implementation has no geometry or shader budget. Sources: [README.md:130](/Users/codepanda/Projects/worktrees/bulwark-w24/look/README.md:130), [README.md:304](/Users/codepanda/Projects/worktrees/bulwark-w24/look/README.md:304), [post.ts:25](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/stress/post.ts:25).  
+   **Fix:** Measure the combined game scene early, define terrain/scenery and post budgets, and add a gated strategic-zoom target.
+
+12. **The benchmark can still pass a mostly invisible or idle scene.** Criterion 8 reports visible counts but gates only population. Its camera pose and entity placement are unspecified, and nothing requires engineers to build, turrets to fire or aliens to attack. A scene containing the target population outside the view can pass. Source: [PLAN.md:159](/Users/codepanda/Projects/worktrees/bulwark-w24/PLAN.md:159).  
+   **Fix:** Freeze camera coordinates, placements, per-kind visible/LOD minima and activity counters, and fail when any required condition drops during measurement.
+
+13. **Reserved-wall capacity does not exercise the expensive wall renderer.** The 1,536-tile fixture draws outlines, bypassing W23’s multi-part wall geometry. It also misses finished walls, gates, construction cuts and strategic icons; workshop `GroundIcons` defaults to only 1,024 instances per icon. Sources: [entities.ts:380](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/entities.ts:380), [icons.ts:202](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/w23/icons.ts:202).  
+   **Fix:** Test reserved, started and completed maximum runs across tiers and LODs, counting actual submitted part instances and checking every subordinate buffer’s capacity.
+
+14. **Verify does not discriminate a hollow implementation sufficiently.** `renderInfo()` can report source names, triangles and counts independently of drawn objects—the existing W23 `count()` already accepts caller-supplied object counts. The frozen command neither specifies server/build identity nor executes the separate fingerprint comparison; that script is explicitly outside `npm test`. Four screenshots cannot establish every-kind coverage. Sources: [batches.ts:134](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/w23/batches.ts:134), [fingerprint.test.ts:1](/Users/codepanda/Projects/worktrees/bulwark-w24/game/scripts/fingerprint.test.ts:1), [PLAN.md:165](/Users/codepanda/Projects/worktrees/bulwark-w24/PLAN.md:165).  
+   **Fix:** Make Verify launch and clean up the tested build, automate baseline fingerprints, inspect actual scene geometry/materials/transforms, and require hidden-mesh, greybox, frozen-animation and wrong-mapping mutations to fail.
+
+15. **One author run still contains several independently risky integrations.** This is a renderer/post interface change, a new terrain implementation, two different instancing systems, snapshot animation reconstruction, effects adaptation and verification infrastructure—not just copying accepted assets. Source: [PLAN.md:133](/Users/codepanda/Projects/worktrees/bulwark-w24/PLAN.md:133).  
+   **Fix:** Split into separately reviewed runs for ground/post and static models, snapshot-driven walls/rigs, then combat effects and combined performance.
+
+VERDICT: REVISE
+### Claude's response
+
+Accepted 1–13 and 15; the run 2 section is rewritten and split into 2a (ground, lighting/post, static models, walls/gates, construction, icons) and 2b (animation, effects, combined performance gate, outline only):
+1, 2 → 2b: direct aiming with the game's flat physics; flashes best-effort from the firing flag once per observed tick; no workshop collision or ballistic solver.
+3 → one sampler equal to the mesh triangles; test vs mesh, screen-ray picks, feet and bases.
+4 → game-derived shader masks, terraced outcrops on rock, stitched exterior scenery, cosmetic plinths; 2a terrain and post budgets.
+5 → wall layout key includes tier, construction class, gate identity, axis and footprint; one test per transition.
+6 → W22 strategy B for all five turret kinds; per-kind part list, footprint and yaw-pivot tests.
+7 → adapter owns renderer, composer, quality, resize and timing; game camera and controls stay.
+8 → W23 per-instance cut driven by snapshot progress; two-site test.
+9 → 2b animation input matrix, sim-time clock, reset rules; extractor "working" = complete.
+10 → frozen model and icon inventory; splitter and merger distinct.
+11, 12 → budgets measured in 2a; gated combined benchmark with frozen pose, visibility minima and activity counters in 2b.
+13 → capacity fixtures in every state, tier and detail level, counting submitted part instances.
+14 → partly: Verify now builds and serves its own tree, runs the fingerprint comparison against `60ebba6`, and tests inspect the actual scene graph rather than a renderer self-report. Rejected: required mutation tests (out of proportion for a personal prototype; the calling session reads the tests and looks at the screenshots).
+15 → split as above.
+
+No round 2 (Richard's one-plan-review rule, 29 Sep). Run 2a locked.
+
+## Act 3 — Build (run 2a)
+
+`author` subagent (Opus 5.5 · high), 64 min, commits `bca659c`..`25405f2` (103 files, +13,754 / −131). Calling session's out-of-band check, 2026-10-08 ~20:3x: frozen Verify exit 0 — 2a tests 43/43, `npm test` 228/228, build, `look` tsc, fingerprint vs `60ebba6` identical (68 / 14 / 30 hashes), check-render: 0 console errors on map 1, sandbox, stress; 25 of 25 inventory kinds with models and icons, 0 greybox; terrain + scenery 2.71 ms (budget 5), post 2.48 ms (budget 3.5); stress scene paused 140 fps uncapped at the game camera, 115 at full zoom-out. `git diff d0ff07f..HEAD -- game/src/sim model look` empty; no existing test assertion changed. Screenshots viewed by the calling session: models read well close up; weak points — the playable map reads as a flat square board with straight cut edges and blocky flat-topped scenery (far from the reference image); W13 route arrows clutter every view; aliens near-black; repeating dark blotches in the ground texture. Visual sign-off pending Richard.
+
+### Run 2a follow-up (Richard's feedback)
+
+Author commits `39dcf77`, `fe171f0`, `2064dbb`. Calling session's check, 21:4x (machine load average 16–25 from other sessions): frozen Verify exit 0 — 2a tests 56/56, `npm test` 241/241, fingerprint strict-identical to `60ebba6` (terrain heights are storage only), check-render 0 console errors, 25/25 kinds modelled; real-mouse input checks pass (click selects without camera move; Shift-drag box-selects; build-mode drag queues a 10-tile run; left-drag orbits; right-drag pans). Terrain + scenery 4.16 ms median (3.69 / 5.04 / 4.16) against 5 ms on a loaded machine — re-measure quiet; post 2.07 ms. Walking: 40 engineers + 300 aliens, scene update 0.60 ms CPU. Screenshots viewed: tilted view close to the reference (haze, mesas); routes gone; aliens readable; map edge irregular with terraced walls; some distant peaks are sharp low-poly spikes; undulation subtle in the wide view. Old `w24-2a-*` screenshots were deleted by the author and replaced by `w24-2a2-*`.
+
+## W25 — build queue (Supreme Commander style) and live drag preview
+
+Author commits `e1286f0` (tests, red 13/25 before the change), `87ee3e6`, `5c42b65`. Calling session's check, 22:4x: frozen Verify exit 0 — w25 tests 41/41, `npm test` 282/282, build, look tsc, fingerprint with the queue section stripped identical to `60ebba6`, check-render and check-queue all pass with real mouse input (Shift-queue, panel remove, unshifted replace removes orphaned reserved sites and keeps started ones, mid-drag preview drawn before release and matching the sites after release, Esc cancels). No pre-existing test assertion changed. Balanced plan wins at tick 31,439 (was 31,452), commander 6,000 HP: the scripted plan's unshifted assist now removes an orphaned reserved rebuild site under the new replace rule — accepted by Claude as the intended consequence of Richard's rule. Screenshots `w25-queue-*.png` viewed.
+
+## W25b — waiting markers and Stop clears the queue
+
+Author commits `fad7718` (tests, red), `d1b55fc`, `b1bdc5b`. Cause of Richard's "freeze" (confirmed by Richard: "the mass ran out"): starting mass ~600 gone by tick ~280; walls cost 100 mass on 1 mass/s income. The simulation was correct; the player could not see why. Calling session's check, 05:5x 9 Oct: frozen Verify exit 0 — w25b 14/14, `npm test` 297/297, fingerprint (queue stripped) identical, check-render and check-queue pass (hourglass "waiting for mass" on 2 sites, 2 builder labels, readout "▲SHORT · 2 sites waiting", markers clear on supply, Stop removes 11 reserved tiles and the run and keeps 8 started). Changed assertions: only the two old "Stop keeps reserved sites" tests, reversed per Richard. Balanced plan 31,439 / 6,000 HP unchanged. Page-load stall: author traced it to three.js first-use shader compilation on the main thread (2.2–2.4 s, only with 5+ game tabs open); the worker kept ticking; not fixed — pre-compiling shaders at startup is the fix path.
+
+## Post-build adversarial review — 2a, follow-up, W25, W25b
+
+Codex GPT-6.1 Sol · high, thread 01a11f0b-309b-7152-b852-f36cb9e1c7d7, base `60ebba6`. Verdict needs-attention, five reproduced findings: (high) unshifted replacement of an overlapping wall run leaves holes (world.ts:428); (high) queue overlay cost unbounded — 256 units × 64 orders gave 6.66 M dash instances, 514 MiB, ~164 ms per update (queueView.ts:313); (medium) stale dequeue removes a different move/produce order — orders lack identity (queue.ts:54); (medium) gait reset detection runs on interpolated positions, so teleports and rewinds animate instead of resetting (walk.ts:64); (medium) ground-projection picking misses visible units at low tilt (picking.ts:142). All accepted; target for the overlay set at 40 engineers × 64 orders at 60 fps with hard caps for the 256-unit worst case (proportionate: a real game has a handful of engineers). Sent to a fresh `author` subagent test-first as W25c.
+
+## Run 2b — plan (`/spec`, 2026-10-09)
+
+Plan section "Run 2b" drafted by Claude from the outline and findings 1, 2, 9, 11, 12, after W25c closed at `dc28343`. Walking and discontinuity resets already landed (`fe171f0`, W25c) and are out of scope. Frozen Verify confirmed red on the current tree (no `test/w24r2b-*` files; vitest exits 1). One Codex plan round (MAX_ROUNDS 1, Richard's one-plan-review rule), GPT-6.1 Sol · xhigh.
+
+## Round 1 — Codex (run 2b plan; GPT-6.1 Sol · xhigh, thread 01a11f8a-9dba-7202-8fa0-3a3dce32b18e)
+
+Run 2b needs revision. I ran read-only probes; the full Verify command was not run because it installs dependencies and writes build output.
+
+1. **The machine flags are wrong.** Generators produce income when complete and never receive `BF_ACTIVE`; powered machines retain that flag even with zero energy. Probes returned generator `active:false, energyIncome:5`, and smelter `active:true, starved:true, work:0`. See [economy.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/economy.ts:33) and [conveyor.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/conveyor.ts:161).  
+   **Fix:** Drive generators by `BF_COMPLETE`; require positive upkeep for machine motion, preferably deriving its rate from snapshot work progress.
+
+2. **“Every projectile” is impossible with these snapshots, including at 1×.** Turrets fire before projectiles move; a nearby shot can hit and be removed within that same tick. The probe produced projectile counts `0 → 1 → 0`, so neither surrounding snapshot contained it. Worker batching loses further shots and firing flags. See [world.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/world.ts:359), [combat.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/combat.ts:329), and [worker.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/worker.ts:20).  
+   **Fix:** Promise every *observed projectile row*, and explicitly make shots, impacts and flashes best-effort at every speed.
+
+3. **The existing interpolator does not provide a smooth simulation clock.** Its alpha always spans 100 ms, irrespective of speed. Deriving time from its snapshot pair at 3× produced a **66.7 ms simulation-time jump at one arrival**—longer than W21’s 60 ms muzzle flash. See [interp.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/interp.ts:134) and [particles.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/fx/particles.ts:416).  
+   **Fix:** Define a small effect clock with explicit pause, speed and world-reset handling, and test batched and equal-tick snapshots.
+
+4. **The promised global reset signal is unavailable through mobile cuts.** World replacement is private; exposed cuts belong to individual mobile rows. A same-tick replacement with no mobiles produced no cuts, while newly spawned aliens also produce cuts without replacing the world. Resetting the flash marker to an empty value additionally risks replaying restored `BF_FIRING` as a fresh shot. See [interp.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/interp.ts:88).  
+   **Fix:** Pass the existing worker world epoch separately, reset the clock with zero delta, and seed flash markers to the restored tick.
+
+5. **The benchmark does not sustain its required activity.** Temporary turrets expire after **30 seconds**; the two poses consume at least 50 seconds, and a load retry extends that further. Builders finish their finite work, and gates stop moving once fully open or shut. A healthy renderer can therefore fail “scene not active”. See [world.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/world.ts:696), [combat.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/combat.ts:413), and [gate.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/w23/walls/gate.ts:55).  
+   **Fix:** Recreate the fixture for each pose/retry, sustain builder work and temporary turrets, and require door transitions over the measurement window rather than every second.
+
+6. **The visibility gate can pass with most of the workload culled.** Requiring one visible representative of each kind does not require 150 visible aliens, 20 visible turrets or 12 visible engineers. Activity elsewhere in the world can satisfy the counters. The inspector already distinguishes snapshot population from covered entities. See [PLAN.md](/Users/codepanda/Projects/worktrees/bulwark-w24/PLAN.md:229) and [inspect.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/inspect.ts:40).  
+   **Fix:** Freeze numerical visible-count minima for each pose and sample them throughout measurement.
+
+7. **Scene compilation does not warm the complete rendering path.** The game renders through a composer containing shadows, ambient occlusion, bloom and SMAA; `compileAsync(scene, camera)` covers scene materials, leaving other first-use work. An after-load maximum below 250 ms also does not establish improvement or prove precompile ran. See [adapter.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/adapter.ts:137) and [post.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/workshop/stress/post.ts:37).  
+   **Fix:** Warm one representative complete adapter frame behind loading, then compare equivalent cold launches and report loading time separately.
+
+8. **The aim criterion contradicts the ported mechanism.** It forbids movement outside yaw/pitch pivots, but the pinion deliberately rotates on its own pivot in response to yaw. See [turretPose.ts](/Users/codepanda/Projects/worktrees/bulwark-w24/look/src/stress/turretPose.ts:90).  
+   **Fix:** Assert each moving pivot’s intended transform and require only static parts to remain fixed.
+
+**Verify does reject today’s unbuilt tree, but that is only an existence check.** Running its test step returned exit 1: `zsh:1: no matches found: test/w24r2b-*.test.ts`. The current command also names absent `w26` tests, which can keep zsh failing after 2b is built. The existing render script merely reports performance and writes screenshots only with `--shots`. See [Verify](/Users/codepanda/Projects/worktrees/bulwark-w24/PLAN.md:252) and [check-render.mjs](/Users/codepanda/Projects/worktrees/bulwark-w24/game/scripts/check-render.mjs:42).  
+**Fix:** Remove the undeclared W26 dependency, quote the test filter, require the benchmark and screenshot artefacts, and demonstrate that the new behavioural tests fail against the pre-2b renderer. For each animation, assert change over advancing time; presence alone can pass existing beams and static models.
+
+VERDICT: REVISE
+### Claude's response
+
+All eight accepted; PLAN.md revised.
+1 → generator by `BF_COMPLETE`; smelter/assembler/shredder by `BF_ACTIVE` and not `BF_STARVED`, rate from `work` advancing.
+2 → every *observed* projectile row drawn; shots, impacts and flashes best-effort at every speed.
+3 → own effect clock (frame time × speed, 0 when paused, clamped 100 ms, zero-delta restart on reset); tests with batched and same-tick snapshots.
+4 → global reset from the worker world epoch (`RunnerInfo.world`) or the tick going backwards, passed directly; flash markers seeded to the restored tick.
+5 → fixture recreated per pose and retry; long re-queued builder work; temporary turrets re-dropped; an engineer walks through a gate; doors judged per 20 s window.
+6 → numeric visible minima at the game camera (100 aliens, 15 turrets, 10 engineers) sampled every second; activity counters count visible entities only.
+7 → a full composer warm-up frame behind loading, `?warmup=0` to compare, two cold launches, loading time reported separately.
+8 → aim asserts each moving pivot's intended transform (yaw, pitch, pinion); static parts fixed.
+Verify → run under `bash -c` with quoted vitest filters; check-render always writes and requires the 2b screenshots; behavioural tests must change over effect-clock time; the calling session runs the tests-first commit against the pre-2b renderer to prove they fail. Not accepted: "remove the undeclared W26 dependency" — W26 (idle units column, Richard 2026-10-09) was added to PLAN.md during the review and is built in the same run, so its tests stay in this Verify.
+
+No round 2 (Richard's one-plan-review rule). Run 2b and W26 locked.
+
+## Act 3 — Build (run 2b, W26, W27)
+
+`author` subagent (Opus 5.5 · high), ~115 min, commits `e084eb9` (tests first) .. `4d7af01`; W27 (pulsing wireframe placement preview, Richard) added mid-run as plan commit `6d933f9`. Calling session's out-of-band check, 2026-10-09 10:3x–10:4x:
+- Red: at `e084eb9` the new tests fail 44 of 56 across all 8 files (separate worktree, own `npm ci`).
+- Frozen Verify run 1 at load 17→98: new tests 71/71; `npm test` failed on two timing tests only — `m2` determinism (11 s against 5 s) and `w25c-overlay` 256 × 64 update (111 ms against 100 ms). Neither file nor `queueView.ts` changed since `dc28343`; both pass alone at load 95. Run 2 at load 9→35: the same two again. Re-run once (the plan's allowance): `npm test` 416/416 at load 26.
+- Remaining steps, same run: build, `look` tsc, fingerprint (queue stripped) identical to `60ebba6` (68/14/30), check-render all passed, check-queue all passed (W26 real clicks).
+- Gate, measured at load 5–7: game camera 60.0 fps average, 59.5 1%-low, forced-complete 8.15 ms, 583 draw calls, engineers 12/12, aliens ≥ 100 drawn; strategic zoom-out 60.0 / 59.5, forced-complete 11.28 ms (terrain 7.11, post 3.57). Warm-up: longest frame in the 10 s after load 200.0 ms off → 16.8 ms on; loading 1.39 s → 1.66 s.
+- `git diff fbbef60..HEAD -- game/src/sim look model` empty. Author's `inspect.ts` attribution change (mesh group restricts attribution; tie-break only at equal distance) and `drawnCurrent` sampling (waits up to 10 frames, then samples anyway) read: both remove counting errors and cannot mark an undrawn entity as drawn.
+- Screenshots viewed: beams, recoil and smoke, shots and impacts, open gate with engineer, idle column (commander × 1, engineer × 2). Weak point: the turret's wireframe preview at the game camera reads as a dense pale mass rather than an outline — for Richard's sign-off.
+- Found during the check: the worktree's `game/node_modules` had been emptied after the author's Verify (cause not established); reinstalled with `npm ci`; the :8822 dev server kept serving.
+
+## Act 3 — /simplify cleanup and W28 (2026-10-09)
+
+Four read-only reviewers (reuse, simplification, efficiency, altitude); merged list of 20 items applied by the same `author` (commits `4693a63`..`0a4e786`), then W28 (`d6c1c22` plan, `93a6eb8` tests first, `40edf3d`). Skipped by Claude: tracers reusing `Beams`, idle column icon-atlas lines. Calling session's check, 12:5x–13:0x: W28 tests fail at `93a6eb8` (3 files); frozen Verify with `"test/w28-"` added, first run, VERIFY EXIT 0 — filters 81/81, `npm test` 427/427, fingerprint identical, check-render and check-queue pass; gate 60.0 / 59.5 at both poses (load 25 → 12; forced-complete 8.34 ms and 10.44 ms). `git diff cebdf50..HEAD -- game/src/sim look model` empty. W28 criterion 3 not met as written: the economy shares the pool pro rata every tick (`economy.ts` ~181), so a starved site reads a steady trickle (0.50 mass/s × 241 snapshots), not 0; the check now asserts > 0 and ≤ income while starved, and 0 after Stop. Screenshot `w28-hover-readout.png` viewed. Stable copy on :8830 rebuilt at `40edf3d`.
+
+## Post-build adversarial review — 2b, W26, W27, W28, simplify (2026-10-09)
+
+Codex GPT-6.1 Sol · xhigh, base `fbbef60`, HEAD `cdf771d`. Verdict needs-attention, three medium findings reproduced by runtime probes: (1) the performance gate accepts a frozen (dt=0) or undrawn (materials disabled) workload because coverage and activity are state-derived (check-render.mjs:414); (2) at 10x and 60 Hz new muzzle flashes are aged out before their first draw (effect delta 0.1 s > FLASH_LIFE 0.08; effects.ts:383); (3) commander tracers reuse a stale rig muzzle at icon detail after load or rewind (7.39-tile diagonal tracer; models.ts:604). All accepted; sent to the same author test-first.
+
+Calling session check of the review fixes (`2372233` tests first, `3e41ae2`, `ab088ac`, `0c2e92f`), 13:5x–14:1x: the three review test files fail at `2372233`; frozen Verify (with `"test/w28-"`) VERIFY EXIT 0 first run at load 11 → 73 — filters 93/93, `npm test` 439/439, fingerprint identical, check-render and check-queue pass; both negative gate checks fail the gate as intended (pause from second 3; model materials hidden from second 3); gate 60.0 / 59.5 at both poses. `git diff 8ee16be..HEAD -- game/src/sim look model` empty. Accepted deviations: tracer tolerance 1.25 tiles (the commander muzzle is 1.18 tiles off-centre); door activity not required at full zoom-out (gates are icons). Stable copy on :8830 rebuilt at `0c2e92f`.
+
+## W27b (lighter preview) and selection markers depth-tested (2026-10-09)
+
+Richard: wireframe preview "could do with less detail … an outline and basic … from a LD version"; selection brackets of a unit behind a turret drew on top. Author commits `3658d9a` (tests first) .. `96a6031`: preview draws EdgesGeometry feature lines (30°, lower for domes) from the simple detail level (middle for rare extractor and gate) — turret line vertices 85,896–135,912 → 344–854; selection markers get their own depth-tested material. Calling session check 15:0x–15:2x: new tests fail at `3658d9a` (21) and `d6da384` (2); frozen Verify at load 12 → 23: filters 96/96, `npm test` 441/442 — only `m2` determinism timed out (6.8 s vs 5 s; passes alone 18/18); build, look tsc, fingerprint identical, check-render and check-queue all pass (run as the remaining steps); gate 60.0 / 59.5 at both poses. `m2` has now missed its 5 s limit in six full-suite runs today. Screenshots viewed. Not changed, flagged by author: construction/upgrade frames, reserved outlines and health bars also skip the depth test.
+
+## Run 3 plan (2026-10-10)
+
+Drafted by Claude (Opus 5.5) via `/spec` after run 2b closed at `bf63d02`. Richard's answers the same day: panel on the left under the time controls; construction frames and reserved outlines depth-tested, health bars on top; readout shows received of wanted. Greybox removal (item G) waits for his sign-off; he asked what the greybox renderer is. MAX_ROUNDS = 1 (one plan review, per the proportionate-review rule); a second round only if round 1 finds a structural flaw.
+
+## Run 3 — Round 1 — Codex (GPT-6.1 Sol · xhigh, thread 01a125ac-b29b-7201-ae5a-eaa1472bf60b)
+
+Run 3 needs revision. The main blockers are C3’s replacement transaction, incorrect assumptions about the debug hooks, and checks that can pass without proving the intended behaviour. Only the Run 3 section was reviewed; no files changed.
+
+1. **[P1] C3 needs an atomic replacement procedure.** `createRun` still refuses a full table, while orphan cleanup happens after command application. Moving cleanup earlier deletes sites recorded in `plan.reuse`: my read-only probe planned four reusable sites and found none remaining after early cleanup. Building capacity must also be checked before destructive changes. ([world.ts:433](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/world.ts:433), [runs.ts:180](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/runs.ts:180), [queue.ts:94](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/queue.ts:94))  
+   **Fix:** Specify a mutation-free replacement plan that preserves reused sites, checks both capacities, and commits only after apply-time revalidation; refusal must preserve queues, paths, buildings and counters.
+
+2. **[P1] C2’s simulation fix remains inaccessible through real building controls.** `placeBuild` returns before sending a command whenever `canPlaceOn` sees occupancy; the reserved site therefore remains unclickable through the build tool even after validation accepts it. The reuse exception also needs exact kind, anchor and direction matching. ([main.ts:497](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:497), [validate.ts:55](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/validate.ts:55))  
+   **Fix:** Share an exact own-reserved-site predicate between placement preview, real-click submission, validation and application, then test C2 with an actual build-bar click.
+
+3. **[P1] The existing fingerprint does not establish determinism for C2/C3.** Its scripts neither rebuild an owned reserved site nor fill the run table. Identical hashes can coexist with defects in either new branch; the comparison also strips snapshot queues and order IDs. ([fingerprint.test.ts:99](/Users/codepanda/Projects/worktrees/bulwark-w24/game/scripts/fingerprint.test.ts:99), [fingerprint-compare.mjs:9](/Users/codepanda/Projects/worktrees/bulwark-w24/game/scripts/fingerprint-compare.mjs:9))  
+   **Fix:** Keep the baseline comparison unchanged and add separate repeated-run/save-continuation tests covering C2/C3, shared ownership, overlapping reuse, and commands invalidated before application, comparing full snapshots and saves.
+
+4. **[P1] Armed tools have no defined precedence or lifecycle.** Existing click handling prioritises build mode, then upgrade mode, then selection; gesture mode is chosen at pointer-down. Adding independent gate/spawn flags leaves conflicts with build-bar buttons, shortcuts, Shift release, an active drag, and loading map 1 while armed. ([main.ts:588](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:588), [input.ts:64](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/input.ts:64))  
+   **Fix:** Define one mutually exclusive active tool, with explicit gesture behaviour and cancellation on tool changes, Escape, right click, Shift release where applicable, and world/scenario changes.
+
+5. **[P2] Panel event isolation misses captured drags.** The canvas captures pointers. A drag beginning on the map continues delivering events to the canvas when it crosses the panel; stopping propagation on the panel cannot intercept those events. Browser item 8 only tests gestures beginning over the panel. ([main.ts:665](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:665))  
+   **Fix:** Cancel or suppress captured map gestures when they enter the panel, and test map-to-panel release as well as panel-to-map dragging and wheel input.
+
+6. **[P2] Keyboard focus can defeat cancellation or activate two actions.** The global handler ignores every `INPUT`, including Escape on the count/range controls, but does not ignore `SELECT`. Space on a focused button can trigger the game’s pause handler and the button’s native activation. ([main.ts:746](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:746))  
+   **Fix:** Specify a focus policy, process Escape before editable-control filtering, and prevent native button activation when Space is handled as a game shortcut.
+
+7. **[P1] The Stats contract names the wrong hook and compares different snapshot times.** `__game.counters` contains aggregate totals, not per-kind rows; those are in `__game.stats().shooters` and `.aliens`. A table refreshed at 4 Hz can also legitimately differ from the newest worker snapshot during combat. ([main.ts:1399](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:1399), [main.ts:1413](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:1413))  
+   **Fix:** Use `statsReport(snapshot.stats)` and `__game.stats()`, expose the displayed snapshot tick, and pause or compare matching ticks when asserting DOM equality.
+
+8. **[P1] The proposed worker benchmark cannot obtain its measurement window from `tickSamples`.** That hook returns a count; median/max use a rolling buffer capped at 100 messages. Reading it after the 20-second window loses earlier samples and may include subsequent rendering-cost measurements. Empty telemetry currently yields zero. ([main.ts:278](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:278), [main.ts:1302](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:1302), [check-render.mjs:453](/Users/codepanda/Projects/worktrees/bulwark-w24/game/scripts/check-render.mjs:453))  
+   **Fix:** Add explicit window-scoped telemetry with sample identities/counts, and reject missing, empty, stale or non-finite measurements.
+
+9. **[P2] Existing timing and DPR hooks have different meanings from the report.** `tickMs` is measured before snapshot encoding and averages a batch of ticks, so its maximum is not the slowest individual tick. `viewport.pixelRatio` is the renderer’s capped ratio, not necessarily device DPR. ([worker.ts:44](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/worker.ts:44), [adapter.ts:77](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/adapter.ts:77))  
+   **Fix:** Define and measure the worker statistic precisely, report encoding separately where needed, and report both device DPR and renderer pixel ratio.
+
+10. **[P2] Gate axis cannot come from persisted “run direction”.** Runs retain sites and skip counts, not axis; completed runs disappear, and run walls are placed with default direction. A vertical run therefore supplies no reliable stored direction. The existing gate predicate already chooses an axis. ([runs.ts:33](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/runs.ts:33), [runs.ts:185](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/runs.ts:185), [gate.ts:82](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/gate.ts:82))  
+   **Fix:** Omit the optional axis and use the existing predicate, or share that predicate with a snapshot-backed preview; test both axes with real clicks.
+
+11. **[P2] Depth must reach the preview and invalidate its cache.** There are two hard-coded depth-1 paths: command submission and `planDrag`; the preview cache has no depth key. Changing depth while paused can otherwise leave a stale preview. ([main.ts:549](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:549), [dragPlan.ts:139](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/dragPlan.ts:139))  
+   **Fix:** Pass depth through planning and submission, include it in cache invalidation, and assert preview/created-tile equality for depths 2–4 on both axes.
+
+12. **[P2] C1’s full-height footprint boxes introduce invisible occluders.** Reserved sites draw only outlines; started models are cut by progress; gates contain a visible corridor. Giving all of these a complete building’s solid box can prevent selecting a visibly exposed unit. Building bases also use the footprint’s terrain height range. ([models.ts:778](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/models.ts:778), [models.ts:798](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/models.ts:798), [materials.ts:69](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/materials.ts:69))  
+   **Fix:** Define state-aware building pick volumes, including gate openings and actual terrain placement, and test exposed units/aliens beside reserved, partial and complete buildings.
+
+13. **[P2] D1’s fixture and observation method are insufficient.** In the models view, construction frames mark upgrades only. Frames and greybox outlines also share the strategic-icon material. `inspectNextFrame` reports submitted instances and material names; it cannot establish which fragments failed depth testing. ([entities.ts:251](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/entities.ts:251), [entities.ts:416](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/entities.ts:416), [inspect.ts:24](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/inspect.ts:24))  
+   **Fix:** Give frames/outlines dedicated materials, create an actual upgrade frame, assert non-zero overlay instances, and verify occlusion with paired rendered images or pixel checks.
+
+14. **[P1] D2 omits research and mixes time intervals.** Engineers receive a 1.5× Field Engineering multiplier. My executed probe produced **10 mass/s received**, while the plan’s formula wanted **6.667 mass/s**. Also, received averages the snapshot interval, while wanted uses current builders; their inequality need not hold across builder/tuning changes. ([tuning.ts:151](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/tuning.ts:151), [siteReadout.ts:76](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/siteReadout.ts:76))  
+   **Fix:** Derive wanted with the full research/tuning multiplier and `siteWork`, decode `work` as `id + 1`, and apply received ≤ wanted only to stable-builder/tuning intervals with numeric tolerance.
+
+15. **[P2] Reusing W28’s synthetic fixture will not test actual builder demand.** It manually changes progress and builder counts without adding matching working units. Existing tests and browser checks also require the old literal intake strings, including the stopped-site check. ([w28-readout.test.ts:25](/Users/codepanda/Projects/worktrees/bulwark-w24/game/test/w28-readout.test.ts:25), [check-queue.mjs:568](/Users/codepanda/Projects/worktrees/bulwark-w24/game/scripts/check-queue.mjs:568))  
+   **Fix:** Generate D2 demand fixtures by stepping real one/two-builder worlds, and explicitly list the old text assertions to update while preserving their numeric checks.
+
+16. **[P2] The enclosure fixture and success assertions are underspecified.** Four unshifted drags replace earlier unfinished sides; a finished enclosure can leave builders unable to reach the turret interior. A gate’s presence does not prove completion, and turret kills do not prove aliens contacted a wall or gate. Escape tested after an unshifted placement may merely confirm an already-disarmed tool. ([world.ts:516](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/world.ts:516), [units.ts:119](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/units.ts:119))  
+   **Fix:** Specify four queued drags, enclosure dimensions and builder access; assert complete closed sides, a complete gate, observed wall/gate contact, and Escape/right-click cancellation while genuinely armed.
+
+17. **[P2] Tune and Economy need explicit display conventions.** A kind has no single effective building HP/damage across tiers and gate depths. Speed is stored in tiles per tick. Parts have a pool and cumulative made/used counters, but no income/spending rate fields equivalent to the other resources. ([tuning.ts:164](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/tuning.ts:164), [kinds.ts:4](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/kinds.ts:4), [snapshot.ts:67](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/snapshot.ts:67))  
+   **Fix:** Label the displayed tier/depth, define slider quantisation and speed conversion, map displayed waves 1–20 to indices 0–19, and derive parts rates from snapshot pairs or explicitly omit them.
+
+The frozen command **would fail on the unbuilt change**. I ran its test filter using the installed Vitest with an in-memory config loader and cache disabled: exit **1**, `"No test files found"`. That proves the initial red condition, not the quality of future assertions.
+
+| Acceptance criterion | Does it discriminate? |
+|---|---|
+| 1 — visibility/load | Yes, provided it exercises real snapshot/save transitions. |
+| 2 — controls | Partial: a fake sink misses host gesture integration and local controls such as routes/collapse; add focus, refusal and reset-confirmation checks. |
+| 3 — tune labels | Partial: one field per target misses tier/depth, research and conversion errors. |
+| 4 — stats | Incorrect oracle as written; use per-kind stats and matching ticks. |
+| 5 — C1/C2/C3 | Positives discriminate; add ownership negatives, preserved reuse IDs and completely unchanged state on refusal. |
+| 6 — D1 | Material flags discriminate, but do not prove visible occlusion or that a frame exists. |
+| 7 — D2 | Partial: add research, tuning, real working-unit fixtures and interval transitions. |
+| 8 — benchmark | Partial: a pure judge test does not prove live measurement wiring; test missing telemetry and the 50 ms boundary. |
+| 9 — optional G | Use `__game.renderMode`; `__game.renderer` reports backend/GPU, not `"models"`. ([main.ts:1326](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:1326)) |
+| 10 — existing tests | Regression protection only; it should already pass on the unbuilt tree. |
+
+The full frozen command was not run because installation, builds and screenshots write files. The four relevant existing Vitest suites could not execute because their temporary-directory creation failed with `EPERM`; that is an execution restriction, not a product test failure. Read-only simulation probes ran successfully, and final diff/status checks were clean.
+
+Finally, `/simplify` and review fixes occur after Verify: repeat Verify after the last edit before publishing.
+
+VERDICT: REVISE
+
+### Claude's response
+
+All 17 accepted; none rejected. Folded into the run 3 section: one active tool with defined transitions (4); captured-drag cancel and a focus policy (5, 6); Stats from `statsReport` with the panel's drawn tick, compared while paused (7); a window recorder for worker messages, per-tick step time defined, encoding separate, device and renderer pixel ratios (8, 9); gate sent with no axis (10); depth through planning, submission and the preview cache (11); state-aware building pick volumes (12); dedicated overlay materials, a real upgrade frame and a pixel-pair occlusion check (13); wanted rate from the simulation's own multipliers, `work` decoded as id + 1, the inequality only on stable intervals, real-world fixtures and the listed text updates (14, 15); four queued drags, completion and contact assertions, Escape while genuinely armed (16); tier-1 labels, speed in tiles/s, waves 1–20 as indices 0–19, parts without a rate (17); `__game.renderMode` for G; C2 one shared predicate through to the build-bar click (2); C3 planned without mutation and checked against both tables, state unchanged on refusal (1); new C2/C3 determinism and save-continuation tests alongside the unchanged baseline fingerprint (3). Round 2 run because 1 and 2 changed the simulation design.
+
+## Run 3 — Round 2 — Codex (same thread; first attempt timed out at 15 min, re-run with a narrower brief)
+
+Run 3 still needs revision. I reviewed commits `3bff4e0` and `965b46c`; no files changed. “Addressed” below means addressed by the revised plan.
+
+| Prior finding | Assessment |
+|---|---|
+| 1 — C3 atomic replacement | **Partly:** transaction specified, but release eligibility must preserve the existing gate exception. |
+| 2 — C2 through real controls | **Partly:** shared predicate and click path specified, but positive ownership is missing. |
+| 3 — C2/C3 determinism | **Addressed:** separate full-snapshot and save-continuation coverage specified. |
+| 4 — Armed-tool lifecycle | **Partly:** exclusivity specified, but blanket right-click cancellation conflicts with ordinary orders. |
+| 5 — Captured drags | **Addressed:** map-to-panel release explicitly cancels the gesture. |
+| 6 — Keyboard focus | **Addressed:** Escape precedence, editable controls and Space behaviour specified. |
+| 7 — Stats source/time | **Addressed:** correct report source and matching displayed tick specified. |
+| 8 — Worker measurement window | **Partly:** recorder replaces the rolling buffer, but freshness and tick weighting remain unresolved. |
+| 9 — Timing/DPR meanings | **Addressed:** batch-average timing, separate encoding and both pixel ratios defined. |
+| 10 — Gate axis | **Addressed:** omitted so the existing predicate chooses it. |
+| 11 — Depth preview/cache | **Addressed:** both hard-coded paths and cache invalidation covered. |
+| 12 — Invisible pick volumes | **Partly:** states distinguished, but terrain placement and construction height still disagree with rendering. |
+| 13 — Overlay verification | **Partly:** materials and real upgrade fixture fixed; pixel-pair test remains invalid. |
+| 14 — Wanted-rate multipliers/interval | **Addressed:** full multipliers and stable-interval comparison specified. |
+| 15 — D2 synthetic fixtures/text | **Addressed:** real engineer worlds and existing text updates specified. |
+| 16 — Enclosure/contact assertions | **Addressed:** queued sides, turret-first construction, completion, contact and genuinely armed cancellation specified. |
+| 17 — Display conventions | **Addressed:** tier, speed, wave indexing, slider quantisation and parts conventions specified. |
+
+The remaining P1 issues in the changed contracts are:
+
+1. **C2 accepts unowned sites under its written predicate.** “Every unit holding it is among `ids`” is true when nobody holds it. A read-only probe confirmed that a reserved site survives its owner’s death with zero holders. The existing ownership rule requires a replaced queue to hold the site. ([queue.ts:119](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/queue.ts:119))  
+   **Fix:** Require at least one live issuing builder to hold the matching site, exclude other live holders, and restrict reuse to unshifted commands.
+
+2. **C3’s release rule omits reserved gates.** Being exclusively held and unstarted does not make a site removable: orphan cleanup deliberately retains gate sites because conversion already removed their walls. Counting one as released can falsely pass building capacity; deleting it destroys the converted walls. My probe confirmed that an exclusively held, unstarted gate survives queue removal. ([queue.ts:64](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/sim/queue.ts:64))  
+   **Fix:** Share the existing cleanup eligibility predicate, exclude gates and reused sites from capacity credit, and test a full building table with a retained gate.
+
+3. **The worker median can pass while most ticks exceed 50 ms.** The proposed median gives each message equal weight despite different batch sizes. Executed arithmetic: 51 one-tick batches at 1 ms plus 50 three-tick batches averaging 60 ms gives **101 messages**, a **1 ms message median**, and a **60 ms tick-weighted median**—passing the proposed 20-second message-count requirement. ([PLAN.md:409](/Users/codepanda/Projects/worktrees/bulwark-w24/PLAN.md:409))  
+   **Fix:** Weight batch means by `ticksRun`, or collect individual tick timings; add this mixed-batch negative test.
+
+4. **The recorder still cannot establish freshness or exact window membership.** Messages arriving between `start()` and `stop()` can describe worker batches completed before the window. No timestamp/identity validation is specified, and acceptance criterion 10 only checks counts and numeric values. The existing measurement excludes five seconds of warm-up and performs `renderCost` afterwards. ([check-render.mjs:448](/Users/codepanda/Projects/worktrees/bulwark-w24/game/scripts/check-render.mjs:448))  
+   **Fix:** Record world/tick identities and worker batch timestamps, define boundary handling, and reject stale or duplicate samples while excluding warm-up and subsequent cost measurements.
+
+5. **The tool contract can remove ordinary right-click orders.** `select` is an active tool, yet the revised rule says right click cancels the active tool with no command. Today, right click in selection mode sends move, assist or reclaim orders. ([main.ts:614](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:614))  
+   **Fix:** Scope cancellation to non-selection tools and explicitly retain selection-mode orders and camera panning.
+
+6. **D1’s specified browser check cannot work with the named hook.** `hideModelMaterials` hides every entity material, including reserved outlines; it cannot hide one occluding turret. Furthermore, raw pixel differences caused by removing the turret do not prove overlay depth testing. The hook also contradicts the new blanket read-only `__game` contract. ([main.ts:1621](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/main.ts:1621), [models.ts:526](/Users/codepanda/Projects/worktrees/bulwark-w24/game/src/render/models.ts:526))  
+   **Fix:** Permit narrowly scoped diagnostic rendering controls, compare overlay-only pixel contributions, and require a forced-depth-off negative to fail.
+
+The frozen command’s initial red condition remains valid: the test filter exits **1**, `"No test files found"`. The full command was not run because it writes files. Criterion 6 also needs a narrower refusal oracle: apply-time rejection consumes the queued command, records its log entry and advances the tick, so whole-save byte equality cannot hold.
+
+VERDICT: REVISE
+
+### Claude's response
+
+All six accepted and folded in: C2 needs an issuing holder and no outside live holder, unshifted only (R2-1); C3 shares the orphan-cleanup eligibility predicate, so gates are never released, and credits capacity only for sites actually removed (R2-2); tick-weighted median with the mixed-batch negative (R2-3); batches carry tick range, epoch and clock stamps, the recorder keeps only batches inside the window and reports drops (R2-4); right click cancels only non-select tools (R2-5); D1 measures the overlay's own pixel contribution with diagnostic hooks and a depth-off negative (R2-6); refusal oracle is a twin world without the command (note); C1 pick heights come from the renderer's own placement functions (12). No round 3: these are precise contract corrections, not a design change, and the build is followed by its own adversarial review (proportionate review rule). Plan locked.
+
+## Act 3 — Build (run 3, 2026-10-10)
+
+Author: Opus 5.5 · high, one run, no rework. 8 commits 2ba0dcf..1383535, 40 files, +4,426 / −177.
+
+- Red at the tests-first commit 2ba0dcf (run by Claude in a separate worktree): 10 of 10 files and 25 of 37 tests failed — three on missing modules (tools.ts, sandboxPanel.ts, workerWindow.ts), the rest on behaviour (C2 queue length 2 ≠ 1, C3 "the run table is full", unit picked through a turret, overlay depthTest false, ?greybox still read). Three failures are only "not a function" (worldSiteSource, buildHeight, DragPlanCache).
+- Frozen Verify run by Claude at 1383535: exit 0. w24r3 72/72, npm test 514/514, build and look tsc pass, fingerprint vs 60ebba6 IDENTICAL, check-render / check-queue / check-panel all passed. Worker window 20.01 s, 200 ticks, tick-weighted step median 0.20 ms; DPR 1, renderer pixel ratio 1. D1: zero overlay contribution inside the occluding turret, non-zero outside, non-zero with depth test off, for both construction-frame and reserved-outline.
+- Simulation diff confined to queue.ts, validate.ts, world.ts (C2, C3) and protocol.ts, worker.ts (timing). look/ and model/ untouched.
+- Deviations accepted: w28-readout strings and check-queue text moved to the D2 wording; sim/tuning.ts added to PURE_SIM (its value imports are kinds.ts and balance.ts only); check-panel sends the wheel over CDP because agent-browser 0.37.1 sends it at (0, 0); commit 2a9b51e does not type-check alone.
+- Next: /simplify, re-run Verify, /adversarial-review.
+
+### /simplify and adversarial review (run 3)
+
+- /simplify: four read-only reviewers (reuse, simplification, efficiency, altitude; about 74 findings). 15 deduplicated, behaviour-preserving items applied by the author in 4c6ab4f..5a322a3 (+459 / −926): per-frame work cut, greybox leftovers removed, one copy of each repeated rule and type. Three greybox-only tests deleted; the 1,536-reserved-tile draw test is covered by w24r2a-capacity's full-table (4,096) reserved-outline check. Claude's Verify at 5a322a3: rc 0, 511 tests, fingerprint IDENTICAL.
+- Adversarial review (Codex GPT-6.1 Sol · xhigh, thread 01a12661-b2fc-76e1-a8d2-f6ad77e39c83): needs-attention, three medium — a build shortcut with no builders left gate/spawn armed; Tune controls kept focus and swallowed Space and tool keys; equal-length reroutes left the shown route stale (key from 98f5d4d, not the simplify pass). No C2/C3 failure reproduced.
+- Fixes: red tests 03b759d (finding 3 a real assertion failure; findings 1 and 2 red only on a missing method/module in unit tests, with check-panel's real-click step failing "paused false → false; focus after the drag INPUT" on the red build), fixes 4e17d55, 00781d1, de0ab9c. Claude's Verify at de0ab9c: rc 0, w24r3 85/85, npm test 525/525, fingerprint IDENTICAL, check-render / check-queue / check-panel all passed.
+- Open: the Tune kind list keeps focus if opened with the pointer and closed without a change.

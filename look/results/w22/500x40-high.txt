@@ -1,0 +1,33 @@
+W22 strategy comparison · 8 Oct 2026, 09:05
+500 turrets · 40 kinds · 500 aliens · quality high · device pixel ratio 1 · canvas 1440×900 px (1440×900 CSS)
+GPU: ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version) · WEBGL_multi_draw available
+Detail thresholds (tiles from the camera): full < 24 · middle < 85 · simple < 160 · icon beyond (±8 % hysteresis)
+
+strategy                   segment      fps avg  1% low  CPU ms  CPU p95  update ms  submit ms  calls  scene  shadow  turret calls  kinds  triangles  full/mid/simple/icon/off  aliens drawn
+A naive per kind           close-up        60.0    59.5    3.61     4.00       0.11       2.98    473    262     178           254     13     2.60 M              18/0/0/0/482         0/497
+B shared parts             close-up        60.0    59.5    3.55     4.10       0.06       2.89    219    111      75           103     13     2.60 M              18/0/0/0/482         0/497
+C shared + merged levels   close-up        60.0    59.5    3.68     4.10       0.07       2.99    219    111      75           103     13     2.60 M              18/0/0/0/482         0/497
+D BatchedMesh              close-up        60.0    59.5    3.34     3.80       0.07       2.63     55     13       9             5     13     2.60 M              18/0/0/0/482         0/496
+
+A naive per kind           game cam        48.6    29.9    5.90     6.60       0.41       4.31   1420    745     604           699     40     4.35 M             0/338/0/0/162       100/496
+B shared parts             game cam        60.0    59.5    4.25     4.60       0.31       2.70    371    146     154           100     40     4.34 M             0/338/0/0/162       100/496
+C shared + merged levels   game cam        60.0    59.5    4.33     4.60       0.27       2.82    413    172     170           126     40     4.34 M             0/338/0/0/162       100/495
+D BatchedMesh              game cam        60.0    59.5    3.44     3.60       0.39       2.02    206     51      84             5     40     4.35 M             0/338/0/0/162       100/497
+
+A naive per kind           mid zoom        59.2    30.0    4.49     5.00       0.51       2.95    524    372      81           326     40     3.03 M               0/0/499/0/1       220/497
+B shared parts             mid zoom        60.0    59.5    4.17     4.50       0.41       2.61    247     95      81            49     40     3.03 M               0/0/499/0/1       221/498
+C shared + merged levels   mid zoom        60.0    59.5    4.14     4.50       0.37       2.63    265    113      81            67     40     3.05 M               0/0/499/0/1       229/497
+D BatchedMesh              mid zoom        60.0    59.5    3.55     3.80       0.45       2.11    202     50      81             4     40     3.05 M               0/0/499/0/1       232/497
+
+A naive per kind           full zoom       50.6    29.9    5.19     5.60       0.12       4.06    358    126      81            40     40     3.52 M               0/0/0/500/0       464/497
+B shared parts             full zoom       50.6    29.9    4.77     5.30       0.08       3.60    298     96      81            25     40     3.48 M               0/0/0/500/0       448/498
+C shared + merged levels   full zoom       51.0    29.9    4.19     4.80       0.08       2.84    202     48      81             1     40     3.49 M               0/0/0/500/0       445/497
+D BatchedMesh              full zoom       48.4    29.9    4.23     5.00       0.08       2.85    202     48      81             1     40     3.50 M               0/0/0/500/0       453/497
+
+fps avg = frames / seconds held (10 s per segment, camera still, combat running); 1% low = 1000 / 99th-percentile frame interval.
+CPU ms = JavaScript time per frame (simulation, matrices, render submission), average and 95th percentile; not GPU time.
+update ms = JavaScript time writing turret instance data; submit ms = JavaScript time inside the render call (all passes).
+calls, triangles = renderer.info over all passes (shadow map, scene, post-processing), averaged; scene = draw calls in the render pass less the shadow map; shadow = draw calls in the shadow map.
+turret calls = turret batches drawn in the scene pass (a BatchedMesh multi-draw counts once); kinds = turret kinds with a turret in view.
+full/mid/simple/icon/off = turrets at each detail level, and outside the view (not drawn); aliens drawn = in view / alive.
+Browser: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36

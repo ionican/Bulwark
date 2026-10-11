@@ -1,0 +1,274 @@
+{
+  "generated": "2026-10-07T20:47:21.212Z",
+  "assets": [
+    {
+      "id": "cliff_side",
+      "source": "polyhaven",
+      "res": "2k",
+      "role": "terrain: steep cliff faces (horizontal strata)",
+      "licence": "CC0 1.0",
+      "files": {
+        "diff": {
+          "path": "assets/cliff_side/cliff_side_diff_2k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/cliff_side/cliff_side_diff_2k.jpg",
+          "bytes": 3387348
+        },
+        "nor": {
+          "path": "assets/cliff_side/cliff_side_nor_gl_2k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/cliff_side/cliff_side_nor_gl_2k.jpg",
+          "bytes": 3585856
+        },
+        "arm": {
+          "path": "assets/cliff_side/cliff_side_arm_2k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/cliff_side/cliff_side_arm_2k.jpg",
+          "bytes": 2130381
+        }
+      },
+      "name": "Cliff Side",
+      "authors": [
+        "James Ray Cock",
+        "Jenelle van Heerden",
+        "Dario Barresi"
+      ],
+      "page": "https://polyhaven.com/a/cliff_side"
+    },
+    {
+      "id": "sandy_gravel_02",
+      "source": "polyhaven",
+      "res": "2k",
+      "role": "terrain: sandy flats",
+      "licence": "CC0 1.0",
+      "files": {
+        "diff": {
+          "path": "assets/sandy_gravel_02/sandy_gravel_02_diff_2k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/sandy_gravel_02/sandy_gravel_02_diff_2k.jpg",
+          "bytes": 4097984
+        },
+        "nor": {
+          "path": "assets/sandy_gravel_02/sandy_gravel_02_nor_gl_2k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/sandy_gravel_02/sandy_gravel_02_nor_gl_2k.jpg",
+          "bytes": 5311499
+        },
+        "arm": {
+          "path": "assets/sandy_gravel_02/sandy_gravel_02_arm_2k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/sandy_gravel_02/sandy_gravel_02_arm_2k.jpg",
+          "bytes": 3510676
+        }
+      },
+      "name": "Sandy Gravel 02",
+      "authors": [
+        "Dario Barresi"
+      ],
+      "page": "https://polyhaven.com/a/sandy_gravel_02"
+    },
+    {
+      "id": "rock_face",
+      "source": "polyhaven",
+      "res": "1k",
+      "role": "terrain: dark rock in gullies and canyon floors",
+      "licence": "CC0 1.0",
+      "files": {
+        "diff": {
+          "path": "assets/rock_face/rock_face_diff_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rock_face/rock_face_diff_1k.jpg",
+          "bytes": 732721
+        },
+        "nor": {
+          "path": "assets/rock_face/rock_face_nor_gl_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rock_face/rock_face_nor_gl_1k.jpg",
+          "bytes": 1139857
+        },
+        "arm": {
+          "path": "assets/rock_face/rock_face_arm_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rock_face/rock_face_arm_1k.jpg",
+          "bytes": 458661
+        }
+      },
+      "name": "Rock Face",
+      "authors": [
+        "Greg Zaal",
+        "Dario Barresi"
+      ],
+      "page": "https://polyhaven.com/a/rock_face"
+    },
+    {
+      "id": "concrete_panels",
+      "source": "polyhaven",
+      "res": "1k",
+      "role": "buildings: foundation pads and paving",
+      "licence": "CC0 1.0",
+      "files": {
+        "diff": {
+          "path": "assets/concrete_panels/concrete_panels_diff_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_panels/concrete_panels_diff_1k.jpg",
+          "bytes": 702619
+        },
+        "nor": {
+          "path": "assets/concrete_panels/concrete_panels_nor_gl_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_panels/concrete_panels_nor_gl_1k.jpg",
+          "bytes": 854539
+        },
+        "arm": {
+          "path": "assets/concrete_panels/concrete_panels_arm_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_panels/concrete_panels_arm_1k.jpg",
+          "bytes": 389756
+        }
+      },
+      "name": "Concrete Panels",
+      "authors": [
+        "Amal Kumar"
+      ],
+      "page": "https://polyhaven.com/a/concrete_panels"
+    },
+    {
+      "id": "metal_plate_02",
+      "source": "polyhaven",
+      "res": "1k",
+      "role": "buildings: dark trim; aliens: gunmetal hulls",
+      "licence": "CC0 1.0",
+      "files": {
+        "diff": {
+          "path": "assets/metal_plate_02/metal_plate_02_diff_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/metal_plate_02/metal_plate_02_diff_1k.jpg",
+          "bytes": 625917
+        },
+        "nor": {
+          "path": "assets/metal_plate_02/metal_plate_02_nor_gl_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/metal_plate_02/metal_plate_02_nor_gl_1k.jpg",
+          "bytes": 183264
+        },
+        "arm": {
+          "path": "assets/metal_plate_02/metal_plate_02_arm_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/metal_plate_02/metal_plate_02_arm_1k.jpg",
+          "bytes": 1075839
+        }
+      },
+      "name": "Metal Plate 02",
+      "authors": [
+        "Rob Tuytel"
+      ],
+      "page": "https://polyhaven.com/a/metal_plate_02"
+    },
+    {
+      "id": "Metal016",
+      "source": "ambientcg",
+      "res": "1K-JPG",
+      "role": "buildings: ivory painted panels (tinted)",
+      "licence": "CC0 1.0",
+      "files": {
+        "diff": {
+          "path": "assets/Metal016/Metal016_1K-JPG_Color.jpg",
+          "url": "https://ambientcg.com/get?file=Metal016_1K-JPG.zip",
+          "bytes": 1261784
+        },
+        "nor": {
+          "path": "assets/Metal016/Metal016_1K-JPG_NormalGL.jpg",
+          "url": "https://ambientcg.com/get?file=Metal016_1K-JPG.zip",
+          "bytes": 1444128
+        },
+        "rough": {
+          "path": "assets/Metal016/Metal016_1K-JPG_Roughness.jpg",
+          "url": "https://ambientcg.com/get?file=Metal016_1K-JPG.zip",
+          "bytes": 524497
+        },
+        "metal": {
+          "path": "assets/Metal016/Metal016_1K-JPG_Metalness.jpg",
+          "url": "https://ambientcg.com/get?file=Metal016_1K-JPG.zip",
+          "bytes": 525585
+        }
+      },
+      "name": "Metal 016",
+      "authors": [
+        "Lennart Demes (ambientCG)"
+      ],
+      "page": "https://ambientcg.com/view?id=Metal016",
+      "zip": {
+        "url": "https://ambientcg.com/get?file=Metal016_1K-JPG.zip",
+        "bytes": 7338557
+      }
+    },
+    {
+      "id": "Metal047B",
+      "source": "ambientcg",
+      "res": "1K-JPG",
+      "role": "buildings: copper/bronze fittings (bolts, gear rings, hinges)",
+      "licence": "CC0 1.0",
+      "files": {
+        "diff": {
+          "path": "assets/Metal047B/Metal047B_1K-JPG_Color.jpg",
+          "url": "https://ambientcg.com/get?file=Metal047B_1K-JPG.zip",
+          "bytes": 1886277
+        },
+        "nor": {
+          "path": "assets/Metal047B/Metal047B_1K-JPG_NormalGL.jpg",
+          "url": "https://ambientcg.com/get?file=Metal047B_1K-JPG.zip",
+          "bytes": 630116
+        },
+        "rough": {
+          "path": "assets/Metal047B/Metal047B_1K-JPG_Roughness.jpg",
+          "url": "https://ambientcg.com/get?file=Metal047B_1K-JPG.zip",
+          "bytes": 526082
+        }
+      },
+      "name": "Metal 047 B",
+      "authors": [
+        "Lennart Demes (ambientCG)"
+      ],
+      "page": "https://ambientcg.com/view?id=Metal047B",
+      "zip": {
+        "url": "https://ambientcg.com/get?file=Metal047B_1K-JPG.zip",
+        "bytes": 6665645
+      }
+    },
+    {
+      "id": "beige_wall_001",
+      "source": "polyhaven",
+      "res": "1k",
+      "role": "W20 turret: matte ivory ceramic-composite surface grain (tinted, with code-made cracks and chips)",
+      "licence": "CC0 1.0",
+      "files": {
+        "diff": {
+          "path": "assets/beige_wall_001/beige_wall_001_diff_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/beige_wall_001/beige_wall_001_diff_1k.jpg",
+          "bytes": 33074
+        },
+        "nor": {
+          "path": "assets/beige_wall_001/beige_wall_001_nor_gl_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/beige_wall_001/beige_wall_001_nor_gl_1k.jpg",
+          "bytes": 153434
+        },
+        "arm": {
+          "path": "assets/beige_wall_001/beige_wall_001_arm_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/beige_wall_001/beige_wall_001_arm_1k.jpg",
+          "bytes": 87358
+        }
+      },
+      "name": "Beige Wall 001",
+      "authors": [
+        "Dimitrios Savva",
+        "Rico Cilliers"
+      ],
+      "page": "https://polyhaven.com/a/beige_wall_001"
+    },
+    {
+      "id": "rogland_sunset",
+      "source": "polyhaven-hdri",
+      "res": "1k",
+      "role": "image-based lighting (environment), low warm sun",
+      "licence": "CC0 1.0",
+      "files": {
+        "hdr": {
+          "path": "assets/rogland_sunset/rogland_sunset_1k.hdr",
+          "url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/rogland_sunset_1k.hdr",
+          "bytes": 1487232
+        }
+      },
+      "name": "Rogland Sunset",
+      "authors": [
+        "Greg Zaal"
+      ],
+      "page": "https://polyhaven.com/a/rogland_sunset"
+    }
+  ],
+  "totalBytes": 36746484
+}
