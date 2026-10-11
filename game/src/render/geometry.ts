@@ -595,7 +595,7 @@ export function itemGeometries(): BufferGeometry[] {
     // W29 mass: an ingot (a long block with a narrower raised top), told from the scrap cube by its shape
     merge([part(box(0.5, 0.12, 0.28), '#9a9a94', { y: 0.06 }), part(box(0.38, 0.1, 0.18), '#c8c8c0', { y: 0.17 })]),
     // W29 rare: a tall crystal (a stretched octahedron)
-    merge([part(new OctahedronGeometry(0.16), P.crystal, { y: 0.256, sy: 1.6 })]),
+    merge([part(new OctahedronGeometry(0.2), P.crystal, { y: 0.3, sy: 1.5 })]),
   ];
 }
 
