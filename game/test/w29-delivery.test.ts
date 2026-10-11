@@ -3,7 +3,7 @@
 // only; a cut belt stops delivery until the tile is laid again.
 
 import { describe, expect, it } from 'vitest';
-import { B, COMMANDER_INCOME, ITEM_MASS, ITEM_RARE, ITEM_SALVAGE, U } from '../src/sim/kinds.ts';
+import { B, COMMANDER_INCOME, ITEM_MASS, ITEM_SALVAGE, U } from '../src/sim/kinds.ts';
 import { BF_IDLE } from '../src/sim/schema.ts';
 import { ROW, beltLine, itemsOnBelts, slot, steps } from './w29-fixtures.ts';
 
