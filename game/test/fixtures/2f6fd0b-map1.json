@@ -1,0 +1,36 @@
+{
+  "commit": "2f6fd0b",
+  "saveVersion": 4,
+  "stateFormat": 7,
+  "tick": 9001,
+  "research": {
+    "ids": [
+      "wallT2",
+      "wallT3",
+      "gunT2",
+      "areaT2",
+      "beam",
+      "shield",
+      "extractors",
+      "scanners",
+      "fieldEng",
+      "heavy",
+      "heavyT2"
+    ],
+    "done": [
+      "gunT2",
+      "extractors"
+    ],
+    "current": "fieldEng",
+    "progress": 0.5265123598044084,
+    "queued": [
+      "wallT2",
+      "areaT2"
+    ]
+  },
+  "belts": 291,
+  "carrying": 115,
+  "beltTiers": [
+    1
+  ]
+}
