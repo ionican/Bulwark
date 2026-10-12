@@ -13,12 +13,16 @@
 // laid out in one call (walls and gates through W23's autotiler, as the placed run will be drawn),
 // with the plinths a placed building gets on sloping ground. The wireframes are recomputed only
 // when the planned tiles change.
+//
+// W32 (demolish drag): each target's footprint gets the demolish mark, a solid outline with
+// diagonals from corner to corner (geometry.ts demolishMarkGeometry); line tiles over the core or
+// an unfinished site get the skip mark. No wireframes: nothing will be built.
 
 import { InstancedMesh, MeshBasicMaterial, type BufferGeometry, type Object3D } from 'three';
 import { buildingFootprint } from '../sim/kinds.ts';
 import type { Terrain } from '../sim/terrain.ts';
 import { groundHeight } from './ground.ts';
-import { ghostMarkGeometry, ghostOutlineGeometry } from './geometry.ts';
+import { demolishMarkGeometry, ghostMarkGeometry, ghostOutlineGeometry } from './geometry.ts';
 import type { Captured, ModelRenderer } from './models.ts';
 import { WireframePool, pulseOpacity } from './preview.ts';
 import { SimpleBatch } from './simpleBatch.ts';
@@ -28,6 +32,8 @@ export interface DragTiles {
   kind: number;
   build: ReadonlyArray<readonly [number, number, number]>;
   skipped: ReadonlyArray<readonly [number, number]>;
+  /** W32: footprints to demolish, [tx, ty, fw, fh] (the demolish marks). */
+  demolish?: ReadonlyArray<readonly [number, number, number, number]>;
 }
 
 /** Marks lie this far above the ground (tiles), over the reserved outlines (models.ts: 0.06). */
@@ -45,6 +51,7 @@ export class DragPreview {
   private readonly build: SimpleBatch;
   private readonly skipOutline: SimpleBatch;
   private readonly skipCross: SimpleBatch;
+  private readonly demolish: SimpleBatch;
   private readonly terrain: Terrain;
   private readonly wire: WireframePool;
   private readonly captured: Captured[] = [];
@@ -65,6 +72,7 @@ export class DragPreview {
     this.build = marks(parent, ghostOutlineGeometry(true), flat, 'overlay/drag/build');
     this.skipOutline = marks(parent, ghostOutlineGeometry(false), flat, 'overlay/drag/skip');
     this.skipCross = marks(parent, ghostMarkGeometry(false), flat, 'overlay/drag/skip-cross');
+    this.demolish = marks(parent, demolishMarkGeometry(), flat, 'overlay/drag/demolish');
   }
 
   /** Draws `tiles` (null: nothing). Call every frame while a drag is under way; `time` is real time in seconds (the pulse). */
@@ -72,6 +80,7 @@ export class DragPreview {
     this.build.begin();
     this.skipOutline.begin();
     this.skipCross.begin();
+    this.demolish.begin();
     this.shown = tiles;
     this.wires(tiles, time);
     if (tiles) {
@@ -92,10 +101,16 @@ export class DragPreview {
         this.skipOutline.push(x, y, z, fw / 2, 1, fh / 2);
         this.skipCross.push(x, y + 0.01, z, c, 1, c);
       }
+      for (const [tx, ty, w, h] of tiles.demolish ?? []) {
+        const x = tx + w / 2;
+        const z = ty + h / 2;
+        this.demolish.push(x, groundHeight(t, x, z) + LIFT, z, w / 2, 1, h / 2);
+      }
     }
     this.build.commit();
     this.skipOutline.commit();
     this.skipCross.commit();
+    this.demolish.commit();
   }
 
   /** The wireframes of the tiles to be built: refilled only when the plan changes; the pulse every call. */
@@ -133,12 +148,12 @@ export class DragPreview {
   }
 }
 
-/** The preview as drawn: ground centres (x, z) of the build outlines and of the skipped crosses. */
-export function inspectDrag(root: Object3D): { build: Array<[number, number]>; skipped: Array<[number, number]> } {
-  const out = { build: [] as Array<[number, number]>, skipped: [] as Array<[number, number]> };
+/** The preview as drawn: ground centres (x, z) of the build outlines, the skipped crosses and (W32) the demolish marks. */
+export function inspectDrag(root: Object3D): { build: Array<[number, number]>; skipped: Array<[number, number]>; demolish: Array<[number, number]> } {
+  const out = { build: [] as Array<[number, number]>, skipped: [] as Array<[number, number]>, demolish: [] as Array<[number, number]> };
   root.traverseVisible((o) => {
     if (!(o instanceof InstancedMesh)) return;
-    const list = o.name === 'overlay/drag/build' ? out.build : o.name === 'overlay/drag/skip-cross' ? out.skipped : null;
+    const list = o.name === 'overlay/drag/build' ? out.build : o.name === 'overlay/drag/skip-cross' ? out.skipped : o.name === 'overlay/drag/demolish' ? out.demolish : null;
     if (!list) return;
     const a = o.instanceMatrix.array as Float32Array;
     for (let i = 0; i < o.count; i++) list.push([a[i * 16 + 12]!, a[i * 16 + 14]!]);

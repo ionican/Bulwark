@@ -38,7 +38,8 @@ describe('W25c finding 3: orders have ids, and dequeue names one', () => {
     const snap = decodeSnapshot(encodeSnapshot(w));
     const row = Array.from(snap.units.id.subarray(0, snap.units.count)).indexOf(a);
     expect(queueOf(snap, row).map((q) => (q as { oid?: number }).oid)).toEqual(ids);
-    expect(SNAPSHOT_VERSION).toBe(7);
+    // W32 (PLAN-W32 item 8): the demolish column took the state format to 8
+    expect(SNAPSHOT_VERSION).toBe(8);
   });
 
   it('the review probe: after the first move completed, removing it is refused and the second move stays', () => {

@@ -30,16 +30,22 @@
 // builders' queues removes (queue.ts releasedSites, the dropOrphans rule): PLAN-W31 item 5's
 // replacement through the W25 rule, for the whole line. The release clears the builders' queues first
 // and sends the builds once that has applied, so the tiles laid are the preview's, never part of them.
+// W32: planDemolishPreview is the demolish tool's drag: every building whose footprint the dragged
+// line (beltLineTiles, as the upgrade drag) touches, once each, in drag order; those kinds.ts
+// demolishSkip allows (the rule validate.ts planDemolish applies) are the targets, with their refund;
+// the core and unfinished sites are skipped and counted. DemolishPreviewCache keeps the plan for one
+// snapshot tick and pair of end tiles, so the release sends the plan the preview showed.
 //
 // Not under render/: it reaches runs.ts and world.ts (canPlaceOn), which render code may not import.
 
-import { B, BELT_SPEED_NAMES, beltUpgradeSkip, buildingFootprint, buildingInfo, beltLaidWork, isBelt, siteWork, type Cost } from './sim/kinds.ts';
+import { B, BELT_SPEED_NAMES, beltUpgradeSkip, buildingFootprint, buildingInfo, beltLaidWork, demolishSkip, isBelt, siteWork, type Cost } from './sim/kinds.ts';
 import type { Command } from './sim/commands.ts';
 import { planRunOn, type RunPlan, type RunPlanSource } from './sim/runs.ts';
 import { heldReservedSite, ownWallSites, releasedSites, type QueueSource, type ReplaceSource, type SiteSource } from './sim/queue.ts';
 import { BF_COMPLETE, Q_BUILD, Q_RUN, isReserved } from './sim/schema.ts';
 import { snapshotRules } from './snapshotRules.ts';
 import { rowOf } from './render/siteReadout.ts';
+import { amount, itemsInside, rowRefund } from './render/buildingReadout.ts';
 import { runSitesOf, type Snapshot } from './sim/snapshot.ts';
 import type { Terrain } from './sim/terrain.ts';
 import { canPlaceOn } from './sim/world.ts';
@@ -263,7 +269,7 @@ export function planBeltUpgrade(v: DragView, from: [number, number], to: [number
     if (r < 0 || !isBelt(c.kind[r]!)) continue;
     const tier = c.tier[r]!;
     // kinds.ts beltUpgradeSkip: the rule the upgradeBelts command applies (validate.ts planBeltUpgrades)
-    if (beltUpgradeSkip(c.kind[r]!, c.flags[r]!, tier, researched)) {
+    if (beltUpgradeSkip(c.kind[r]!, c.flags[r]!, tier, researched, c.demolish[r]!)) {
       plan.skipped.push([x, z]);
       continue;
     }
@@ -275,6 +281,98 @@ export function planBeltUpgrade(v: DragView, from: [number, number], to: [number
     for (let k = 0; k < 3; k++) plan.cost[k] = plan.cost[k]! + cost[k]!;
   }
   return plan;
+}
+
+/** W32: what a demolish-tool drag will do (planDemolishPreview); the command's own plan on the world is validate.ts DemolishPlan. */
+export interface DemolishPreview {
+  /** Every building the line touches, each once, in drag order. */
+  all: number[];
+  /** Those it demolishes (the demolish command's targets), in drag order. */
+  targets: number[];
+  /** Their footprints, [tx, ty, fw, fh] (the preview's cross marks). */
+  tiles: Array<[number, number, number, number]>;
+  /** Line tiles on a building that is skipped (the preview's skip marks). */
+  skipped: Array<[number, number]>;
+  /** Skipped buildings by reason (kinds.ts demolishSkip). */
+  skips: { core: number; site: number };
+  /** What demolishing the targets returns now: mass, energy (always 0), rare. */
+  refund: Cost;
+  /** Some target holds items, which demolishing loses. */
+  itemsLost: boolean;
+}
+
+/**
+ * W32: the buildings a demolish drag from tile `from` to tile `to` touches (beltLineTiles), each once,
+ * in drag order; demolishSkip (the command's rule) splits them into targets and skipped. A tile
+ * booked by a click just sent, or off the map, is passed over.
+ */
+export function planDemolishPreview(v: DragView, from: [number, number], to: [number, number]): DemolishPreview {
+  const plan: DemolishPreview = { all: [], targets: [], tiles: [], skipped: [], skips: { core: 0, site: 0 }, refund: [0, 0, 0], itemsLost: false };
+  const s = v.snapshot;
+  if (!s) return plan;
+  const c = s.buildings.cols;
+  const W = v.terrain.w;
+  const seen = new Map<number, boolean>(); // id → is a target
+  for (const [x, z] of beltLineTiles(from[0], from[1], to[0], to[1], 0)) {
+    if (x < 0 || z < 0 || x >= W || z >= v.terrain.h) continue;
+    const r = (v.occupancy[z * W + x] ?? 0) - 1;
+    if (r < 0) continue;
+    const id = s.buildings.id[r]!;
+    let target = seen.get(id);
+    if (target === undefined) {
+      const why = demolishSkip(c.kind[r]!, c.flags[r]!);
+      target = why === null;
+      seen.set(id, target);
+      plan.all.push(id);
+      if (why) plan.skips[why]++;
+      else {
+        plan.targets.push(id);
+        plan.tiles.push([c.tx[r]!, c.ty[r]!, c.fw[r]!, c.fh[r]!]);
+        const refund = rowRefund(s, r);
+        for (let k = 0; k < 3; k++) plan.refund[k] = plan.refund[k]! + refund[k]!;
+        if (itemsInside(s, r)) plan.itemsLost = true;
+      }
+    }
+    if (!target) plan.skipped.push([x, z]);
+  }
+  return plan;
+}
+
+/** W32: "Demolish 8 · +12.5 mass +0 rare · 2 skipped · items inside are lost" (skipped and items only when there are any). */
+export function demolishLabel(p: DemolishPreview): string {
+  const n = p.targets.length;
+  const parts = [`Demolish ${n}`, n ? `+${amount(p.refund[0])} mass +${amount(p.refund[2])} rare` : 'nothing to demolish'];
+  const skipped = p.skips.core + p.skips.site;
+  if (skipped) parts.push(`${skipped} skipped`);
+  if (p.itemsLost) parts.push('items inside are lost');
+  return parts.join(' · ');
+}
+
+/**
+ * W32: the demolish drag's plan, worked out again only when the snapshot tick or an end tile changes;
+ * `view` is called only then. The release takes the plan from here, so it sends what the preview showed.
+ */
+export class DemolishPreviewCache {
+  private plan: DemolishPreview | null = null;
+  private readonly key = { tick: -1, fx: 0, fy: 0, tx: 0, ty: 0 };
+
+  get(tick: number, from: readonly [number, number], to: readonly [number, number], view: () => DragView): DemolishPreview {
+    const k = this.key;
+    if (!this.plan || k.tick !== tick || k.fx !== from[0] || k.fy !== from[1] || k.tx !== to[0] || k.ty !== to[1]) {
+      Object.assign(k, { tick, fx: from[0], fy: from[1], tx: to[0], ty: to[1] });
+      this.plan = planDemolishPreview(view(), [from[0], from[1]], [to[0], to[1]]);
+    }
+    return this.plan;
+  }
+
+  /** The plan last made (null after clear). */
+  get last(): DemolishPreview | null {
+    return this.plan;
+  }
+
+  clear(): void {
+    this.plan = null;
+  }
 }
 
 /** "8 to Medium · 4 to Fast · 3 skipped · 16 mass" (a zero count is left out; "nothing to upgrade" when no target). */

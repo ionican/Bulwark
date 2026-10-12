@@ -40,6 +40,11 @@ export const BUILDING_FIELDS = [
   { name: 'shield', type: 'f32' },
   /** Temporary turret: seconds left. */
   { name: 'life', type: 'f32' },
+  /**
+   * W32: demolish progress 0..1; 0 = not being demolished. Set above 0 by the first tick of an
+   * engineer's demolish work and kept when the work stops (economy.ts stepDemolition).
+   */
+  { name: 'demolish', type: 'f32' },
   { name: 'cooldown', type: 'f32', snap: false },
   { name: 'rr', type: 'u8', snap: false },
   { name: 'moved', type: 'i32', snap: false },
@@ -153,6 +158,9 @@ export const G_CORE_ID = 47; // the core's building id, -1 when none
 export const G_CORE_MASS = 48; // mass the core has taken off belts
 export const G_CORE_RARE = 49; // rare the core has taken off belts
 export const G_SPENT = 50; // 50..52: exact cumulative spending, mass, energy, rare
+/** W32 snapshot globals: buildings demolished so far, and the mass and rare their demolition returned (54, 55). */
+export const G_DEMOLISHED = 53;
+export const G_DEMOLISH_REFUND = 54;
 
 export const Q_MOVE = 0;
 export const Q_BUILD = 1;
@@ -161,6 +169,8 @@ export const Q_PRODUCE = 3;
 export const Q_RECLAIM = 4;
 /** W29: repair a damaged building. */
 export const Q_REPAIR = 5;
+/** W32: demolish a finished building. */
+export const Q_DEMOLISH = 6;
 
 export const WRECK_FIELDS = [
   { name: 'kind', type: 'u8' },

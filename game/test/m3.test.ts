@@ -325,6 +325,8 @@ describe('save files', () => {
     new DataView(old.buffer).setUint32(4, SAVE_VERSION - 1, true);
     expect(() => deserializeWorld(old)).toThrow(SaveVersionError);
     // W24: SAVE_VERSION went from 1 to 2, so the message names the versions from the constant.
+    // W32: SAVE_VERSION 5; version 4 is still read, but only with state format 7, so this save
+    // (version 4 in the header, state format 8) is still refused.
     expect(() => deserializeWorld(old)).toThrow(new RegExp(`version ${SAVE_VERSION - 1} .* reads version ${SAVE_VERSION}`));
     expect(() => deserializeWorld(new Uint8Array(64))).toThrow(/not a Bulwark save/);
   });

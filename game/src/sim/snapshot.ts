@@ -22,7 +22,23 @@
 // The bytes depend on simulation state only (no timings), so equal state gives byte-identical
 // snapshots — the determinism tests compare them.
 
-import { ALIEN_FIELDS, BF_COMPLETE, BUILDING_FIELDS, G_BELTS, G_CORE_ID, G_CORE_MASS, G_CORE_RARE, G_RESEARCH_DONE, G_SHORT, G_SPENT, PROJECTILE_FIELDS, UNIT_FIELDS, WRECK_FIELDS } from './schema.ts';
+import {
+  ALIEN_FIELDS,
+  BF_COMPLETE,
+  BUILDING_FIELDS,
+  G_BELTS,
+  G_CORE_ID,
+  G_CORE_MASS,
+  G_CORE_RARE,
+  G_DEMOLISHED,
+  G_DEMOLISH_REFUND,
+  G_RESEARCH_DONE,
+  G_SHORT,
+  G_SPENT,
+  PROJECTILE_FIELDS,
+  UNIT_FIELDS,
+  WRECK_FIELDS,
+} from './schema.ts';
 import { BYTES, makeArray, type AnyTypedArray, type ArrayFor, type FieldSpec, type Table } from './table.ts';
 import { SCENARIO_NAMES, type World } from './world.ts';
 import { STAT_COUNT } from './stats.ts';
@@ -43,8 +59,10 @@ export const SNAPSHOT_MAGIC = 0x314b5742; // "BWK1"
  * 7 (W29): the core kind, mass and rare items, BF_DISABLED and BF_IDLE, the extractor buffer in the
  * stock column, the repair order kind (Q_REPAIR), and globals 46–52 (belts on, the core's id,
  * delivered mass and rare, exact cumulative spending); 56 globals.
+ * 8 (W32): the building column `demolish` (demolish progress), the demolish order kind (Q_DEMOLISH),
+ * and globals 53–55 (buildings demolished, the mass and rare their demolition returned).
  */
-export const SNAPSHOT_VERSION = 7;
+export const SNAPSHOT_VERSION = 8;
 const HEADER_WORDS = 16;
 const HEADER_BYTES = HEADER_WORDS * 4;
 export const GLOBAL_COUNT = 56;
@@ -110,6 +128,7 @@ export const G_COMMANDER_DEATHS = 43; // sandbox: commanders lost so far
 export const G_QUEUE_ORDERS = 44; // W25: orders in the queue section, all units
 export const G_QUEUE_BYTES = 45; // W25c: length of the queue section in bytes
 // W29 globals 46–52 are in schema.ts (render code reads them): G_BELTS, G_CORE_ID, G_CORE_MASS, G_CORE_RARE, G_SPENT
+// W32 globals 53–55 too: G_DEMOLISHED, G_DEMOLISH_REFUND
 
 
 type SnapFields<S extends readonly FieldSpec[]> = Exclude<S[number], { snap: false }>;
@@ -346,6 +365,9 @@ function writeGlobals(world: World, g: Float64Array): void {
   g[G_CORE_MASS] = world.delivered[0]!;
   g[G_CORE_RARE] = world.delivered[1]!;
   for (let k = 0; k < 3; k++) g[G_SPENT + k] = world.spentTotal[k]!;
+  g[G_DEMOLISHED] = world.demolished;
+  g[G_DEMOLISH_REFUND] = world.demolishRefund[0]!;
+  g[G_DEMOLISH_REFUND + 1] = world.demolishRefund[1]!;
 }
 
 /**

@@ -21,6 +21,10 @@
 // applied (economy.ts stepRepair). The core is never removed: at 0 hp it is disabled (combat.ts).
 // W31: a belt's tier is its speed (conveyor.ts). A build lays a belt at a tier; `upgradeBelts`
 // upgrades a dragged line one speed step as one command (validate.ts planBeltUpgrades).
+// W32: engineers demolish finished buildings (validate.ts planDemolish). After the units step, a
+// building that got demolish power or is being demolished loses this tick's build and repair power
+// (economy.ts stopDemolishedWork); after repair, demolition advances and completes (stepDemolition),
+// refunding half the mass and rare into the pool and removing the building.
 
 import {
   ALIEN_FIELDS,
@@ -58,13 +62,13 @@ import { TILE_GROUND, TILE_MASS, TILE_RARE, TILE_ROCK, map1Terrain, tileAt, type
 import { FlowField } from './flowfield.ts';
 import { Pathfinder } from './pathfind.ts';
 import type { Command, StampedCommand } from './commands.ts';
-import { stepEconomyIncome, stepUpkeep, stepConstruction, stepRepair } from './economy.ts';
+import { stepEconomyIncome, stepUpkeep, stepConstruction, stepDemolition, stepRepair, stopDemolishedWork } from './economy.ts';
 import { stepConveyors } from './conveyor.ts';
 import { acquireTargets, damageBuilding, fireTurrets, stepProjectiles, stepShieldsAndTimers, AlienGrid } from './combat.ts';
 import { stepAliens } from './aliens.ts';
 import { stepUnits, type Order, type OrderSpec } from './units.ts';
 import { dequeueIndex, dropOrphans, heldReservedSite, ownReservedSite, replacementProblem, worldSiteSource } from './queue.ts';
-import { planBeltUpgrades, validateCommand, upgradeProblem } from './validate.ts';
+import { planBeltUpgrades, planDemolish, validateCommand, upgradeProblem } from './validate.ts';
 import { COMMANDER_WRECK_SALVAGE, RESEARCH, RESEARCH_INDEX, SANDBOX_RESPAWN_TICKS, callEarlyBonus, FIELD_ENG_TURRET_COOLDOWN } from './balance.ts';
 import { map1 } from '../../../model/data/map1.ts';
 import { START_ENGINEERS, TICK_HZ, siteWork } from './kinds.ts';
@@ -281,6 +285,16 @@ export class World {
   /** Some slot of repairPower is non-zero (set with it in units.ts); stepRepair does nothing while false. */
   repairing = false;
 
+  // ---- W32: demolish ----
+  /** Demolish power delivered to each building slot this tick (units.ts), applied by economy.ts stepDemolition. */
+  readonly demolishPower: Float64Array;
+  /** Some slot of demolishPower is non-zero this tick (set with it in units.ts). */
+  demolishing = false;
+  /** Buildings demolished so far (not counted in buildingsLost). */
+  demolished = 0;
+  /** Mass and rare their demolition returned to the pool so far. */
+  readonly demolishRefund = new Float64Array(2);
+
   // ---- research ----
   /** Bit i set: RESEARCH[i] done. Never cleared within a map. */
   researchDone = 0;
@@ -312,6 +326,7 @@ export class World {
     this.buildPower = new Float64Array(CAPACITY.buildings);
     this.builderCount = new Uint8Array(CAPACITY.buildings);
     this.repairPower = new Float64Array(CAPACITY.buildings);
+    this.demolishPower = new Float64Array(CAPACITY.buildings);
     this.belts = opts.belts ?? false;
     this.alienGrid = new AlienGrid(terrain.w, terrain.h, CAPACITY.aliens);
     this.pool.set(START_STOCK);
@@ -389,8 +404,10 @@ export class World {
     stepUpkeep(this);
     stepConveyors(this);
     stepUnits(this);
+    stopDemolishedWork(this);
     stepConstruction(this);
     stepRepair(this);
+    stepDemolition(this);
     stepRuns(this);
     fireTurrets(this);
     stepProjectiles(this);
@@ -531,6 +548,21 @@ export class World {
           const b = this.buildings.slotForId(id);
           if (b >= 0 && this.startUpgrade(b)) this.orderAll(plan.units, () => ({ t: 'build', id }), true);
         }
+        break;
+      }
+      case 'demolish': {
+        // W32: the plan validation made a moment ago, on this state (validate.ts planDemolish).
+        // Without Shift the engineers' queues are replaced once; each target then gives each engineer
+        // one demolish order, in drag order, unless it already holds one for that building.
+        const plan = this.validatedResult<ReturnType<typeof planDemolish>>(cmd) ?? planDemolish(this, cmd);
+        if (typeof plan === 'string') break;
+        if (!cmd.queue) this.replaceQueues(plan.units);
+        for (const id of plan.ids)
+          for (const uid of plan.units) {
+            const slot = this.units.slotForId(uid);
+            if (slot < 0 || this.orders[slot]?.some((o) => o.t === 'demolish' && o.id === id)) continue;
+            this.giveOrder(slot, { t: 'demolish', id }, true);
+          }
         break;
       }
       case 'reclaim': {

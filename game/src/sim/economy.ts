@@ -13,9 +13,13 @@
 // the buffer on a belt one item at a time and the core adds what it takes to the pool. The mass and
 // rare income rates are then what the core took over the last 10 s, plus the commander's income.
 // Repair (stepRepair) adds hit points free, from repair power the units delivered this tick.
+// W32 demolish: before construction and repair, a building that got demolish power this tick or is
+// being demolished gets no build or repair power (stopDemolishedWork); after repair, stepDemolition
+// advances demolition and, when it completes, puts half the building's mass and rare into the pool
+// in one step (no carrying, no rubble object) and removes the building.
 
 import { BF_ACTIVE, BF_COMPLETE, BF_DISABLED, BF_IDLE, BF_STARTED, BF_STARVED, BF_UPGRADING } from './schema.ts';
-import { B, COMMANDER_INCOME, SHIELD, TICK_SECONDS, buildingInfo, isExtractor, siteWork, type Cost } from './kinds.ts';
+import { B, COMMANDER_INCOME, SHIELD, TICK_SECONDS, buildingInfo, demolishRefund, demolishTime, isExtractor, siteWork, type Cost } from './kinds.ts';
 import { extractorCap, extractorRate } from './tuning.ts';
 import { ENGINEER_BUILD_TIME, ENGINEER_COST, RESEARCH } from './balance.ts';
 import { map1 } from '../../../model/data/map1.ts';
@@ -257,6 +261,73 @@ export function stepRepair(w: World): void {
     if (c.hp[s]! >= max && c.flags[s]! & BF_DISABLED) c.flags[s] = c.flags[s]! & ~BF_DISABLED;
     w.costDrift = true;
   }
+}
+
+/**
+ * W32: no double work on one building. Run after the units have delivered their power and before
+ * stepConstruction and stepRepair: every slot that got demolish power this tick, or is being
+ * demolished, loses its build and repair power, so an upgrade or repair never advances on the tick
+ * demolition starts (the units drop those orders from the next tick, units.ts).
+ */
+export function stopDemolishedWork(w: World): void {
+  if (!w.demolishing) return;
+  const b = w.buildings;
+  const d = b.cols.demolish;
+  const p = w.demolishPower;
+  for (let s = 0; s < b.highWater; s++) {
+    if (p[s]! <= 0 && !(d[s]! > 0)) continue;
+    w.buildPower[s] = 0;
+    w.builderCount[s] = 0;
+    w.repairPower[s] = 0;
+  }
+}
+
+/**
+ * W32 demolition: each building given demolish power this tick advances its demolish progress by
+ * power × DT ÷ demolishTime (half the BP·s that built it, upgrades included; kinds.ts), with the
+ * construction rule's snap: a remainder below PROGRESS_SNAP finishes now. At 1 − PROGRESS_EPS it is
+ * demolished: half the mass and rare it cost (a part-done upgrade at its stored progress) go into the
+ * pool, energy none, then it is removed (items inside go with it, as when aliens destroy it). A
+ * temporary turret goes on its first tick of work and returns nothing. A building with no hit points
+ * left (dead, removeDead has not run yet) is never completed or refunded here. Sandbox unlimited
+ * spending does not change the refund.
+ */
+export function stepDemolition(w: World): void {
+  if (!w.demolishing) return;
+  w.demolishing = false;
+  const b = w.buildings;
+  const c = b.cols;
+  const p = w.demolishPower;
+  for (let s = 0; s < b.highWater; s++) {
+    const bp = p[s]!;
+    if (bp <= 0) continue;
+    p[s] = 0;
+    if (!b.alive[s] || !(c.flags[s]! & BF_COMPLETE) || c.hp[s]! <= 0) continue;
+    const kind = c.kind[s]!;
+    if (kind !== B.tempTurret) {
+      const d = c.demolish[s]!;
+      let step = Math.min(1 - d, (bp * DT) / demolishTime(kind, c.tier[s]!, c.fw[s]!, c.fh[s]!));
+      if (1 - d - step < PROGRESS_SNAP) step = 1 - d;
+      c.demolish[s] = d + step;
+      if (c.demolish[s]! < 1 - PROGRESS_EPS) continue;
+    }
+    demolished(w, s);
+  }
+}
+
+/** W32: building slot s is demolished: the refund into the pool and the counters, then removal. */
+function demolished(w: World, s: number): void {
+  const c = w.buildings.cols;
+  const kind = c.kind[s]!;
+  const refund = kind === B.tempTurret ? null : demolishRefund(kind, c.tier[s]!, c.fw[s]!, c.fh[s]!, c.flags[s]! & BF_UPGRADING ? c.progress[s]! : 0);
+  if (refund) {
+    w.pool[0] = w.pool[0]! + refund[0];
+    w.pool[2] = w.pool[2]! + refund[2];
+    w.demolishRefund[0] = w.demolishRefund[0]! + refund[0];
+    w.demolishRefund[1] = w.demolishRefund[1]! + refund[2];
+  }
+  w.demolished++;
+  w.removeBuilding(s);
 }
 
 function complete(w: World, s: number, upgrading: boolean): void {

@@ -2,6 +2,9 @@
 // W31: the bar is a list of entries, not kinds: the belt has three, "Belt — Slow", "Belt — Medium"
 // and "Belt — Fast", each its own button (ids beltSlow, beltMedium, beltFast; data-kind "belt" and
 // data-tier 1..3). A locked entry is disabled and says "✕ needs <research>" (entryLock).
+// W32: the Engineers group is a list too (ENGINEER_ACTIONS), with "Demolish [Del]" after Upgrade;
+// an action that needs an engineer is disabled without one and its small text says so
+// (engineerAction), so the state is never shown by colour alone.
 
 import { ALIEN_KINDS, ALIEN_INFO, BELT_SPEED_NAMES, BUILDING_INFO, beltLaidWork, type BuildingKind } from '../sim/kinds.ts';
 import { BUILD_REQUIRES, RESEARCH, RESEARCH_INDEX, tierRequires } from '../sim/balance.ts';
@@ -66,9 +69,41 @@ export const costLabel = (k: BuildingKind, tier = 1) => {
   return `${m}M ${e}E${r ? ` ${r}R` : ''}`;
 };
 
+/** W32: one button of the Engineers group: its id (data-action), label and small text. */
+export interface EngineerAction {
+  id: 'upgrade' | 'demolish' | 'produce' | 'turret' | 'stop';
+  label: string;
+  sub: string;
+}
+
+/** The Engineers group, in order. */
+export const ENGINEER_ACTIONS: readonly EngineerAction[] = [
+  { id: 'upgrade', label: 'Upgrade [U]', sub: 'click a wall, turret or belt' },
+  { id: 'demolish', label: 'Demolish [Del]', sub: 'click or drag a building' },
+  { id: 'produce', label: 'Produce engineer', sub: 'commander: 60M 200E' },
+  { id: 'turret', label: 'Drop turret [T]', sub: '75 s cooldown' },
+  { id: 'stop', label: 'Stop [X]', sub: 'clear orders' },
+];
+
+/**
+ * Whether an Engineers-group action is disabled for the selection (`engineers`, `commander`: one is
+ * selected; `builders`: either is, default when either is), and its small text: an action that needs
+ * an engineer says "needs an engineer" while it is disabled (W32: demolish; upgrade and the turret
+ * keep their text, as before).
+ */
+export function engineerAction(id: EngineerAction['id'], has: { engineers: boolean; commander: boolean; builders?: boolean }): { disabled: boolean; sub: string } {
+  const a = ENGINEER_ACTIONS.find((x) => x.id === id)!;
+  if (id === 'produce') return { disabled: !has.commander, sub: a.sub };
+  if (id === 'stop') return { disabled: !(has.builders ?? (has.engineers || has.commander)), sub: a.sub };
+  const disabled = !has.engineers;
+  return { disabled, sub: disabled && id === 'demolish' ? 'needs an engineer' : a.sub };
+}
+
 export interface BuildBarHandlers {
   build(kind: BuildingKind, tier: number): void;
   upgrade(): void;
+  /** W32: the demolish tool. */
+  demolish(): void;
   produce(): void;
   dropTurret(): void;
   stop(): void;
@@ -104,10 +139,12 @@ export class BuildBar {
       }
     }
     const act = this.group(bar, 'ENGINEERS');
-    this.buttons.set('upgrade', this.button(act, 'Upgrade [U]', 'click a wall, turret or belt', () => h.upgrade()));
-    this.buttons.set('produce', this.button(act, 'Produce engineer', 'commander: 60M 200E', () => h.produce()));
-    this.buttons.set('turret', this.button(act, 'Drop turret [T]', '75 s cooldown', () => h.dropTurret()));
-    this.buttons.set('stop', this.button(act, 'Stop [X]', 'clear orders', () => h.stop()));
+    const on: Record<EngineerAction['id'], () => void> = { upgrade: h.upgrade, demolish: h.demolish, produce: h.produce, turret: h.dropTurret, stop: h.stop };
+    for (const a of ENGINEER_ACTIONS) {
+      const b = this.button(act, a.label, a.sub, () => on[a.id]());
+      b.dataset.action = a.id;
+      this.buttons.set(a.id, b);
+    }
     this.hint = document.createElement('div');
     this.hint.style.cssText = 'font-size:11px;opacity:.85;max-width:200px;margin-top:3px;min-height:14px';
     act.appendChild(this.hint);
@@ -151,9 +188,9 @@ export class BuildBar {
   }
 
   /**
-   * Enables the bar for builders; marks the active tool (an entry id or 'upgrade'); marks entries
-   * still locked by research (`researched` takes a research id; `researchMask` is the done mask it
-   * reads, so the locks are worked out again only when it changes).
+   * Enables the bar for builders; marks the active tool (an entry id, 'upgrade' or 'demolish'); marks
+   * entries still locked by research (`researched` takes a research id; `researchMask` is the done
+   * mask it reads, so the locks are worked out again only when it changes).
    */
   update(canBuild: boolean, hasEngineers: boolean, hasCommander: boolean, active: string | null, hint: string, researchMask: number, researched: (id: string) => boolean) {
     if (researchMask !== this.lockMask) {
@@ -162,8 +199,14 @@ export class BuildBar {
     }
     for (const [k, b] of this.buttons) {
       const lock = this.locks.get(k) ?? null;
-      b.disabled = k === 'upgrade' || k === 'turret' ? !hasEngineers : k === 'produce' ? !hasCommander : !canBuild || lock !== null;
+      const action = b.dataset.action ? engineerAction(b.dataset.action as EngineerAction['id'], { engineers: hasEngineers, commander: hasCommander, builders: canBuild }) : null;
+      b.disabled = action ? action.disabled : !canBuild || lock !== null;
       b.classList.toggle('on', k === active);
+      if (action) {
+        const small = b.querySelector('small');
+        if (small && small.textContent !== action.sub) small.textContent = action.sub;
+        continue;
+      }
       b.title = lock ? `Locked: needs research "${lock}"` : '';
       const small = b.querySelector('small');
       if (small && lock && !small.textContent!.startsWith('✕')) small.textContent = `✕ needs ${lock}`;
