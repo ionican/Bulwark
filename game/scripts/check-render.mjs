@@ -800,8 +800,9 @@ async function deliveryLayout(extractors) {
   return { steps, tiles: lines.reduce((a, l) => a + l.length, 0) };
 }
 
-const PLACE_ALL = (steps) => `(async () => {
-  const out = await Promise.all(${JSON.stringify(steps)}.map(([k, x, z, d]) => __game.place(k, x, z, d)));
+/** Places every step at once (`place`); W31: belts at speed `beltTier` (undefined: the command's default, Slow). */
+const PLACE_ALL = (steps, beltTier) => `(async () => {
+  const out = await Promise.all(${JSON.stringify(steps)}.map(([k, x, z, d]) => __game.place(k, x, z, d, k === 'belt' ? ${JSON.stringify(beltTier ?? null)} ?? undefined : undefined)));
   return out.map((r, i) => (r.ok ? null : ${JSON.stringify(steps)}[i].join(' ') + ': ' + r.reason)).filter(Boolean);
 })()`;
 
@@ -980,7 +981,9 @@ async function w29Items() {
 /** The W29 delivery load: one measured window (game camera), the figures and the gate's verdict. */
 async function measureDelivery(layout) {
   await load('/?sandbox=1');
-  const refused = js(PLACE_ALL(layout.steps));
+  // W31: laid Fast, build 170's speed. The load measured is the belt tiles carrying items; Slow lines
+  // took about twice as long to fill and missed the 90 s wait below under load.
+  const refused = js(PLACE_ALL(layout.steps, 3));
   if (refused.length) fail(`W29 delivery fixture refused: ${refused.join('; ')}`);
   await until('300 belt tiles carrying items', `(__game.fillBuffers(), __game.beltItems.occupied >= 300)`, 90);
   camera({ x: 64, z: 58, distance: 50, yaw: 0 });
