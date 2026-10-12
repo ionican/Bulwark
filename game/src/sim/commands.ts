@@ -6,6 +6,7 @@
 // W31: belts have a speed, their tier (1 Slow, 2 Medium, 3 Fast). `build` and `place` take an
 // optional `tier` (belts only, integer 1..3; a tier on any other kind is refused), and
 // `upgradeBelts` upgrades a dragged line one speed step, as one command.
+// W32: `demolish` sends engineers to take finished buildings down for half their mass and rare.
 
 import type { TuneTarget } from './tuning.ts';
 
@@ -29,6 +30,15 @@ export type Command =
    * a command whose targets are all skipped (it changes nothing). Checked again when it applies.
    */
   | { t: 'upgradeBelts'; ids: number[]; targets: Array<{ id: number; expectedTier: number }>; queue?: boolean }
+  /**
+   * W32: engineers demolish finished buildings, `targets` (building ids) in drag order, as one
+   * command (a click sends one). Engineers only: the commander does not demolish. A target is
+   * skipped, and counted, when it is a duplicate, gone, the core or an unfinished site; one already
+   * being demolished is a target. Refused when every target is skipped, when no live engineer is
+   * named, or when the orders would not fit a unit's queue (world.ts MAX_ORDERS). Each target gives
+   * each engineer one demolish order, except one it already holds. Checked again when it applies.
+   */
+  | { t: 'demolish'; ids: number[]; targets: number[]; queue?: boolean }
   /** Engineers reclaim a wreck and carry the salvage to a depot. */
   | { t: 'reclaim'; ids: number[]; wreck: number; queue?: boolean }
   | { t: 'stop'; ids: number[] }

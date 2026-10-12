@@ -5,6 +5,8 @@
 // a gate. The world then also requires every footprint tile to be a complete wall (no reserved or
 // started tile), and converts atomically: the footprint's walls are removed and the gate site is
 // created in the same tick, at tier 1, with no refund for the walls (balance.ts GATE_COST_MULT).
+// W32: a footprint wall being demolished (demolish > 0), or one a unit holds a demolish order on,
+// refuses the conversion with a reason.
 //
 // Passability (world.ts rebuildGrids): player units may pass only through the centre column of a
 // complete gate (the corridor, 1 tile wide, through every row); the two outer columns are solid
@@ -12,7 +14,7 @@
 // stops them cutting diagonally past a gate's corners. Each footprint tile's flow cost uses the
 // gate's hit points ÷ depth, so breaking the gate is charged once along a route (flowfield.ts).
 
-import { B, buildingInfo } from './kinds.ts';
+import { B, buildingInfo, holdsDemolish, isDemolishing } from './kinds.ts';
 import { constructionState } from './schema.ts';
 import { gateStats } from './balance.ts';
 import type { World } from './world.ts';
@@ -131,8 +133,17 @@ export function planGate(w: World, cx: number, cz: number, axis?: 'x' | 'z'): Ga
     if (state !== 'complete') {
       return { ...check, ok: false, reason: `every gate tile must be a finished wall: the wall at ${x},${z} is ${state === 'started' ? 'under construction' : 'reserved (not started)'}`, tiles: [] };
     }
+    // W32: conversion would remove a wall that is being demolished, or that an engineer is on its way to demolish
+    if (isDemolishing(c, b)) return { ...check, ok: false, reason: `the wall at ${x},${z} is being demolished`, tiles: [] };
+    if (demolishOrdered(w, w.buildings.id(b))) return { ...check, ok: false, reason: `the wall at ${x},${z} has a demolish order`, tiles: [] };
   }
   return check;
+}
+
+/** W32: some live unit holds a demolish order on building `id`. */
+function demolishOrdered(w: World, id: number): boolean {
+  for (let s = 0; s < w.units.highWater; s++) if (w.units.alive[s] && holdsDemolish(w.orders[s], id)) return true;
+  return false;
 }
 
 /** Anchor tile and footprint of a checked gate: [tx, ty, fw, fh, dir]. */

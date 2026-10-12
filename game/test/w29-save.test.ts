@@ -46,8 +46,9 @@ describe('W29 saves', () => {
   });
 
   it('the save and snapshot versions are bumped', () => {
-    expect(SAVE_VERSION).toBe(4);
-    expect(SNAPSHOT_VERSION).toBe(7);
+    // W32 (PLAN-W32 item 8): the demolish column and counters took them to save 5, state format 8
+    expect(SAVE_VERSION).toBe(5);
+    expect(SNAPSHOT_VERSION).toBe(8);
   });
 
   it('a belts world round-trips and steps identically, every tick across delivery-window boundaries', () => {

@@ -77,7 +77,8 @@ function scripted(): World {
 
 describe('W25 acceptance 5: the queue in the snapshot', () => {
   it('the snapshot version is bumped for the queue section (W25c: 6, order ids)', () => {
-    expect(SNAPSHOT_VERSION).toBe(7);
+    // W32 (PLAN-W32 item 8): the demolish column took the state format to 8
+    expect(SNAPSHOT_VERSION).toBe(8);
   });
 
   it('each unit’s queue in the snapshot matches the world’s orders after a scripted sequence', () => {

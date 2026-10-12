@@ -1,0 +1,26 @@
+{
+  "commit": "c926e26",
+  "saveVersion": 4,
+  "stateFormat": 7,
+  "tick": 9000,
+  "buildings": 214,
+  "complete": 176,
+  "kinds": {
+    "core": 1,
+    "massExtractor": 6,
+    "belt": 170,
+    "generator": 16,
+    "gun": 8,
+    "lab": 1,
+    "wall": 5,
+    "area": 5,
+    "rareExtractor": 2
+  },
+  "units": 10,
+  "buildingsLost": 29,
+  "pool": [
+    1.214306433183765e-17,
+    19471.024842778148,
+    6.7506673125729115
+  ]
+}

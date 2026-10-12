@@ -8,13 +8,32 @@
 // W31: the build tool also carries a belt speed (`tier`, 1 Slow .. 3 Fast; 1 for every other kind),
 // and B picks the fastest belt speed researched (fastestBeltTier). The upgrade tool also takes a
 // drag along belts (main.ts: one upgradeBelts command per drag).
+// W32: the demolish tool (Delete or Backspace, or the build bar's Demolish button; needs an engineer):
+// a click on a finished building sends one demolish command, a drag one for every building along
+// the line. A click on the core, a site or open ground does nothing: the tool stays and the hint
+// says why (demolishClickHint).
 // Pure: main.ts owns the input and calls these; the panel names the tool from toolLabel().
 
 import type { Command } from './sim/commands.ts';
 import { SPAWN_AT_MAX, tierRequires } from './sim/balance.ts';
-import { B, BELT_TOP_TIER, isBelt } from './sim/kinds.ts';
+import { B, BELT_TOP_TIER, demolishSkip, isBelt } from './sim/kinds.ts';
 
-export type ToolName = 'select' | 'build' | 'wall' | 'upgrade' | 'gate' | 'spawn';
+export type ToolName = 'select' | 'build' | 'wall' | 'upgrade' | 'demolish' | 'gate' | 'spawn';
+
+/** W32: the keys that choose the demolish tool (a Mac's "delete" key sends Backspace). */
+export const DEMOLISH_KEYS: readonly string[] = ['Delete', 'Backspace'];
+
+/**
+ * W32: why a demolish-tool click on a building of `kind` with `flags` (kind -1: no building) does
+ * nothing, for the hint; null when it sends a demolish command (kinds.ts demolishSkip, the command's rule).
+ */
+export function demolishClickHint(kind: number, flags: number): string | null {
+  if (kind < 0) return 'Click a finished building to demolish it.';
+  const why = demolishSkip(kind, flags);
+  if (why === 'core') return 'The core cannot be demolished.';
+  if (why === 'site') return 'That is an unfinished site: demolish takes finished buildings (Stop or dequeue cancels a site).';
+  return null;
+}
 
 export class Tools {
   name: ToolName = 'select';
@@ -40,11 +59,11 @@ export class Tools {
   }
 
   /**
-   * A tool that needs builders (build, wall or upgrade), chosen by the build bar or a key: armed when
+   * A tool that needs builders (build, wall, upgrade or W32 demolish, which needs an engineer), chosen by the build bar or a key: armed when
    * `builders` are selected; without them the shortcut cannot arm, and the map returns to select
    * whatever tool was active, so an armed gate or spawn tool does not act on the next click.
    */
-  chooseForBuilders(name: 'build' | 'wall' | 'upgrade', builders: boolean, kind = -1, tier = 1): boolean {
+  chooseForBuilders(name: 'build' | 'wall' | 'upgrade' | 'demolish', builders: boolean, kind = -1, tier = 1): boolean {
     if (!builders) {
       this.reset();
       return false;
@@ -119,6 +138,8 @@ export function toolLabel(t: Tools, o: { spawnName?: string; count?: number; dep
       return `Tool: wall run, depth ${o.depth ?? 1} — drag on the map`;
     case 'upgrade':
       return 'Tool: upgrade — click a wall, turret or belt; drag along belts';
+    case 'demolish':
+      return 'Tool: demolish — click a building; drag along a line';
     case 'gate':
       return 'Tool: gate — click a finished wall';
     case 'spawn':

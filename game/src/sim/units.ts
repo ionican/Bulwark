@@ -11,9 +11,17 @@
 // W29 repair: a builder walks into build range of a complete, damaged building and adds its build
 // power to the building's repair power (world.ts repairPower, applied by economy.ts stepRepair);
 // the order ends when the building is at full hit points or gone.
+// W32 demolish (engineers only): an engineer walks into build range of a finished building and adds
+// its build power to the building's demolish power (world.ts demolishPower, applied by economy.ts
+// stepDemolition); the order ends when the building is gone. A building with no hit points left gets
+// no demolish power (removeDead takes it as a loss). Build and repair orders on a building being
+// demolished (demolish > 0) are dropped, so an upgrade or repair on it stops; a wall-run order moves
+// on to the run's next tile. workOnSite, the only place build and repair power is delivered, never
+// gives either to a building being demolished, whatever the order (W32 review: a paused demolition
+// must freeze an upgrade a run builder still holds).
 
 import { BF_COMPLETE, BF_UPGRADING, US_BUILDING, US_IDLE, US_MOVING, US_RECLAIMING, US_UNLOADING, US_WAITING } from './schema.ts';
-import { B, CARRY_CAPACITY, RECLAIM_RATE, TICK_SECONDS, U, unitInfo } from './kinds.ts';
+import { B, CARRY_CAPACITY, RECLAIM_RATE, TICK_SECONDS, U, demolishSkip, isDemolishing, unitInfo } from './kinds.ts';
 import { centreOf, distToBuilding } from './combat.ts';
 import { unitBuildRate, unitSpeed } from './tuning.ts';
 import { PROGRESS_EPS } from './economy.ts';
@@ -34,7 +42,9 @@ export type OrderSpec =
   /** phase 0 collecting, 1 delivering; (x, z) where the last wreck was. */
   | { t: 'reclaim'; id: number; phase: number; x: number; z: number }
   /** W29: repair building `id` to full hit points. */
-  | { t: 'repair'; id: number };
+  | { t: 'repair'; id: number }
+  /** W32: demolish finished building `id` (engineers only). */
+  | { t: 'demolish'; id: number };
 
 /**
  * A queued order. `oid` (W25c) is its id: given once from the world's counter (world.ts
@@ -117,23 +127,33 @@ function stepTo(w: World, s: number, x: number, z: number): boolean {
   return false;
 }
 
+/** What a builder's power goes to: construction or an upgrade, repair (W29), demolition (W32). */
+type Work = 'build' | 'repair' | 'demolish';
+
 /**
  * Builder s works on site slot b (id `id`): adds its build power when in range, otherwise walks
- * there. Returns false when the site cannot be reached (the caller drops the order).
+ * there. Returns false when the site cannot be reached, or (W32) when build or repair work is asked
+ * of a building being demolished; the caller drops the order.
  */
-function workOnSite(w: World, s: number, b: number, id: number, range: number, buildRate: number, repair = false): boolean {
+function workOnSite(w: World, s: number, b: number, id: number, range: number, buildRate: number, work: Work = 'build'): boolean {
   const c = w.units.cols;
   const W = w.terrain.w;
   // Footprint centre, inline (combat.ts centreOf allocates; this runs per builder per tick).
   const bcols = w.buildings.cols;
+  if (work !== 'demolish' && isDemolishing(bcols, b)) return false;
   const bx = bcols.tx[b]! + bcols.fw[b]! / 2;
   const bz = bcols.ty[b]! + bcols.fh[b]! / 2;
   if (distToBuilding(w, b, c.x[s]!, c.z[s]!) <= range) {
     c.state[s] = US_BUILDING;
     c.work[s] = id + 1;
-    if (repair) {
+    if (work === 'repair') {
       w.repairPower[b] = w.repairPower[b]! + buildRate;
       w.repairing = true;
+    } else if (work === 'demolish') {
+      // the slots given demolish power this tick, each once (economy.ts loops over them)
+      if (w.demolishPower[b] === 0) w.demolishSlots.push(b);
+      w.demolishPower[b] = w.demolishPower[b]! + buildRate;
+      w.demolishing = true;
     } else {
       w.buildPower[b] = w.buildPower[b]! + buildRate;
       w.builderCount[b] = Math.min(255, w.builderCount[b]! + 1);
@@ -244,7 +264,8 @@ export function stepUnits(w: World): void {
     }
     if (order.t === 'build') {
       const b = w.buildings.slotForId(order.id);
-      if (b < 0 || !unfinished(w, b)) {
+      // W32: an upgrade on a building being demolished stops
+      if (b < 0 || !unfinished(w, b) || isDemolishing(w.buildings.cols, b)) {
         orders.shift();
         w.paths[s] = null;
         continue;
@@ -255,12 +276,28 @@ export function stepUnits(w: World): void {
     if (order.t === 'repair') {
       const b = w.buildings.slotForId(order.id);
       const bc = w.buildings.cols;
-      if (b < 0 || !(bc.flags[b]! & BF_COMPLETE) || bc.hp[b]! >= bc.maxHp[b]!) {
+      if (b < 0 || !(bc.flags[b]! & BF_COMPLETE) || bc.hp[b]! >= bc.maxHp[b]! || isDemolishing(bc, b)) {
         orders.shift();
         w.paths[s] = null;
         continue;
       }
-      if (!workOnSite(w, s, b, order.id, info.buildRange, buildRate, true)) orders.shift();
+      if (!workOnSite(w, s, b, order.id, info.buildRange, buildRate, 'repair')) orders.shift();
+      continue;
+    }
+    if (order.t === 'demolish') {
+      const b = w.buildings.slotForId(order.id);
+      const bc = w.buildings.cols;
+      if (b < 0 || c.kind[s] !== U.engineer || demolishSkip(bc.kind[b]!, bc.flags[b]!)) {
+        orders.shift();
+        w.paths[s] = null;
+        continue;
+      }
+      // dead but not yet removed (sandbox damage this tick): no demolish power; removeDead takes it
+      if (bc.hp[b]! <= 0) {
+        c.state[s] = US_IDLE;
+        continue;
+      }
+      if (!workOnSite(w, s, b, order.id, info.buildRange, buildRate, 'demolish')) orders.shift();
       continue;
     }
     if (order.t === 'run') {
@@ -271,7 +308,8 @@ export function stepUnits(w: World): void {
         continue;
       }
       let b = order.site >= 0 ? w.buildings.slotForId(order.site) : -1;
-      if (b < 0 || !unfinished(w, b)) {
+      // W32: a tile being demolished (a finished wall whose upgrade started) is left; the run goes on
+      if (b < 0 || !unfinished(w, b) || isDemolishing(w.buildings.cols, b)) {
         order.site = claimNext(w, run, s);
         w.paths[s] = null;
         if (order.site < 0) {

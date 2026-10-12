@@ -5,9 +5,11 @@
 // `allTiers` lifts only the research check, never this). A build at a speed whose research is not
 // done is refused naming it. Tier is part of reserved-site identity (queue.ts header). The
 // drag-upgrade command's plan (planBeltUpgrades) is made here and reused when it applies.
+// W32: so is the demolish command's (planDemolish). A building being demolished (demolish > 0)
+// refuses upgrade, assist, repair and (gate.ts planGate) gate conversion, and a drag-upgrade skips it.
 
 import { SANDBOX_COMMANDS, type Command } from './commands.ts';
-import { ALIEN_KINDS, B, BELT_TOP_TIER, BUILDING_KINDS, U, beltUpgradeSkip, buildingInfo, isBeltTier, tierName } from './kinds.ts';
+import { ALIEN_KINDS, B, BELT_TOP_TIER, BUILDING_KINDS, U, beltUpgradeSkip, buildingInfo, demolishSkip, heldDemolish, isBeltTier, isDemolishing, slotRefund, tierName, type Cost } from './kinds.ts';
 import { BF_COMPLETE, BF_UPGRADING, isReserved } from './schema.ts';
 import { BUILD_REQUIRES, MAX_RUN_DEPTH, RESEARCH, RESEARCH_INDEX, SPAWN_AT_MAX, tierRequires } from './balance.ts';
 import { MAX_ORDERS, type World } from './world.ts';
@@ -29,7 +31,8 @@ export function validateCommand(w: World, cmd: Command): string | null {
   const problem = check(w, cmd);
   if (problem) return problem;
   // Queued orders: refuse when every unit named already holds a full queue (never drop silently).
-  if ('queue' in cmd && cmd.queue && 'ids' in cmd && Array.isArray(cmd.ids) && cmd.ids.length) {
+  // W32: not demolish, whose planner counts only the orders it adds (a shifted reissue adds none).
+  if (cmd.t !== 'demolish' && 'queue' in cmd && cmd.queue && 'ids' in cmd && Array.isArray(cmd.ids) && cmd.ids.length) {
     const full = cmd.ids.every((id) => {
       const s = w.units.slotForId(id);
       return s >= 0 && (w.orders[s]?.length ?? 0) >= MAX_ORDERS;
@@ -70,10 +73,12 @@ function check(w: World, cmd: Command): string | null {
       }
       return null;
     }
-    case 'assist':
+    case 'assist': {
       if (!idList(cmd.ids) || !isInt(cmd.target)) return 'assist needs ids and a target';
-      if (w.buildings.slotForId(cmd.target) < 0) return 'assist target does not exist';
-      return null;
+      const s = w.buildings.slotForId(cmd.target);
+      if (s < 0) return 'assist target does not exist';
+      return demolishing(w, s);
+    }
     case 'upgrade': {
       if (!idList(cmd.ids) || !isInt(cmd.target)) return 'upgrade needs ids and a target';
       // W31 review: with no live unit to take the order the upgrade flag would be set with nobody on it
@@ -84,6 +89,11 @@ function check(w: World, cmd: Command): string | null {
     }
     case 'upgradeBelts': {
       const plan = planBeltUpgrades(w, cmd);
+      w.validated = { cmd, result: plan }; // the apply step and the runner's report reuse it
+      return typeof plan === 'string' ? plan : null;
+    }
+    case 'demolish': {
+      const plan = planDemolish(w, cmd);
       w.validated = { cmd, result: plan }; // the apply step and the runner's report reuse it
       return typeof plan === 'string' ? plan : null;
     }
@@ -208,8 +218,16 @@ export function repairProblem(w: World, s: number): string | null {
   const c = w.buildings.cols;
   const info = buildingInfo(c.kind[s]!);
   if (!(c.flags[s]! & BF_COMPLETE)) return `${info.label} is not finished`;
+  const busy = demolishing(w, s);
+  if (busy) return busy;
   if (c.hp[s]! >= c.maxHp[s]!) return `${info.label} is not damaged`;
   return null;
+}
+
+/** W32: "Wall is being demolished" when building slot s is (kinds.ts isDemolishing), else null. */
+function demolishing(w: World, s: number): string | null {
+  const c = w.buildings.cols;
+  return isDemolishing(c, s) ? `${buildingInfo(c.kind[s]!).label} is being demolished` : null;
 }
 
 /** The ids in `ids` of units alive now, each once, in order. */
@@ -226,6 +244,8 @@ export function upgradeProblem(w: World, s: number): string | null {
   const info = buildingInfo(c.kind[s]!);
   if (!info.tiers) return `${info.label} has no upgrades`;
   if (!(c.flags[s]! & BF_COMPLETE)) return `${info.label} is not finished`;
+  const busy = demolishing(w, s);
+  if (busy) return busy;
   if (c.flags[s]! & BF_UPGRADING) return null;
   const tier = c.tier[s]!;
   const belt = c.kind[s] === B.belt;
@@ -257,6 +277,8 @@ export interface BeltUpgradeSkips {
   upgrading: number;
   top: number;
   locked: number;
+  /** W32: being demolished. */
+  demolishing: number;
 }
 
 /** The belts a drag-upgrade command will upgrade, in drag order, and what it skips. */
@@ -289,7 +311,7 @@ export function planBeltUpgrades(w: World, cmd: Extract<Command, { t: 'upgradeBe
     return 'upgradeBelts targets must be { id, expectedTier } with integers';
   const units = liveUnits(w, cmd.ids);
   if (!units.length) return 'upgradeBelts: no live unit to do the upgrades';
-  const plan: BeltUpgradePlan = { units, ids: [], toMedium: 0, toFast: 0, skipped: { duplicate: 0, gone: 0, notBelt: 0, changed: 0, upgrading: 0, top: 0, locked: 0 } };
+  const plan: BeltUpgradePlan = { units, ids: [], toMedium: 0, toFast: 0, skipped: { duplicate: 0, gone: 0, notBelt: 0, changed: 0, upgrading: 0, top: 0, locked: 0, demolishing: 0 } };
   const k = plan.skipped;
   const c = w.buildings.cols;
   const seen = new Set<number>();
@@ -306,7 +328,7 @@ export function planBeltUpgrades(w: World, cmd: Extract<Command, { t: 'upgradeBe
       continue;
     }
     // kinds.ts beltUpgradeSkip, the rule the drag preview applies too; `changed` is checked in between
-    const why = beltUpgradeSkip(c.kind[s]!, c.flags[s]!, c.tier[s]!, researched);
+    const why = beltUpgradeSkip(c.kind[s]!, c.flags[s]!, c.tier[s]!, researched, isDemolishing(c, s));
     if (why === 'notBelt') k.notBelt++;
     else if (c.tier[s] !== expectedTier) k.changed++;
     else if (why) k[why]++;
@@ -318,11 +340,93 @@ export function planBeltUpgrades(w: World, cmd: Extract<Command, { t: 'upgradeBe
   }
   const n = targets.length;
   if (!plan.ids.length)
-    return `nothing to upgrade: all ${n} target${n === 1 ? '' : 's'} skipped (duplicate ${k.duplicate}, gone ${k.gone}, not a belt ${k.notBelt}, changed ${k.changed}, upgrading ${k.upgrading}, already Fast ${k.top}, locked ${k.locked})`;
+    return `nothing to upgrade: all ${n} target${n === 1 ? '' : 's'} skipped (duplicate ${k.duplicate}, gone ${k.gone}, not a belt ${k.notBelt}, changed ${k.changed}, upgrading ${k.upgrading}, already Fast ${k.top}, locked ${k.locked}, demolishing ${k.demolishing})`;
   for (const uid of units) {
     const u = w.units.slotForId(uid);
     const base = cmd.queue ? (w.orders[u]?.length ?? 0) : 0;
     if (base + plan.ids.length > MAX_ORDERS) return `order queue full: unit ${uid} would hold ${base + plan.ids.length} orders (${MAX_ORDERS} per unit); upgrade fewer belts`;
+  }
+  return plan;
+}
+
+/** Why each skipped demolish target was left out (W32; the runner reports the counts). */
+export interface DemolishSkips {
+  duplicate: number;
+  gone: number;
+  core: number;
+  site: number;
+}
+
+/** The buildings a demolish command takes down, in drag order, the engineers doing it, and what it skips. */
+export interface DemolishPlan {
+  /** The live engineers named, each once, in order: they get the orders. */
+  units: number[];
+  /** Building ids to demolish. */
+  ids: number[];
+  /** What demolishing them all returns now (kinds.ts slotRefund; a part-done upgrade at its progress). */
+  refund: Cost;
+  skipped: DemolishSkips;
+  /** [engineer id, building id]: the orders the apply step gives, in order (each target in drag order, each engineer in turn; none for a target it already holds). */
+  orders: Array<[number, number]>;
+}
+
+/**
+ * W32: plans a `demolish` command on this state, or says why it is refused. The recipients are the
+ * command's live engineers, each once (the commander does not demolish); none: refused. Targets are
+ * taken in order; one is skipped, and counted, when it repeats an earlier id, is gone, or
+ * kinds.ts demolishSkip rules it out (the core, an unfinished site: the rule the drag preview
+ * applies too). All skipped: refused, so an unshifted command does not clear the queues. The orders
+ * each recipient receives: one per target, less (with `queue`) those it already holds a demolish
+ * order for; without `queue` its queue is replaced first, so it gets all. Capacity: its current
+ * orders (with `queue`) plus those must fit MAX_ORDERS, checked before anything changes; this is the
+ * only capacity check (validateCommand's full-queue rule does not apply to demolish, so a shifted
+ * reissue that adds nothing is accepted).
+ */
+export function planDemolish(w: World, cmd: Extract<Command, { t: 'demolish' }>): DemolishPlan | string {
+  if (!idList(cmd.ids) || !cmd.ids.length) return 'demolish needs unit ids';
+  const targets = cmd.targets as unknown;
+  if (!idList(targets) || !(targets as number[]).length) return 'demolish needs targets (building ids)';
+  const live = liveUnits(w, cmd.ids);
+  const units = live.filter((id) => w.units.cols.kind[w.units.slotForId(id)] === U.engineer);
+  if (!units.length) return live.length ? 'only engineers demolish (the commander does not)' : 'demolish: no live engineer to do the work';
+  const plan: DemolishPlan = { units, ids: [], refund: [0, 0, 0], skipped: { duplicate: 0, gone: 0, core: 0, site: 0 }, orders: [] };
+  const k = plan.skipped;
+  const c = w.buildings.cols;
+  const seen = new Set<number>();
+  for (const id of targets as number[]) {
+    if (seen.has(id)) {
+      k.duplicate++;
+      continue;
+    }
+    seen.add(id);
+    const s = w.buildings.slotForId(id);
+    if (s < 0) {
+      k.gone++;
+      continue;
+    }
+    const why = demolishSkip(c.kind[s]!, c.flags[s]!);
+    if (why) {
+      k[why]++;
+      continue;
+    }
+    plan.ids.push(id);
+    const r = slotRefund(c, s);
+    for (let j = 0; j < 3; j++) plan.refund[j] = plan.refund[j]! + r[j]!;
+  }
+  const n = (targets as number[]).length;
+  if (!plan.ids.length)
+    return `nothing to demolish: all ${n} target${n === 1 ? '' : 's'} skipped (duplicate ${k.duplicate}, gone ${k.gone}, core ${k.core}, unfinished site ${k.site})`;
+  const held = units.map((uid) => (cmd.queue ? heldDemolish(w.orders[w.units.slotForId(uid)]) : new Set<number>()));
+  const adds = units.map(() => 0);
+  for (const id of plan.ids)
+    units.forEach((uid, i) => {
+      if (held[i]!.has(id)) return;
+      plan.orders.push([uid, id]);
+      adds[i] = adds[i]! + 1;
+    });
+  for (let i = 0; i < units.length; i++) {
+    const have = cmd.queue ? (w.orders[w.units.slotForId(units[i]!)]?.length ?? 0) : 0;
+    if (have + adds[i]! > MAX_ORDERS) return `order queue full: unit ${units[i]} would hold ${have + adds[i]!} orders (${MAX_ORDERS} per unit); demolish fewer buildings`;
   }
   return plan;
 }

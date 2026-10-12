@@ -715,6 +715,24 @@ export function ghostOutlineGeometry(ok: boolean): BufferGeometry {
 }
 
 /**
+ * W32 demolish mark: a square outline round a unit footprint with thin diagonals from corner to
+ * corner. It differs by shape from the ghost's plain outline (build, upgrade) and from the skip mark
+ * (dashed outline with a small cross in the middle), so it reads without colour.
+ */
+export function demolishMarkGeometry(): BufferGeometry {
+  const t = 0.1;
+  const hex = '#ffb08a';
+  const flat = (pts: Pt[]) => paint(new ShapeGeometry(shapeFrom(pts)).rotateX(-Math.PI / 2), hex);
+  const parts = [rect(-1, 1 - t, 1, 1), rect(-1, -1, 1, -1 + t), rect(-1, -1, -1 + t, 1), rect(1 - t, -1, 1, 1)].map(flat);
+  // the diagonals, each a thin band ending inside the outline's corners
+  const h = t * 0.6;
+  const e = 1 - t;
+  parts.push(flat([[-e, -e + h], [-e + h, -e], [e, e - h], [e - h, e]]));
+  parts.push(flat([[e - h, -e], [e, -e + h], [-e + h, e], [-e, e - h]]));
+  return merge(parts);
+}
+
+/**
  * Reserved site (W24): a dotted outline round a unit footprint (scaled to the footprint). Dots, not
  * the construction frame's dashes or the ghost's solid line, so the three states differ by shape.
  */

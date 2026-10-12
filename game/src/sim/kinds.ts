@@ -8,6 +8,7 @@ import { map1 } from '../../../model/data/map1.ts';
 import type { BuildingDef, WeaponDef } from '../../../model/src/types.ts';
 import { BELT_COST_MASS, BELT_UPGRADES, BUILD_RATE, CORE_HP, CORE_REPAIR_TIME, HEAVY_T2, RARE_EXTRACTOR_OUTPUT, gateStats, tierRequires } from './balance.ts';
 import { BF_COMPLETE, BF_UPGRADING } from './schema.ts';
+import type { Order } from './units.ts';
 
 export const METRES_PER_TILE = 2;
 export const TICK_HZ = 10;
@@ -254,15 +255,20 @@ const BELT_SPEED_TEXT = BELT_SPEED_NAMES.map((name, t) => (t ? `${name} (${beltT
 export const beltSpeedText = (tier: number): string => BELT_SPEED_TEXT[tier]!;
 /** A tier's name in messages: a belt's speed ("Medium"), any other kind's "tier 2". */
 export const tierName = (kind: number, tier: number): string => (kind === B.belt ? BELT_SPEED_NAMES[tier]! : `tier ${tier}`);
-/** Why a building is not upgraded by a drag along belts (W31): not a finished belt, already upgrading, at Fast, or its next speed not researched. */
-export type BeltUpgradeSkip = 'notBelt' | 'upgrading' | 'top' | 'locked';
+/**
+ * Why a building is not upgraded by a drag along belts (W31): not a finished belt, already upgrading,
+ * at Fast, or its next speed not researched; W32: being demolished.
+ */
+export type BeltUpgradeSkip = 'notBelt' | 'upgrading' | 'top' | 'locked' | 'demolishing';
 /**
  * W31: the one rule both the upgrade drag's preview (dragPlan.ts planBeltUpgrade, on a snapshot) and
  * the upgradeBelts command (validate.ts planBeltUpgrades, on the world) apply to a building of `kind`
- * with `flags` at `tier`: null when it goes up one speed, else why not. `researched` takes a research id.
+ * with `flags` at `tier`: null when it goes up one speed, else why not. `researched` takes a research
+ * id. W32: `demolishing` is isDemolishing for the building (skipped).
  */
-export function beltUpgradeSkip(kind: number, flags: number, tier: number, researched: (id: string) => boolean): BeltUpgradeSkip | null {
+export function beltUpgradeSkip(kind: number, flags: number, tier: number, researched: (id: string) => boolean, demolishing = false): BeltUpgradeSkip | null {
   if (kind !== B.belt || !(flags & BF_COMPLETE)) return 'notBelt';
+  if (demolishing) return 'demolishing';
   if (flags & BF_UPGRADING) return 'upgrading';
   if (tier >= BELT_TOP_TIER) return 'top';
   const req = tierRequires('belt', tier + 1);
@@ -460,4 +466,100 @@ const BELT_LAID_WORK: ReadonlyArray<{ readonly cost: Cost; readonly time: number
 /** W31: cost and BP·s of laying a belt at `tier` (a shared frozen entry: siteWork runs per site per tick and per frame). */
 export function beltLaidWork(tier: number): { cost: Cost; time: number } {
   return BELT_LAID_WORK[tier]!;
+}
+
+// ---- W32: demolish ----------------------------------------------------------------------------
+
+/** Why a building is not a demolish target (W32): the core, or an unfinished site (its cancel rule stays). */
+export type DemolishSkip = 'core' | 'site';
+/**
+ * W32: the one rule both the demolish drag's preview (dragPlan.ts planDemolishPreview, on a snapshot)
+ * and the demolish command (validate.ts planDemolish, on the world) apply to a building of `kind`
+ * with `flags`: null when it can be demolished, else why not. A building already being demolished is
+ * a target (more engineers may join; a paused demolish resumes).
+ */
+export function demolishSkip(kind: number, flags: number): DemolishSkip | null {
+  if (kind === B.core) return 'core';
+  return flags & BF_COMPLETE ? null : 'site';
+}
+
+/**
+ * W32: the cost and BP·s that went into a finished building of `kind` at `tier` with footprint
+ * fw × fh: its laid cost (siteWork) and each upgrade step below its tier (a belt: beltLaidWork).
+ * `upgradeDone` (0..1) adds that share of the cost of the upgrade under way (BF_UPGRADING, the
+ * stored progress); its time is not added.
+ */
+export function builtWork(kind: number, tier: number, fw: number, fh: number, upgradeDone = 0): { cost: Cost; time: number } {
+  const laid = siteWork(kind, false, 1, fw, fh);
+  const cost: Cost = [...laid.cost];
+  let time = laid.time;
+  for (let t = 1; t < tier; t++) {
+    const up = siteWork(kind, true, t, fw, fh);
+    for (let k = 0; k < 3; k++) cost[k] = cost[k]! + up.cost[k]!;
+    time += up.time;
+  }
+  if (upgradeDone > 0) {
+    const up = siteWork(kind, true, tier, fw, fh);
+    for (let k = 0; k < 3; k++) cost[k] = cost[k]! + upgradeDone * up.cost[k]!;
+  }
+  return { cost, time };
+}
+
+/** W32: what demolishing a building returns to the pool: half the mass and rare it cost (builtWork), no energy. */
+export function demolishRefund(kind: number, tier: number, fw: number, fh: number, upgradeDone = 0): Cost {
+  const { cost } = builtWork(kind, tier, fw, fh, upgradeDone);
+  return [cost[0] * 0.5, 0, cost[2] * 0.5];
+}
+
+/** The building columns the demolish rules read: the world's and a snapshot's both have them. */
+export interface DemolishColumns {
+  kind: ArrayLike<number>;
+  tier: ArrayLike<number>;
+  fw: ArrayLike<number>;
+  fh: ArrayLike<number>;
+  flags: ArrayLike<number>;
+  progress: ArrayLike<number>;
+  demolish: ArrayLike<number>;
+}
+
+/**
+ * W32: what demolishing the building in row or slot `s` of columns `c` returns now (demolishRefund):
+ * an upgrade under way (BF_UPGRADING) counts at its stored progress. The one refund rule of the
+ * command's plan (validate.ts), the simulation (economy.ts) and the readouts (buildingReadout.ts).
+ */
+export function slotRefund(c: DemolishColumns, s: number): Cost {
+  return demolishRefund(c.kind[s]!, c.tier[s]!, c.fw[s]!, c.fh[s]!, c.flags[s]! & BF_UPGRADING ? c.progress[s]! : 0);
+}
+
+/**
+ * W32: the building in row or slot `s` is being demolished (has demolish progress). While it is, no
+ * upgrade, repair or assist starts on it and builders' build and repair orders on it are dropped.
+ */
+export const isDemolishing = (c: Pick<DemolishColumns, 'demolish'>, s: number): boolean => c.demolish[s]! > 0;
+
+/** W32 (here, not queue.ts: gate.ts reads it and render code reaches gate.ts): the buildings `orders` hold a demolish order on (a unit's queue; none: empty). */
+export function heldDemolish(orders: readonly Order[] | undefined): Set<number> {
+  const held = new Set<number>();
+  for (const o of orders ?? []) if (o.t === 'demolish') held.add(o.id);
+  return held;
+}
+
+/** W32: `orders` (a unit's queue) hold a demolish order on building `id`. */
+export function holdsDemolish(orders: readonly Order[] | undefined, id: number): boolean {
+  for (const o of orders ?? []) if (o.t === 'demolish' && o.id === id) return true;
+  return false;
+}
+
+/** demolishTime by (kind, tier, footprint): worked out once each (builtWork allocates), read per building per tick. */
+const DEMOLISH_TIME = new Map<number, number>();
+
+/** W32: BP·s of work to demolish a building: half its build time (builtWork, upgrades included). */
+export function demolishTime(kind: number, tier: number, fw: number, fh: number): number {
+  const key = ((kind * 8 + tier) * 16 + fw) * 16 + fh;
+  let t = DEMOLISH_TIME.get(key);
+  if (t === undefined) {
+    t = builtWork(kind, tier, fw, fh).time * 0.5;
+    DEMOLISH_TIME.set(key, t);
+  }
+  return t;
 }
