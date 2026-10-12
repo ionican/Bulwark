@@ -14,8 +14,7 @@
 // stops them cutting diagonally past a gate's corners. Each footprint tile's flow cost uses the
 // gate's hit points ÷ depth, so breaking the gate is charged once along a route (flowfield.ts).
 
-import { B, buildingInfo, isDemolishing } from './kinds.ts';
-import { holdsDemolish } from './queue.ts';
+import { B, buildingInfo, holdsDemolish, isDemolishing } from './kinds.ts';
 import { constructionState } from './schema.ts';
 import { gateStats } from './balance.ts';
 import type { World } from './world.ts';

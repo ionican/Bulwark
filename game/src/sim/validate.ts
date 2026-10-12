@@ -9,14 +9,14 @@
 // refuses upgrade, assist, repair and (gate.ts planGate) gate conversion, and a drag-upgrade skips it.
 
 import { SANDBOX_COMMANDS, type Command } from './commands.ts';
-import { ALIEN_KINDS, B, BELT_TOP_TIER, BUILDING_KINDS, U, beltUpgradeSkip, buildingInfo, demolishSkip, isBeltTier, isDemolishing, slotRefund, tierName, type Cost } from './kinds.ts';
+import { ALIEN_KINDS, B, BELT_TOP_TIER, BUILDING_KINDS, U, beltUpgradeSkip, buildingInfo, demolishSkip, heldDemolish, isBeltTier, isDemolishing, slotRefund, tierName, type Cost } from './kinds.ts';
 import { BF_COMPLETE, BF_UPGRADING, isReserved } from './schema.ts';
 import { BUILD_REQUIRES, MAX_RUN_DEPTH, RESEARCH, RESEARCH_INDEX, SPAWN_AT_MAX, tierRequires } from './balance.ts';
 import { MAX_ORDERS, type World } from './world.ts';
 import { newSites, planRun, runById, runCapacityProblem } from './runs.ts';
 import { planGate } from './gate.ts';
 import { spawnPlaces } from './sandbox.ts';
-import { dequeueIndex, heldDemolish, heldReservedSite, replacementProblem, worldSiteSource } from './queue.ts';
+import { dequeueIndex, heldReservedSite, replacementProblem, worldSiteSource } from './queue.ts';
 import { TUNE_TARGETS, tuneFieldProblem, tuneProblem, type TuneTarget } from './tuning.ts';
 import { map1 } from '../../../model/data/map1.ts';
 

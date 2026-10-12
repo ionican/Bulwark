@@ -8,6 +8,7 @@ import { map1 } from '../../../model/data/map1.ts';
 import type { BuildingDef, WeaponDef } from '../../../model/src/types.ts';
 import { BELT_COST_MASS, BELT_UPGRADES, BUILD_RATE, CORE_HP, CORE_REPAIR_TIME, HEAVY_T2, RARE_EXTRACTOR_OUTPUT, gateStats, tierRequires } from './balance.ts';
 import { BF_COMPLETE, BF_UPGRADING } from './schema.ts';
+import type { Order } from './units.ts';
 
 export const METRES_PER_TILE = 2;
 export const TICK_HZ = 10;
@@ -535,6 +536,19 @@ export function slotRefund(c: DemolishColumns, s: number): Cost {
  * upgrade, repair or assist starts on it and builders' build and repair orders on it are dropped.
  */
 export const isDemolishing = (c: Pick<DemolishColumns, 'demolish'>, s: number): boolean => c.demolish[s]! > 0;
+
+/** W32 (here, not queue.ts: gate.ts reads it and render code reaches gate.ts): the buildings `orders` hold a demolish order on (a unit's queue; none: empty). */
+export function heldDemolish(orders: readonly Order[] | undefined): Set<number> {
+  const held = new Set<number>();
+  for (const o of orders ?? []) if (o.t === 'demolish') held.add(o.id);
+  return held;
+}
+
+/** W32: `orders` (a unit's queue) hold a demolish order on building `id`. */
+export function holdsDemolish(orders: readonly Order[] | undefined, id: number): boolean {
+  for (const o of orders ?? []) if (o.t === 'demolish' && o.id === id) return true;
+  return false;
+}
 
 /** demolishTime by (kind, tier, footprint): worked out once each (builtWork allocates), read per building per tick. */
 const DEMOLISH_TIME = new Map<number, number>();
