@@ -15,7 +15,10 @@
 // its build power to the building's demolish power (world.ts demolishPower, applied by economy.ts
 // stepDemolition); the order ends when the building is gone. A building with no hit points left gets
 // no demolish power (removeDead takes it as a loss). Build and repair orders on a building being
-// demolished (demolish > 0) are dropped, so an upgrade or repair on it stops.
+// demolished (demolish > 0) are dropped, so an upgrade or repair on it stops; a wall-run order moves
+// on to the run's next tile. workOnSite, the only place build and repair power is delivered, never
+// gives either to a building being demolished, whatever the order (W32 review: a paused demolition
+// must freeze an upgrade a run builder still holds).
 
 import { BF_COMPLETE, BF_UPGRADING, US_BUILDING, US_IDLE, US_MOVING, US_RECLAIMING, US_UNLOADING, US_WAITING } from './schema.ts';
 import { B, CARRY_CAPACITY, RECLAIM_RATE, TICK_SECONDS, U, demolishSkip, isDemolishing, unitInfo } from './kinds.ts';
@@ -129,13 +132,15 @@ type Work = 'build' | 'repair' | 'demolish';
 
 /**
  * Builder s works on site slot b (id `id`): adds its build power when in range, otherwise walks
- * there. Returns false when the site cannot be reached (the caller drops the order).
+ * there. Returns false when the site cannot be reached, or (W32) when build or repair work is asked
+ * of a building being demolished; the caller drops the order.
  */
 function workOnSite(w: World, s: number, b: number, id: number, range: number, buildRate: number, work: Work = 'build'): boolean {
   const c = w.units.cols;
   const W = w.terrain.w;
   // Footprint centre, inline (combat.ts centreOf allocates; this runs per builder per tick).
   const bcols = w.buildings.cols;
+  if (work !== 'demolish' && isDemolishing(bcols, b)) return false;
   const bx = bcols.tx[b]! + bcols.fw[b]! / 2;
   const bz = bcols.ty[b]! + bcols.fh[b]! / 2;
   if (distToBuilding(w, b, c.x[s]!, c.z[s]!) <= range) {
@@ -303,7 +308,8 @@ export function stepUnits(w: World): void {
         continue;
       }
       let b = order.site >= 0 ? w.buildings.slotForId(order.site) : -1;
-      if (b < 0 || !unfinished(w, b)) {
+      // W32: a tile being demolished (a finished wall whose upgrade started) is left; the run goes on
+      if (b < 0 || !unfinished(w, b) || isDemolishing(w.buildings.cols, b)) {
         order.site = claimNext(w, run, s);
         w.paths[s] = null;
         if (order.site < 0) {

@@ -13,8 +13,9 @@
 // the buffer on a belt one item at a time and the core adds what it takes to the pool. The mass and
 // rare income rates are then what the core took over the last 10 s, plus the commander's income.
 // Repair (stepRepair) adds hit points free, from repair power the units delivered this tick.
-// W32 demolish: before construction and repair, a building that got demolish power this tick or is
-// being demolished gets no build or repair power (stopDemolishedWork); after repair, stepDemolition
+// W32 demolish: before construction and repair, a building that got demolish power this tick gets
+// no build or repair power (stopDemolishedWork; one already being demolished gets none from the
+// units, units.ts workOnSite); after repair, stepDemolition
 // advances demolition and, when it completes, puts half the building's mass and rare into the pool
 // in one step (no carrying, no rubble object) and removes the building.
 
@@ -267,8 +268,8 @@ export function stepRepair(w: World): void {
  * W32: no double work on one building. Run after the units have delivered their power and before
  * stepConstruction and stepRepair: every slot that got demolish power this tick (w.demolishSlots)
  * loses its build and repair power, so an upgrade or repair never advances on the tick demolition
- * starts. A building already being demolished gets none anyway: the units drop build and repair
- * orders on it before delivering power (units.ts).
+ * starts. A building already being demolished gets none in the first place, from any order:
+ * units.ts workOnSite, the only place build and repair power is delivered, refuses it.
  */
 export function stopDemolishedWork(w: World): void {
   for (const s of w.demolishSlots) {
