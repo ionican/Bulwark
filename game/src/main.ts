@@ -21,7 +21,7 @@ import { CoreOverlay, canvasCoreMark, inspectCore } from './render/coreView.ts';
 import { SiteHover } from './ui/siteHover.ts';
 import { waitingCounts, waitingState } from './render/waiting.ts';
 import { DragPreview, inspectDrag } from './render/dragPreview.ts';
-import { DragPlanCache, beltLineTiles, dragLabel, paintsRow, placeableOn, planBeltUpgrade, planDrag, rowBuildCommands, upgradeLabel, type BeltUpgradePreview, type DragPlan, type DragView } from './dragPlan.ts';
+import { DragPlanCache, beltLineRelease, dragLabel, paintsRow, placeableOn, planBeltUpgrade, planDrag, rowBuildCommands, upgradeLabel, type BeltUpgradePreview, type DragPlan, type DragView } from './dragPlan.ts';
 import { Tools, fastestBeltTier, gateCommand, runCommand, spawnAtCommand, toolLabel } from './tools.ts';
 import { SandboxPanel, debugSpawnVisible, multToSlider } from './ui/sandboxPanel.ts';
 import { editingTarget } from './ui/focusReturn.ts';
@@ -565,6 +565,10 @@ function placeable(kind: number, tx: number, ty: number, dir: number, queue: boo
 /** Sends a build command and marks its tiles at once, so a quick second click does not double-book them. */
 function sendBuild(cmd: Extract<Command, { t: 'build' }>) {
   command(cmd);
+  markBooked(cmd);
+}
+/** Marks a build's tiles as booked (-1) until the next snapshot. */
+function markBooked(cmd: Extract<Command, { t: 'build' }>) {
   const [fw, fh] = buildingFootprint(cmd.kind);
   for (let j = 0; j < fh; j++) for (let i = 0; i < fw; i++) occupancy[(cmd.ty + j) * terrain.w + cmd.tx + i] = -1;
 }
@@ -588,10 +592,26 @@ function placeRow(kind: number, from: [number, number], to: [number, number], di
   for (const cmd of rowBuildCommands(planDrag(dragView(s), kind, ids, from, to, dir, queue), ids, queue)) sendBuild(cmd);
 }
 
-/** A belt line (dragPlan.ts beltLineTiles, the tiles the drag preview shows): the first piece placed takes `queue`, the rest append. */
-function placeBeltLine(kind: number, x0: number, z0: number, x1: number, z1: number, dirIfSingle: number, queue: boolean) {
-  let first = true;
-  for (const [x, z, dir] of beltLineTiles(x0, z0, x1, z1, dirIfSingle)) if (placeBuild(kind, x, z, dir, queue || !first)) first = false;
+/**
+ * A belt line: the preview's own plan (planDrag), one build per tile, the first taking `queue` and the
+ * rest appended. W31 review: when the line lays tiles on reserved sites only these builders hold, a
+ * clearQueue goes first and the builds follow once it has applied (dragPlan.ts beltLineRelease), so the
+ * whole line is laid at the tool's speed, as the preview showed, never part of it.
+ */
+function placeBeltLine(kind: number, from: [number, number], to: [number, number], dirIfSingle: number, queue: boolean) {
+  const s = interp.curr;
+  const ids = selectedBuilders();
+  if (!s || !ids.length) return;
+  const plan = planDrag(dragView(s), kind, ids, from, to, dirIfSingle, queue, 1, kind === B.belt ? tools.tier : 1);
+  const { clear, builds } = beltLineRelease(plan, ids, queue);
+  if (!clear) {
+    for (const cmd of builds) sendBuild(cmd);
+    return;
+  }
+  for (const cmd of builds) markBooked(cmd);
+  void commandResult(clear).then((r) => {
+    if (r.ok) for (const cmd of builds) command(cmd);
+  });
 }
 
 // ---- W25 item 7: live preview of a build-mode drag ----------------------------------------------
@@ -781,7 +801,7 @@ const gestures = new Gestures(orbit, {
         // a wall drag lays a run (one order per builder, built tile by tile: run 1's buildRun) at the panel's depth
         const ids = selectedBuilders();
         if (ids.length) void commandResult(runCommand(ids, [a.tx, a.ty], [b.tx, b.ty], runDepth(), shift));
-      } else if (isBelt(buildMode.kind)) placeBeltLine(buildMode.kind, a.tx, a.ty, b.tx, b.ty, buildMode.dir, shift);
+      } else if (isBelt(buildMode.kind)) placeBeltLine(buildMode.kind, [a.tx, a.ty], [b.tx, b.ty], buildMode.dir, shift);
       else if (paintsRow(buildMode.kind)) placeRow(buildMode.kind, footprintAt(buildMode.kind, a.g.x, a.g.z), footprintAt(buildMode.kind, b.g.x, b.g.z), buildMode.dir, shift);
       else {
         const [tx, ty] = footprintAt(buildMode.kind, b.g.x, b.g.z);

@@ -276,6 +276,20 @@ export interface ReplaceSource extends QueueSource {
  * it, or a run order on a run it belongs to) and no other unit's queue does (the dropOrphans rule).
  */
 export function ownWallSites(src: ReplaceSource): Map<number, number> {
+  const out = new Map<number, number>();
+  for (const site of releasedSites(src)) {
+    const tile = src.wallSiteTile(site);
+    if (tile >= 0) out.set(tile, site);
+  }
+  return out;
+}
+
+/**
+ * The sites replacing the queues marked `replaced` would release: held by a replaced queue (a build
+ * order on it, or a run order on a run it belongs to) and by no other unit's queue (the dropOrphans
+ * rule; only the reserved ones among them are then removed). In queue order.
+ */
+export function releasedSites(src: QueueSource & Pick<ReplaceSource, 'replaced'>): Set<number> {
   const mine = new Set<number>();
   const myRuns = new Set<number>();
   const held = new Set<number>();
@@ -289,13 +303,8 @@ export function ownWallSites(src: ReplaceSource): Map<number, number> {
   }
   for (const run of heldRuns) for (const site of Array.from(src.runSites(run))) held.add(site);
   for (const run of myRuns) if (!heldRuns.has(run)) for (const site of Array.from(src.runSites(run))) mine.add(site);
-  const out = new Map<number, number>();
-  for (const site of mine) {
-    if (held.has(site)) continue;
-    const tile = src.wallSiteTile(site);
-    if (tile >= 0) out.set(tile, site);
-  }
-  return out;
+  for (const site of held) mine.delete(site);
+  return mine;
 }
 
 /** ReplaceSource over the simulation's state; `slots` are the unit slots whose queues are replaced. */

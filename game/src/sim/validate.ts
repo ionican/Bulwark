@@ -76,6 +76,8 @@ function check(w: World, cmd: Command): string | null {
       return null;
     case 'upgrade': {
       if (!idList(cmd.ids) || !isInt(cmd.target)) return 'upgrade needs ids and a target';
+      // W31 review: with no live unit to take the order the upgrade flag would be set with nobody on it
+      if (!liveUnits(w, cmd.ids).length) return 'upgrade: no live unit to do the upgrade';
       const s = w.buildings.slotForId(cmd.target);
       if (s < 0) return 'upgrade target does not exist';
       return upgradeProblem(w, s);
@@ -210,6 +212,13 @@ export function repairProblem(w: World, s: number): string | null {
   return null;
 }
 
+/** The ids in `ids` of units alive now, each once, in order. */
+export function liveUnits(w: World, ids: readonly number[]): number[] {
+  const out: number[] = [];
+  for (const id of ids) if (!out.includes(id) && w.units.slotForId(id) >= 0) out.push(id);
+  return out;
+}
+
 /** Null if building slot s may start its next upgrade now, otherwise why not. */
 export function upgradeProblem(w: World, s: number): string | null {
   const c = w.buildings.cols;
@@ -252,6 +261,8 @@ export interface BeltUpgradeSkips {
 
 /** The belts a drag-upgrade command will upgrade, in drag order, and what it skips. */
 export interface BeltUpgradePlan {
+  /** The live units that get the orders: the command's ids, each once, in order (W31 review). */
+  units: number[];
   /** Building ids to upgrade one speed step. */
   ids: number[];
   toMedium: number;
@@ -266,7 +277,9 @@ export interface BeltUpgradePlan {
  * at Fast, or its next speed's research is not done (`allTiers` lifts that). Refused: when every
  * target is skipped (the command would change nothing, so an unshifted one does not clear the
  * queues), and when the upgrades would not all fit any live unit's queue (MAX_ORDERS, counting its
- * current orders only with `queue`), so no upgrade flag is set for part of a batch.
+ * current orders only with `queue`), so no upgrade flag is set for part of a batch. W31 review: the
+ * units are the command's live ids, each once (a repeated id would take each order twice); with none
+ * left (all gone before the command's tick) it is refused, so no belt is flagged without an order.
  */
 export function planBeltUpgrades(w: World, cmd: Extract<Command, { t: 'upgradeBelts' }>): BeltUpgradePlan | string {
   if (!idList(cmd.ids) || !cmd.ids.length) return 'upgradeBelts needs unit ids';
@@ -274,7 +287,9 @@ export function planBeltUpgrades(w: World, cmd: Extract<Command, { t: 'upgradeBe
   if (!Array.isArray(targets) || !targets.length) return 'upgradeBelts needs targets';
   if (!targets.every((t) => t && typeof t === 'object' && isInt((t as { id?: unknown }).id) && isInt((t as { expectedTier?: unknown }).expectedTier)))
     return 'upgradeBelts targets must be { id, expectedTier } with integers';
-  const plan: BeltUpgradePlan = { ids: [], toMedium: 0, toFast: 0, skipped: { duplicate: 0, gone: 0, notBelt: 0, changed: 0, upgrading: 0, top: 0, locked: 0 } };
+  const units = liveUnits(w, cmd.ids);
+  if (!units.length) return 'upgradeBelts: no live unit to do the upgrades';
+  const plan: BeltUpgradePlan = { units, ids: [], toMedium: 0, toFast: 0, skipped: { duplicate: 0, gone: 0, notBelt: 0, changed: 0, upgrading: 0, top: 0, locked: 0 } };
   const k = plan.skipped;
   const c = w.buildings.cols;
   const seen = new Set<number>();
@@ -304,9 +319,8 @@ export function planBeltUpgrades(w: World, cmd: Extract<Command, { t: 'upgradeBe
   const n = targets.length;
   if (!plan.ids.length)
     return `nothing to upgrade: all ${n} target${n === 1 ? '' : 's'} skipped (duplicate ${k.duplicate}, gone ${k.gone}, not a belt ${k.notBelt}, changed ${k.changed}, upgrading ${k.upgrading}, already Fast ${k.top}, locked ${k.locked})`;
-  for (const uid of cmd.ids) {
+  for (const uid of units) {
     const u = w.units.slotForId(uid);
-    if (u < 0) continue;
     const base = cmd.queue ? (w.orders[u]?.length ?? 0) : 0;
     if (base + plan.ids.length > MAX_ORDERS) return `order queue full: unit ${uid} would hold ${base + plan.ids.length} orders (${MAX_ORDERS} per unit); upgrade fewer belts`;
   }

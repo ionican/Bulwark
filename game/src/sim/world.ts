@@ -525,10 +525,11 @@ export class World {
         // upgrade flag and one build order per unit, in drag order.
         const plan = this.validatedResult<ReturnType<typeof planBeltUpgrades>>(cmd) ?? planBeltUpgrades(this, cmd);
         if (typeof plan === 'string') break;
-        if (!cmd.queue) this.replaceQueues(cmd.ids);
+        // W31 review: plan.units, the live ids each once, so every flagged belt gets its order
+        if (!cmd.queue) this.replaceQueues(plan.units);
         for (const id of plan.ids) {
           const b = this.buildings.slotForId(id);
-          if (b >= 0 && this.startUpgrade(b)) this.orderAll(cmd.ids, () => ({ t: 'build', id }), true);
+          if (b >= 0 && this.startUpgrade(b)) this.orderAll(plan.units, () => ({ t: 'build', id }), true);
         }
         break;
       }

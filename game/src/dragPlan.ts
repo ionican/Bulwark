@@ -2,7 +2,7 @@
 // snapshot, read-only. Walls use the simulation's own run planner (runs.ts planRunOn, the function
 // behind buildRun's planRun): the same axis choice, `to` projected onto the axis, the same depth
 // rows, skip rules and 128-tile cap, so the preview and the sites laid on release cannot differ.
-// Belt lines use beltLineTiles, which main.ts also uses to send the belt build commands.
+// Belt lines use beltLineTiles; main.ts sends the release from planDrag's own plan (beltLineRelease).
 // W25c: a drag without Shift replaces the builders' queues, and the run then keeps their own wall
 // sites that it covers (queue.ts ownWallSites, the simulation's rule); the preview applies the same
 // function to the snapshot's queues and run-site list, so it shows those tiles as laid too.
@@ -26,13 +26,17 @@
 // speed may be replaced. planBeltUpgrade is the upgrade tool's drag: every belt tile on the dragged
 // line, the complete belts that can go up one speed as targets ({ id, expectedTier }), the rest of
 // the belt pieces on it (splitter, merger, Fast, upgrading, locked) as skipped tiles.
+// W31 review: without Shift a belt line also lays the tiles of reserved sites that replacing the
+// builders' queues removes (queue.ts releasedSites, the dropOrphans rule): PLAN-W31 item 5's
+// replacement through the W25 rule, for the whole line. The release clears the builders' queues first
+// and sends the builds once that has applied, so the tiles laid are the preview's, never part of them.
 //
 // Not under render/: it reaches runs.ts and world.ts (canPlaceOn), which render code may not import.
 
 import { B, BELT_SPEED_NAMES, beltUpgradeSkip, buildingFootprint, buildingInfo, beltLaidWork, isBelt, siteWork, type Cost } from './sim/kinds.ts';
 import type { Command } from './sim/commands.ts';
 import { planRunOn, type RunPlan, type RunPlanSource } from './sim/runs.ts';
-import { heldReservedSite, ownWallSites, type QueueSource, type ReplaceSource, type SiteSource } from './sim/queue.ts';
+import { heldReservedSite, ownWallSites, releasedSites, type QueueSource, type ReplaceSource, type SiteSource } from './sim/queue.ts';
 import { BF_COMPLETE, Q_BUILD, Q_RUN, isReserved } from './sim/schema.ts';
 import { snapshotRules } from './snapshotRules.ts';
 import { rowOf } from './render/siteReadout.ts';
@@ -68,6 +72,11 @@ export interface DragPlan {
   tier: number;
   /** Why nothing will be laid (a run over 128 tiles, an end off the map), or null. */
   refused: string | null;
+  /**
+   * W31 review: a belt line without Shift lays tiles that now hold reserved sites the builders' queue
+   * replacement releases (queue.ts releasedSites); the release clears their queues first (beltLineRelease).
+   */
+  releases?: boolean;
 }
 
 /** runs.ts RunPlanSource over a snapshot view. */
@@ -183,9 +192,38 @@ export function placeableOn(v: DragView, ids: readonly number[], kind: number, t
   return !queue && !!v.snapshot && ids.length > 0 && heldReservedSite(snapshotSiteSource(v.snapshot, v.occupancy), ids, kind, tx, ty, dir, false) >= 0;
 }
 
-/** The build commands a row plan sends on release, in order: the first takes `queue`, the rest append. */
+/** The build commands a row plan sends on release, in order: the first takes `queue`, the rest append. W31: a belt carries the plan's speed. */
 export function rowBuildCommands(plan: DragPlan, ids: number[], queue: boolean): Array<Extract<Command, { t: 'build' }>> {
-  return plan.build.map(([tx, ty, dir], i) => ({ t: 'build', ids, kind: plan.kind, tx, ty, dir, queue: queue || i > 0 }));
+  return plan.build.map(([tx, ty, dir], i) => ({ t: 'build', ids, kind: plan.kind, tx, ty, dir, ...(plan.kind === B.belt && { tier: plan.tier }), queue: queue || i > 0 }));
+}
+
+/**
+ * W31 review: what releasing a belt-line drag sends. When the plan lays tiles on sites the queue
+ * replacement releases (`releases`), a clearQueue for the builders goes first and the builds are sent
+ * once it has applied (the release sites are gone by then, so each build is valid when submitted);
+ * otherwise the builds go at once. Either way the tiles laid are the plan's `build`.
+ */
+export function beltLineRelease(plan: DragPlan, ids: number[], queue: boolean): { clear: Extract<Command, { t: 'clearQueue' }> | null; builds: Array<Extract<Command, { t: 'build' }>> } {
+  return { clear: plan.releases ? { t: 'clearQueue', ids } : null, builds: rowBuildCommands(plan, ids, queue) };
+}
+
+/**
+ * The view's occupancy with the tiles of the reserved sites that replacing builders `ids`' queues
+ * would remove (queue.ts releasedSites; dropOrphans removes only reserved ones) cleared, or null when
+ * there are none.
+ */
+function releasedOccupancy(v: DragView, ids: readonly number[]): Int32Array | null {
+  const s = v.snapshot!;
+  const released = releasedSites(snapshotReplaceSource(s, ids));
+  if (!released.size) return null;
+  const c = s.buildings.cols;
+  let out: Int32Array | null = null;
+  for (let r = 0; r < s.buildings.count; r++) {
+    if (!released.has(s.buildings.id[r]!) || !isReserved(c.flags[r]!)) continue;
+    out ??= Int32Array.from(v.occupancy);
+    for (let j = 0; j < c.fh[r]!; j++) for (let i = 0; i < c.fw[r]!; i++) out[(c.ty[r]! + j) * v.terrain.w + c.tx[r]! + i] = 0;
+  }
+  return out;
 }
 
 /**
@@ -323,9 +361,15 @@ export function planDrag(v: DragView, kind: number, ids: readonly number[], from
       else plan.skipped.push([x, y]);
     }
   } else {
+    // W31 review: without Shift the builders' queues are replaced, which removes the reserved sites
+    // only they hold (W25); a line tile on such a site is laid too, once that has happened
+    const freed = !queue && v.snapshot && ids.length ? releasedOccupancy(v, ids) : null;
     for (const [x, y, d] of beltLineTiles(from[0], from[1], to[0], to[1], dir)) {
       if (canPlaceOn(v.terrain, v.occupancy, kind, x, y)) plan.build.push([x, y, d]);
-      else plan.skipped.push([x, y]);
+      else if (freed && canPlaceOn(v.terrain, freed, kind, x, y)) {
+        plan.build.push([x, y, d]);
+        plan.releases = true;
+      } else plan.skipped.push([x, y]);
     }
   }
   for (let k = 0; k < 3; k++) plan.cost[k] = unit[k]! * plan.build.length;
