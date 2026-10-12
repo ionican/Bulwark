@@ -263,7 +263,9 @@ async function run() {
   // W31: the Slow texture has one chevron a tile, so a small patch can hold no chevron for most of a
   // tile's travel; each rectangle spans a whole tile along the belt (the straight runs along x) so a
   // chevron is always inside it
-  const rects = [rectAt(straight[0] + 0.5, straight[1] + 0.5, 0.5, 0.18), rectAt(corner[0] + 0.5, corner[1] + 0.5, 0.42)];
+  // half a chevron period either side along the straight (a whole period); the corner's square the same, kept inside its tile
+  const along = PERIOD / 2;
+  const rects = [rectAt(straight[0] + 0.5, straight[1] + 0.5, along, 0.18), rectAt(corner[0] + 0.5, corner[1] + 0.5, Math.min(along, 0.42))];
   note(`pixel rectangles: straight ${JSON.stringify(rects[0])}, corner ${JSON.stringify(rects[1])}`);
   const still2 = js(PIX(rects, 4));
   check(still2.every((x) => x.n > 50 && x.max === 0), `paused: the pixels over the straight and the corner are identical 4 frames apart (${still2.map((x) => `${x.n} px`).join(', ')})`, `paused pixels changed: ${JSON.stringify(still2)}`);

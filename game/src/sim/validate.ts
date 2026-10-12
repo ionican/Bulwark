@@ -7,9 +7,9 @@
 // drag-upgrade command's plan (planBeltUpgrades) is made here and reused when it applies.
 
 import { SANDBOX_COMMANDS, type Command } from './commands.ts';
-import { ALIEN_KINDS, B, BELT_SPEED_NAMES, BELT_TOP_TIER, BUILDING_KINDS, U, buildingInfo, isBeltTier } from './kinds.ts';
+import { ALIEN_KINDS, B, BELT_TOP_TIER, BUILDING_KINDS, U, beltUpgradeSkip, buildingInfo, isBeltTier, tierName } from './kinds.ts';
 import { BF_COMPLETE, BF_UPGRADING, isReserved } from './schema.ts';
-import { BUILD_REQUIRES, MAX_RUN_DEPTH, RESEARCH, RESEARCH_INDEX, SPAWN_AT_MAX, TIER_REQUIRES } from './balance.ts';
+import { BUILD_REQUIRES, MAX_RUN_DEPTH, RESEARCH, RESEARCH_INDEX, SPAWN_AT_MAX, tierRequires } from './balance.ts';
 import { MAX_ORDERS, type World } from './world.ts';
 import { newSites, planRun, runById, runCapacityProblem } from './runs.ts';
 import { planGate } from './gate.ts';
@@ -61,8 +61,8 @@ function check(w: World, cmd: Command): string | null {
         if (!idList(cmd.ids)) return 'build needs unit ids';
         const req = BUILD_REQUIRES[BUILDING_KINDS[cmd.kind]!];
         if (req && !w.researched(req)) return `${buildingInfo(cmd.kind).label} needs research "${RESEARCH[RESEARCH_INDEX[req]!]!.label}"`;
-        const tierReq = tier > 1 ? TIER_REQUIRES.belt![tier - 2]! : null;
-        if (tierReq && !w.researched(tierReq) && !w.debug.allTiers) return `${BELT_SPEED_NAMES[tier]} belts need research "${RESEARCH[RESEARCH_INDEX[tierReq]!]!.label}"`;
+        const tierReq = tierRequires('belt', tier);
+        if (tierReq && !w.researched(tierReq) && !w.debug.allTiers) return `${tierName(B.belt, tier)} belts need research "${RESEARCH[RESEARCH_INDEX[tierReq]!]!.label}"`;
         // run 3 C2: an unshifted build on the issuers' own reserved site of exactly this kind, anchor
         // and direction; W31: at another belt speed, the issuers' own site is replaced (queue.ts)
         if (!w.canPlace(cmd.kind, cmd.tx, cmd.ty) && heldReservedSite(worldSiteSource(w), cmd.ids, cmd.kind, cmd.tx, cmd.ty, cmd.dir ?? 0, cmd.queue ?? false) < 0)
@@ -221,9 +221,9 @@ export function upgradeProblem(w: World, s: number): string | null {
   const tier = c.tier[s]!;
   const belt = c.kind[s] === B.belt;
   if (tier > info.tiers.length) return belt ? `${info.label} is already Fast, its top tier` : `${info.label} is already at its top tier`;
-  const req = TIER_REQUIRES[kind]?.[tier - 1];
+  const req = tierRequires(kind, tier + 1);
   if (req && !w.researched(req) && !w.debug.allTiers)
-    return `${info.label} ${belt ? `to ${BELT_SPEED_NAMES[tier + 1]}` : `tier ${tier + 1}`} needs research "${RESEARCH[RESEARCH_INDEX[req]!]!.label}"`;
+    return `${info.label} ${belt ? 'to ' : ''}${tierName(c.kind[s]!, tier + 1)} needs research "${RESEARCH[RESEARCH_INDEX[req]!]!.label}"`;
   return null;
 }
 
@@ -236,7 +236,7 @@ function otherSpeedSite(w: World, kind: number, tx: number, ty: number, tier: nu
   const s = w.occupancy[ty * w.terrain.w + tx]! - 1;
   const c = w.buildings.cols;
   if (s < 0 || c.kind[s] !== B.belt || !isReserved(c.flags[s]!) || c.tier[s] === tier) return null;
-  return `a ${BELT_SPEED_NAMES[c.tier[s]!]} belt site is already planned here`;
+  return `a ${tierName(B.belt, c.tier[s]!)} belt site is already planned here`;
 }
 
 /** Why each skipped drag-upgrade target was left out (W31; the runner reports the counts). */
@@ -278,6 +278,7 @@ export function planBeltUpgrades(w: World, cmd: Extract<Command, { t: 'upgradeBe
   const k = plan.skipped;
   const c = w.buildings.cols;
   const seen = new Set<number>();
+  const researched = (id: string) => w.researched(id) || w.debug.allTiers;
   for (const { id, expectedTier } of targets as Array<{ id: number; expectedTier: number }>) {
     if (seen.has(id)) {
       k.duplicate++;
@@ -285,12 +286,15 @@ export function planBeltUpgrades(w: World, cmd: Extract<Command, { t: 'upgradeBe
     }
     seen.add(id);
     const s = w.buildings.slotForId(id);
-    if (s < 0) k.gone++;
-    else if (c.kind[s] !== B.belt || !(c.flags[s]! & BF_COMPLETE)) k.notBelt++;
+    if (s < 0) {
+      k.gone++;
+      continue;
+    }
+    // kinds.ts beltUpgradeSkip, the rule the drag preview applies too; `changed` is checked in between
+    const why = beltUpgradeSkip(c.kind[s]!, c.flags[s]!, c.tier[s]!, researched);
+    if (why === 'notBelt') k.notBelt++;
     else if (c.tier[s] !== expectedTier) k.changed++;
-    else if (c.flags[s]! & BF_UPGRADING) k.upgrading++;
-    else if (c.tier[s]! >= BELT_TOP_TIER) k.top++;
-    else if (upgradeProblem(w, s)) k.locked++;
+    else if (why) k[why]++;
     else {
       plan.ids.push(id);
       if (c.tier[s] === 1) plan.toMedium++;

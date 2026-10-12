@@ -147,6 +147,8 @@ export function createMaterials(bank: TextureBank): Mats {
     return t;
   };
   const [slowTex, mediumTex, fastTex] = [chevrons(1), chevrons(2), chevrons(3)];
+  /** A belt surface material on chevron texture `map`. */
+  const beltMat = (name: string, map: Texture) => new MeshStandardMaterial({ name, map, roughness: 0.8, metalness: 0.1 });
 
   const mp = (k: string) => withRepeat(bank.tex(`metal_plate_02/${k}`), 0.55);
   const cu = (k: string) => withRepeat(bank.tex(`Metal047B/${k}`), 1.4);
@@ -233,9 +235,9 @@ export function createMaterials(bank: TextureBank): Mats {
     roughness: 1,
     metalness: 0,
   });
-  const belt = new MeshStandardMaterial({ name: 'belt', map: fastTex, roughness: 0.8, metalness: 0.1 });
-  const beltSlow = new MeshStandardMaterial({ name: 'beltSlow', map: slowTex, roughness: 0.8, metalness: 0.1 });
-  const beltMedium = new MeshStandardMaterial({ name: 'beltMedium', map: mediumTex, roughness: 0.8, metalness: 0.1 });
+  const belt = beltMat('belt', fastTex);
+  const beltSlow = beltMat('beltSlow', slowTex);
+  const beltMedium = beltMat('beltMedium', mediumTex);
   const beltStill = new MeshStandardMaterial({ name: 'beltStill', color: RUBBER, roughness: 0.8, metalness: 0.1 });
   for (const t of [panels.normal]) t.colorSpace = NoColorSpace;
   return { ivory, trim, copper, glow, glass, void: voidM, pad, hull, alienGlow, crystal, ore, belt, beltSlow, beltMedium, beltStill, hot, rock };

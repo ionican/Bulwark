@@ -15,12 +15,13 @@ import { Ghost } from './render/ghost.ts';
 import { DASH_NAMES, QUEUE_MAX_INSTANCES, QueueOverlay, canvasLabel, inspectQueue } from './render/queueView.ts';
 import { WaitOverlay, canvasWaitMark, inspectWaiting } from './render/waitView.ts';
 import { siteReadout, type SiteReadout } from './render/siteReadout.ts';
+import { snapshotRules } from './snapshotRules.ts';
 import { buildingReadout } from './render/buildingReadout.ts';
 import { CoreOverlay, canvasCoreMark, inspectCore } from './render/coreView.ts';
 import { SiteHover } from './ui/siteHover.ts';
 import { waitingCounts, waitingState } from './render/waiting.ts';
 import { DragPreview, inspectDrag } from './render/dragPreview.ts';
-import { DragPlanCache, beltLineTiles, dragLabel, paintsRow, placeableOn, planBeltUpgrade, planDrag, rowBuildCommands, upgradeLabel, type BeltUpgradePlan, type DragPlan, type DragView } from './dragPlan.ts';
+import { DragPlanCache, beltLineTiles, dragLabel, paintsRow, placeableOn, planBeltUpgrade, planDrag, rowBuildCommands, upgradeLabel, type BeltUpgradePreview, type DragPlan, type DragView } from './dragPlan.ts';
 import { Tools, fastestBeltTier, gateCommand, runCommand, spawnAtCommand, toolLabel } from './tools.ts';
 import { SandboxPanel, debugSpawnVisible, multToSlider } from './ui/sandboxPanel.ts';
 import { editingTarget } from './ui/focusReturn.ts';
@@ -119,7 +120,7 @@ import { EndScreen, ResearchPanel, Ticker, TimeControls, Toasts } from './ui/pan
 import type { ScenarioName } from './sim/scenarios.ts';
 import { Hud } from './ui/hud.ts';
 import { BUILD, versionLabel } from './version.ts';
-import { BuildBar, TEST_GROUP, entryId, entryLock } from './ui/buildbar.ts';
+import { BuildBar, TEST_GROUP, entryId } from './ui/buildbar.ts';
 import { QueuePanel, type QueuePanelUnit } from './ui/queuePanel.ts';
 
 // ---- setup ---------------------------------------------------------------------------------
@@ -396,8 +397,7 @@ function researchDoneMask(): number {
 }
 /** True when research node `id` is done in the latest snapshot. */
 function researched(id: string): boolean {
-  const i = RESEARCH_INDEX[id];
-  return i !== undefined && (researchDoneMask() & (1 << i)) !== 0;
+  return interp.curr ? snapshotRules(interp.curr).researched(id) : false;
 }
 
 function pickView(): PickView | null {
@@ -573,7 +573,7 @@ function placeBuild(kind: number, tx: number, ty: number, dir: number, queue: bo
   const ids = selectedBuilders();
   if (!ids.length || !placeable(kind, tx, ty, dir, queue, () => ids)) return false;
   // W31: a belt is laid at the tool's speed (a tier on any other kind is refused)
-  sendBuild(kind === B.belt ? { t: 'build', ids, kind, tx, ty, dir, tier: tools.tier, queue } : { t: 'build', ids, kind, tx, ty, dir, queue });
+  sendBuild({ t: 'build', ids, kind, tx, ty, dir, ...(kind === B.belt && { tier: tools.tier }), queue });
   return true;
 }
 
@@ -641,29 +641,32 @@ function currentDragPlan(): DragPlan | null {
 }
 
 /**
- * W31: the upgrade tool's drag along belts (dragPlan.ts planBeltUpgrade), worked out again only when
- * the snapshot tick or an end tile changes. Released, it is one upgradeBelts command.
+ * W31: the upgrade tool's drag along belts (dragPlan.ts planBeltUpgrade): the last plan and the
+ * snapshot tick and end tiles it was made for. Worked out again only when one of those changes; the
+ * release sends the cached plan when they still match.
  */
-let upgradePlan: { tick: number; from: [number, number]; to: [number, number]; plan: BeltUpgradePlan; tiles: { kind: number; build: Array<[number, number, number]>; skipped: Array<[number, number]> } } | null = null;
-function currentUpgradePlan(): BeltUpgradePlan | null {
+let upgradePlan: { tick: number; fx: number; fy: number; tx: number; ty: number; plan: BeltUpgradePreview } | null = null;
+function upgradePlanFor(s: Snapshot, from: readonly [number, number], to: readonly [number, number]): BeltUpgradePreview {
+  const u = upgradePlan;
+  if (u && u.tick === s.tick && u.fx === from[0] && u.fy === from[1] && u.tx === to[0] && u.ty === to[1]) return u.plan;
+  const plan = planBeltUpgrade(dragView(s), [from[0], from[1]], [to[0], to[1]], 0);
+  upgradePlan = { tick: s.tick, fx: from[0], fy: from[1], tx: to[0], ty: to[1], plan };
+  dragLabelEl.textContent = upgradeLabel(plan);
+  return plan;
+}
+function currentUpgradePlan(): BeltUpgradePreview | null {
   const s = interp.curr;
   if (!drag || tools.name !== 'upgrade' || !s) {
     upgradePlan = null;
     return null;
   }
-  const u = upgradePlan;
-  if (!u || u.tick !== s.tick || u.from[0] !== drag.from[0] || u.from[1] !== drag.from[1] || u.to[0] !== drag.to[0] || u.to[1] !== drag.to[1]) {
-    const plan = planBeltUpgrade(dragView(s), drag.from, drag.to, 0);
-    upgradePlan = { tick: s.tick, from: [...drag.from], to: [...drag.to], plan, tiles: { kind: B.belt, build: plan.tiles, skipped: plan.skipped } };
-    dragLabelEl.textContent = upgradeLabel(plan);
-  }
-  return upgradePlan!.plan;
+  return upgradePlanFor(s, drag.from, drag.to);
 }
 
 function updateDragPreview() {
   const upgrade = currentUpgradePlan();
   const plan = upgrade ? null : currentDragPlan();
-  dragPreview.update(upgrade ? upgradePlan!.tiles : plan, performance.now() / 1000);
+  dragPreview.update(upgrade ?? plan, performance.now() / 1000);
   if ((!plan && !upgrade) || !drag) {
     dragLabelEl.style.display = 'none';
     return;
@@ -795,7 +798,7 @@ function upgradeDrag(x0: number, y0: number, x1: number, y1: number, shift: bool
   const b = tileAtScreen(x1, y1);
   const ids = selectedEngineers();
   if (s && a && b && ids.length) {
-    const plan = planBeltUpgrade(dragView(s), [a.tx, a.ty], [b.tx, b.ty], 0);
+    const plan = upgradePlanFor(s, [a.tx, a.ty], [b.tx, b.ty]);
     if (plan.targets.length) void commandResult({ t: 'upgradeBelts', ids, targets: plan.targets, queue: shift });
   }
   tools.acted(shift);
@@ -1510,7 +1513,7 @@ function frame(now: number) {
           ? ''
           : 'Select the commander or an engineer to build.';
     const hasCommander = selection.some((p) => p.type === 'unit' && p.kind === U.commander);
-    bar.update(builders, selectedEngineers().length > 0, hasCommander, active, hint, (e) => entryLock(e, researched));
+    bar.update(builders, selectedEngineers().length > 0, hasCommander, active, hint, researchDoneMask(), researched);
   }
 }
 requestAnimationFrame(frame);
@@ -1927,7 +1930,7 @@ const game = {
   // was refused when sent or at its tick (while paused, it resolves after resuming).
   /** Debug (W24 run 2a fixtures): places a complete building at once, as the simulation's `place` command. */
   /** W31: `tier` lays a belt at that speed (belts only; the command refuses a tier on any other kind). */
-  place: (kind: string | number, tx: number, ty: number, dir = 0, tier?: number) => commandResult(tier === undefined ? { t: 'place', kind: buildingKindIndex(kind), tx, ty, dir } : { t: 'place', kind: buildingKindIndex(kind), tx, ty, dir, tier }),
+  place: (kind: string | number, tx: number, ty: number, dir = 0, tier?: number) => commandResult({ t: 'place', kind: buildingKindIndex(kind), tx, ty, dir, ...(tier !== undefined && { tier }) }),
   buildRun: (from: [number, number], to: [number, number], depth = 1, opts: { ids?: number[]; queue?: boolean } = {}) =>
     commandResult({ t: 'buildRun', ids: opts.ids ?? allUnitIds(), from, to, depth, queue: opts.queue ?? false }),
   cancelRun: (run: number) => commandResult({ t: 'cancelRun', run }),
@@ -2080,7 +2083,7 @@ const game = {
     // W31: the upgrade tool's drag along belts: its tiles, skipped tiles, per-destination counts and label
     if (drag && upgradePlan && tools.name === 'upgrade') {
       const p = upgradePlan.plan;
-      return { kind: 'upgrade', build: p.tiles.map(([x, y, dir]) => [x, y, dir]), skipped: p.skipped.map(([x, y]) => [x, y]), toMedium: p.toMedium, toFast: p.toFast, label: dragLabelEl.textContent, refused: null, drawn: inspectDrag(scene) };
+      return { kind: 'upgrade', build: p.build, skipped: p.skipped, toMedium: p.toMedium, toFast: p.toFast, label: dragLabelEl.textContent, refused: null, drawn: inspectDrag(scene) };
     }
     if (!dragPlan || !drag) return null;
     return {

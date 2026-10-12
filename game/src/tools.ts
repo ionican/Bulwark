@@ -11,8 +11,8 @@
 // Pure: main.ts owns the input and calls these; the panel names the tool from toolLabel().
 
 import type { Command } from './sim/commands.ts';
-import { SPAWN_AT_MAX, TIER_REQUIRES } from './sim/balance.ts';
-import { B, isBelt } from './sim/kinds.ts';
+import { SPAWN_AT_MAX, tierRequires } from './sim/balance.ts';
+import { B, BELT_TOP_TIER, isBelt } from './sim/kinds.ts';
 
 export type ToolName = 'select' | 'build' | 'wall' | 'upgrade' | 'gate' | 'spawn';
 
@@ -103,9 +103,8 @@ export class Tools {
 
 /** W31: the fastest belt speed whose research is done (`researched` takes a research id): B selects it. */
 export function fastestBeltTier(researched: (id: string) => boolean): number {
-  const req = TIER_REQUIRES.belt!;
   let tier = 1;
-  while (tier <= req.length && researched(req[tier - 1]!)) tier++;
+  while (tier < BELT_TOP_TIER && researched(tierRequires('belt', tier + 1)!)) tier++;
   return tier;
 }
 

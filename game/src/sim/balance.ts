@@ -64,6 +64,8 @@ export const researchBit = (id: string): number => 1 << RESEARCH_INDEX[id]!;
 export const BUILD_REQUIRES: Record<string, string> = { beam: 'beam', heavy: 'heavy', shield: 'shield' };
 /** Research each upgrade tier needs: kind -> [tier 2, tier 3]. */
 export const TIER_REQUIRES: Record<string, string[]> = { wall: ['wallT2', 'wallT3'], gate: ['wallT2', 'wallT3'], gun: ['gunT2'], area: ['areaT2'], heavy: ['heavyT2'], belt: ['beltMedium', 'beltFast'] };
+/** The research id `kind` (a BUILDING_KINDS name) needs to reach `toTier` (2 or 3), or undefined: none needed or no such tier. */
+export const tierRequires = (kind: string, toTier: number): string | undefined => TIER_REQUIRES[kind]?.[toTier - 2];
 /** Heavy cannon tier 2 (new; same shape as W12's gun and area tier 2). */
 export const HEAVY_T2 = { hpMult: 1.5, damageMult: 1.5, cost: [250, 1000, 10] as Cost, time: 200 };
 

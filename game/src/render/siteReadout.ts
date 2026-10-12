@@ -26,7 +26,7 @@
 
 import type { Snapshot } from '../sim/snapshot.ts';
 import { BF_COMPLETE, BF_UPGRADING, US_BUILDING, isReserved } from '../sim/schema.ts';
-import { B, TICK_HZ, beltSpeedText, buildingInfo, siteWork } from '../sim/kinds.ts';
+import { B, TICK_HZ, beltSpeedText, buildingInfo, siteWork, tierName } from '../sim/kinds.ts';
 import { unitBuildRate } from '../sim/tuning.ts';
 import { sameRules, snapshotRules } from '../snapshotRules.ts';
 import { RESOURCE_NAMES, type ResourceName } from './waiting.ts';
@@ -128,7 +128,7 @@ export function siteReadout(prev: Snapshot | null, curr: Snapshot, id: number): 
   const belt = kind === B.belt;
   const title = belt ? `${name} · ${beltSpeedText(tier)}` : name;
   const lines = [
-    upgrading ? `${title} — upgrading to ${belt ? beltSpeedText(upgradeTo) : `tier ${upgradeTo}`}` : title,
+    upgrading ? `${title} — upgrading to ${belt ? beltSpeedText(upgradeTo) : tierName(kind, upgradeTo)}` : title,
     reserved ? 'reserved — not started' : `${percent}% complete`,
     ...intake.map((i) => `${i.resource} ${i.perSecond === null ? intakeNote : formatRate(i.perSecond)} / ${i.wanted === null ? 'no builder' : `${formatRate(i.wanted)} per s`}`),
     `${builders} ${builders === 1 ? 'builder' : 'builders'}`,

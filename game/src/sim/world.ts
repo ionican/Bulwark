@@ -63,7 +63,7 @@ import { stepConveyors } from './conveyor.ts';
 import { acquireTargets, damageBuilding, fireTurrets, stepProjectiles, stepShieldsAndTimers, AlienGrid } from './combat.ts';
 import { stepAliens } from './aliens.ts';
 import { stepUnits, type Order, type OrderSpec } from './units.ts';
-import { dequeueIndex, dropOrphans, heldReservedSite, replacementProblem, worldSiteSource } from './queue.ts';
+import { dequeueIndex, dropOrphans, heldReservedSite, ownReservedSite, replacementProblem, worldSiteSource } from './queue.ts';
 import { planBeltUpgrades, validateCommand, upgradeProblem } from './validate.ts';
 import { COMMANDER_WRECK_SALVAGE, RESEARCH, RESEARCH_INDEX, SANDBOX_RESPAWN_TICKS, callEarlyBonus, FIELD_ENG_TURRET_COOLDOWN } from './balance.ts';
 import { map1 } from '../../../model/data/map1.ts';
@@ -499,9 +499,8 @@ export class World {
         let own = -1;
         if (!this.canPlace(cmd.kind, cmd.tx, cmd.ty)) {
           const src = worldSiteSource(this);
-          const held = heldReservedSite(src, cmd.ids, cmd.kind, cmd.tx, cmd.ty, dir, cmd.queue ?? false);
-          if (held >= 0 && src.tierOf(held) === tier) own = held;
-          else if (held >= 0) {
+          own = ownReservedSite(src, cmd.ids, cmd.kind, cmd.tx, cmd.ty, dir, cmd.queue ?? false, tier);
+          if (own < 0 && heldReservedSite(src, cmd.ids, cmd.kind, cmd.tx, cmd.ty, dir, cmd.queue ?? false) >= 0) {
             this.replaceQueues(cmd.ids);
             dropOrphans(this, this.dropped);
             this.dropped.length = 0;

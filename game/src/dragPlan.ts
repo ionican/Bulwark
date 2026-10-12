@@ -29,13 +29,13 @@
 //
 // Not under render/: it reaches runs.ts and world.ts (canPlaceOn), which render code may not import.
 
-import { B, BELT_SPEED_NAMES, BELT_TOP_TIER, buildingFootprint, buildingInfo, beltLaidWork, isBelt, type Cost } from './sim/kinds.ts';
-import { TIER_REQUIRES } from './sim/balance.ts';
+import { B, BELT_SPEED_NAMES, beltUpgradeSkip, buildingFootprint, buildingInfo, beltLaidWork, isBelt, siteWork, type Cost } from './sim/kinds.ts';
 import type { Command } from './sim/commands.ts';
 import { planRunOn, type RunPlan, type RunPlanSource } from './sim/runs.ts';
 import { heldReservedSite, ownWallSites, type QueueSource, type ReplaceSource, type SiteSource } from './sim/queue.ts';
-import { BF_COMPLETE, BF_UPGRADING, Q_BUILD, Q_RUN, isReserved } from './sim/schema.ts';
+import { BF_COMPLETE, Q_BUILD, Q_RUN, isReserved } from './sim/schema.ts';
 import { snapshotRules } from './snapshotRules.ts';
+import { rowOf } from './render/siteReadout.ts';
 import { runSitesOf, type Snapshot } from './sim/snapshot.ts';
 import type { Terrain } from './sim/terrain.ts';
 import { canPlaceOn } from './sim/world.ts';
@@ -141,8 +141,8 @@ export function snapshotSiteSource(s: Snapshot, occupancy: Int32Array): SiteSour
       return r >= 0 && at(r) ? s.buildings.id[r]! : -1;
     },
     tierOf: (id) => {
-      for (let r = 0; r < s.buildings.count; r++) if (s.buildings.id[r] === id) return c.tier[r]!;
-      return 0;
+      const r = rowOf(s, id);
+      return r >= 0 ? c.tier[r]! : 0;
     },
   };
 }
@@ -188,12 +188,17 @@ export function rowBuildCommands(plan: DragPlan, ids: number[], queue: boolean):
   return plan.build.map(([tx, ty, dir], i) => ({ t: 'build', ids, kind: plan.kind, tx, ty, dir, queue: queue || i > 0 }));
 }
 
-/** W31: what an upgrade-tool drag along belts will do (planBeltUpgrade). */
-export interface BeltUpgradePlan {
+/**
+ * W31: what an upgrade-tool drag along belts will do (planBeltUpgrade), as the preview shows it; the
+ * command's own plan on the world is validate.ts BeltUpgradePlan. `kind`, `build` and `skipped` are
+ * the shape render/dragPreview.ts draws.
+ */
+export interface BeltUpgradePreview {
+  kind: number;
   /** One per belt to upgrade one speed step, in drag order (the upgradeBelts command's targets). */
   targets: Array<{ id: number; expectedTier: number }>;
   /** Their tiles, with the belt's direction (the preview's build marks). */
-  tiles: Array<[number, number, number]>;
+  build: Array<[number, number, number]>;
   /** Belt pieces on the line that will not be upgraded: splitter, merger, Fast, upgrading, locked, unfinished. */
   skipped: Array<[number, number]>;
   toMedium: number;
@@ -207,36 +212,35 @@ export interface BeltUpgradePlan {
  * upgrading, below Fast and with its next speed researched becomes a target at its current tier; any
  * other belt piece on the line is skipped. Tiles without a belt piece are not counted.
  */
-export function planBeltUpgrade(v: DragView, from: [number, number], to: [number, number], dir: number): BeltUpgradePlan {
-  const plan: BeltUpgradePlan = { targets: [], tiles: [], skipped: [], toMedium: 0, toFast: 0, cost: [0, 0, 0] };
+export function planBeltUpgrade(v: DragView, from: [number, number], to: [number, number], dir: number): BeltUpgradePreview {
+  const plan: BeltUpgradePreview = { kind: B.belt, targets: [], build: [], skipped: [], toMedium: 0, toFast: 0, cost: [0, 0, 0] };
   const s = v.snapshot;
   if (!s) return plan;
   const c = s.buildings.cols;
   const researched = snapshotRules(s).researched;
-  const tiers = buildingInfo(B.belt).tiers!;
   const W = v.terrain.w;
   for (const [x, z] of beltLineTiles(from[0], from[1], to[0], to[1], dir)) {
     if (x < 0 || z < 0 || x >= W || z >= v.terrain.h) continue;
     const r = (v.occupancy[z * W + x] ?? 0) - 1;
     if (r < 0 || !isBelt(c.kind[r]!)) continue;
     const tier = c.tier[r]!;
-    const flags = c.flags[r]!;
-    const ok = c.kind[r] === B.belt && flags & BF_COMPLETE && !(flags & BF_UPGRADING) && tier < BELT_TOP_TIER && researched(TIER_REQUIRES.belt![tier - 1]!);
-    if (!ok) {
+    // kinds.ts beltUpgradeSkip: the rule the upgradeBelts command applies (validate.ts planBeltUpgrades)
+    if (beltUpgradeSkip(c.kind[r]!, c.flags[r]!, tier, researched)) {
       plan.skipped.push([x, z]);
       continue;
     }
     plan.targets.push({ id: s.buildings.id[r]!, expectedTier: tier });
-    plan.tiles.push([x, z, c.dir[r]!]);
+    plan.build.push([x, z, c.dir[r]!]);
     if (tier === 1) plan.toMedium++;
     else plan.toFast++;
-    for (let k = 0; k < 3; k++) plan.cost[k] = plan.cost[k]! + tiers[tier - 1]!.cost[k]!;
+    const { cost } = siteWork(B.belt, true, tier, 1, 1);
+    for (let k = 0; k < 3; k++) plan.cost[k] = plan.cost[k]! + cost[k]!;
   }
   return plan;
 }
 
 /** "8 to Medium · 4 to Fast · 3 skipped · 16 mass" (a zero count is left out; "nothing to upgrade" when no target). */
-export function upgradeLabel(p: BeltUpgradePlan): string {
+export function upgradeLabel(p: BeltUpgradePreview): string {
   const parts: string[] = [];
   if (p.toMedium) parts.push(`${p.toMedium} to Medium`);
   if (p.toFast) parts.push(`${p.toFast} to Fast`);

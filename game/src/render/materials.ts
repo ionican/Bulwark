@@ -135,8 +135,10 @@ export function createRenderMaterials(bank: TextureBank): RenderMaterials {
 }
 
 const W17_KEYS: W17Key[] = ['ivory', 'trim', 'copper', 'glow', 'glass', 'void', 'pad', 'hull', 'alienGlow', 'crystal', 'ore', 'belt', 'beltSlow', 'beltMedium', 'beltStill', 'hot', 'rock'];
-/** W31: the scrolling belt surfaces (Fast, Slow, Medium): each stand-in gets its own texture. */
-const BELT_SURFACE_KEYS = new Set<W17Key>(['belt', 'beltSlow', 'beltMedium']);
+/** W31: the surface material of each belt speed (index = tier; 0 unused, its material a placeholder). */
+export const BELT_SURFACE_MATERIAL = ['belt', 'beltSlow', 'beltMedium', 'belt'] as const satisfies readonly W17Key[];
+/** The scrolling belt surfaces: each stand-in gets its own texture. */
+const BELT_SURFACE_KEYS = new Set<W17Key>(BELT_SURFACE_MATERIAL.slice(1));
 const ASSET_KEYS: MatKey[] = ['ceramic', 'gunmetal', 'bronze', 'dark', 'glow'];
 
 /** Name-only stand-ins (Node tests): the same material names, no textures or shader patches. */

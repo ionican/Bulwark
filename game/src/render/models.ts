@@ -48,7 +48,7 @@
 // Each speed's texture scrolls by its own phase (anim.ts BeltFlow).
 
 import { BoxGeometry, Frustum, Group, InstancedBufferAttribute, InstancedMesh, Matrix4, MeshStandardMaterial, Quaternion, Sphere, Vector3, type BufferGeometry, type PerspectiveCamera, type Texture } from 'three';
-import { ALIEN_KINDS, B, U, buildingFootprint, isBelt } from '../sim/kinds.ts';
+import { ALIEN_KINDS, B, BELT_SPEED_NAMES, BELT_TOP_TIER, U, buildingFootprint, isBelt } from '../sim/kinds.ts';
 import { AS_ATTACKING, BF_COMPLETE, BF_FIRING, BF_STARTED, T_ALIEN, T_BUILDING, T_UNIT, isReserved } from '../sim/schema.ts';
 import { slotOf } from '../sim/table.ts';
 import type { Terrain } from '../sim/terrain.ts';
@@ -58,7 +58,7 @@ import { reservedOutlineGeometry } from './geometry.ts';
 import { ICON, IconBatches, type IconName, type TurretIconSpecs } from './icons.ts';
 import { tagGroup, type MeshGroup } from './inspect.ts';
 import type { MobileView } from './interp.ts';
-import type { RenderMaterials } from './materials.ts';
+import { BELT_SURFACE_MATERIAL, type RenderMaterials } from './materials.ts';
 import { W17Batches, bakeModel, type BakedModel } from './w17Batches.ts';
 import { WallLayout, leafMatrices, type BuildingRows } from './wallLayout.ts';
 import { ALIEN_AIM_HEIGHT, ALIEN_SCALE, Animator, BeltFlow, REST_YAW, beamOf, carryLoad, flatPitch, gateWanted, isMachine, isTurret, recoils, runsWhenComplete, type BeltFrame, type EffectTime } from './anim.ts';
@@ -179,9 +179,9 @@ const ALIEN_MODEL_NAMES = ['rusher', 'hunter', 'breaker', 'saboteur'] as const;
 /** Icon quad size in screen pixels (the drawn shape fills about 70 % of it). */
 const ICON_PX = { building: 26, belt: 12, alien: 17, commander: 34, engineer: 20, wreck: 11 } as const;
 const BELT_YAW = [0, -Math.PI / 2, Math.PI, Math.PI / 2];
-/** W31: the surface model suffix and material of each belt speed (index = tier; 0 unused, its material a placeholder). */
-export const BELT_SURFACE_SUFFIX = ['', 'slow', 'medium', 'fast'] as const;
-export const BELT_SURFACE_MATERIAL = ['belt', 'beltSlow', 'beltMedium', 'belt'] as const;
+/** W31: the surface model suffix of each belt speed (index = tier; 0 unused): its name in lower case. */
+export const BELT_SURFACE_SUFFIX: readonly string[] = BELT_SPEED_NAMES.map((n) => n.toLowerCase());
+export { BELT_SURFACE_MATERIAL };
 export const ICON_LEVEL = 3;
 /** Thresholds (tiles from the camera) for W17 buildings, aliens and wrecks: model, or icon beyond. */
 const W17_THRESHOLDS = [24, 85, 160];
@@ -1000,8 +1000,10 @@ export class ModelRenderer {
       const cut = cutOf();
       sink.model(mi, _m.elements, 0, damage, cut);
       // W31: the belt surface at the belt's speed (the merger: Fast)
-      const surfaces = this.beltSurfaces.get(name);
-      if (surfaces) sink.model(surfaces[kind === B.belt ? tier : 3]!, _m.elements, 0, damage, cut);
+      if (isBelt(kind)) {
+        const surfaces = this.beltSurfaces.get(name);
+        if (surfaces) sink.model(surfaces[kind === B.belt ? tier : BELT_TOP_TIER]!, _m.elements, 0, damage, cut);
+      }
       if (kind === B.splitter || kind === B.merger) sink.model(this.modelIndex.get(kind === B.splitter ? 'splitterMarker' : 'mergerMarker')!, _m.elements, 0, damage, cut);
       // W17 moving parts (generator vane, shredder rollers, assembler arm): turned by the running time
       const moving = this.movingParts.get(name);

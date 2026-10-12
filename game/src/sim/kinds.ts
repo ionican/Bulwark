@@ -6,7 +6,8 @@
 
 import { map1 } from '../../../model/data/map1.ts';
 import type { BuildingDef, WeaponDef } from '../../../model/src/types.ts';
-import { BELT_COST_MASS, BELT_UPGRADES, BUILD_RATE, CORE_HP, CORE_REPAIR_TIME, HEAVY_T2, RARE_EXTRACTOR_OUTPUT, gateStats } from './balance.ts';
+import { BELT_COST_MASS, BELT_UPGRADES, BUILD_RATE, CORE_HP, CORE_REPAIR_TIME, HEAVY_T2, RARE_EXTRACTOR_OUTPUT, gateStats, tierRequires } from './balance.ts';
+import { BF_COMPLETE, BF_UPGRADING } from './schema.ts';
 
 export const METRES_PER_TILE = 2;
 export const TICK_HZ = 10;
@@ -247,8 +248,26 @@ export const BELT_STEP = [0, 1 / 6, 0.25, 0.4] as const;
 export const BELT_SPEED_NAMES = ['', 'Slow', 'Medium', 'Fast'] as const;
 /** Tiles a second an item crosses on a belt of `tier` (Slow 1.67, Medium 2.5, Fast 3.33). */
 export const beltTilesPerSecond = (tier: number): number => TICK_HZ / BELT_TICKS_PER_TILE[tier]!;
+/** "Slow (1.7 tiles/s)" per tier, worked out once. */
+const BELT_SPEED_TEXT = BELT_SPEED_NAMES.map((name, t) => (t ? `${name} (${beltTilesPerSecond(t).toFixed(1)} tiles/s)` : ''));
 /** "Slow (1.7 tiles/s)": the readout's name for a belt speed. */
-export const beltSpeedText = (tier: number): string => `${BELT_SPEED_NAMES[tier]} (${beltTilesPerSecond(tier).toFixed(1)} tiles/s)`;
+export const beltSpeedText = (tier: number): string => BELT_SPEED_TEXT[tier]!;
+/** A tier's name in messages: a belt's speed ("Medium"), any other kind's "tier 2". */
+export const tierName = (kind: number, tier: number): string => (kind === B.belt ? BELT_SPEED_NAMES[tier]! : `tier ${tier}`);
+/** Why a building is not upgraded by a drag along belts (W31): not a finished belt, already upgrading, at Fast, or its next speed not researched. */
+export type BeltUpgradeSkip = 'notBelt' | 'upgrading' | 'top' | 'locked';
+/**
+ * W31: the one rule both the upgrade drag's preview (dragPlan.ts planBeltUpgrade, on a snapshot) and
+ * the upgradeBelts command (validate.ts planBeltUpgrades, on the world) apply to a building of `kind`
+ * with `flags` at `tier`: null when it goes up one speed, else why not. `researched` takes a research id.
+ */
+export function beltUpgradeSkip(kind: number, flags: number, tier: number, researched: (id: string) => boolean): BeltUpgradeSkip | null {
+  if (kind !== B.belt || !(flags & BF_COMPLETE)) return 'notBelt';
+  if (flags & BF_UPGRADING) return 'upgrading';
+  if (tier >= BELT_TOP_TIER) return 'top';
+  const req = tierRequires('belt', tier + 1);
+  return req && !researched(req) ? 'locked' : null;
+}
 /** True for a tier a belt may have: an integer 1..3. */
 export const isBeltTier = (tier: unknown): tier is number => typeof tier === 'number' && Number.isInteger(tier) && tier >= 1 && tier <= BELT_TOP_TIER;
 export const WRECK_DECAY_PER_SECOND = map1.wreckDecayPerSecond;
@@ -424,15 +443,21 @@ export function siteWork(kind: number, upgrading: boolean, tier: number, fw: num
   return { cost: info.cost, time: info.buildTime };
 }
 
-/** W31: cost and BP·s of laying a belt at `tier`: the Slow belt plus each upgrade below `tier`. */
+/** W31: cost and BP·s of laying a belt at each tier (index = tier; 0 unused): the Slow belt plus each upgrade below it. Built once, frozen. */
+const BELT_LAID_WORK: ReadonlyArray<{ readonly cost: Cost; readonly time: number }> = Object.freeze(
+  [0, 1, 2, 3].map((tier) => {
+    const info = BUILDING_INFO.belt;
+    const cost: Cost = [...info.cost];
+    let time = info.buildTime;
+    for (let t = 1; t < tier; t++) {
+      const up = info.tiers![t - 1]!;
+      for (let k = 0; k < 3; k++) cost[k] = cost[k]! + up.cost[k]!;
+      time += up.time;
+    }
+    return Object.freeze({ cost: Object.freeze(cost) as Cost, time });
+  }),
+);
+/** W31: cost and BP·s of laying a belt at `tier` (a shared frozen entry: siteWork runs per site per tick and per frame). */
 export function beltLaidWork(tier: number): { cost: Cost; time: number } {
-  const info = BUILDING_INFO.belt;
-  const cost: Cost = [...info.cost];
-  let time = info.buildTime;
-  for (let t = 1; t < tier; t++) {
-    const up = info.tiers![t - 1]!;
-    for (let k = 0; k < 3; k++) cost[k] = cost[k]! + up.cost[k]!;
-    time += up.time;
-  }
-  return { cost, time };
+  return BELT_LAID_WORK[tier]!;
 }

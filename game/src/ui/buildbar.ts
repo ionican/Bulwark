@@ -4,7 +4,7 @@
 // data-tier 1..3). A locked entry is disabled and says "✕ needs <research>" (entryLock).
 
 import { ALIEN_KINDS, ALIEN_INFO, BELT_SPEED_NAMES, BUILDING_INFO, beltLaidWork, type BuildingKind } from '../sim/kinds.ts';
-import { BUILD_REQUIRES, RESEARCH, RESEARCH_INDEX, TIER_REQUIRES } from '../sim/balance.ts';
+import { BUILD_REQUIRES, RESEARCH, RESEARCH_INDEX, tierRequires } from '../sim/balance.ts';
 
 const css = `
 .bar{position:fixed;left:50%;bottom:8px;transform:translateX(-50%);display:flex;gap:10px;align-items:flex-end;
@@ -53,7 +53,7 @@ export const BUILD_ENTRIES: Array<[string, BuildEntry[]]> = BUILD_GROUPS.map(([t
 
 /** The research an entry still needs (its label), or null: a kind's research, or a belt speed's. */
 export function entryLock(e: Pick<BuildEntry, 'kind' | 'tier'>, researched: (id: string) => boolean): string | null {
-  const req = e.kind === 'belt' ? (e.tier > 1 ? TIER_REQUIRES.belt![e.tier - 2]! : undefined) : BUILD_REQUIRES[e.kind];
+  const req = e.kind === 'belt' ? tierRequires('belt', e.tier) : BUILD_REQUIRES[e.kind];
   return req && !researched(req) ? RESEARCH[RESEARCH_INDEX[req]!]!.label : null;
 }
 
@@ -78,6 +78,9 @@ export interface BuildBarHandlers {
 export class BuildBar {
   private readonly buttons = new Map<string, HTMLButtonElement>();
   private readonly entries = new Map<string, BuildEntry>();
+  /** Each entry's lock (entryLock) for the research mask `lockMask`; worked out again when the mask changes. */
+  private readonly locks = new Map<string, string | null>();
+  private lockMask = -1;
   private readonly hint: HTMLDivElement;
 
   constructor(h: BuildBarHandlers, entries: string[]) {
@@ -147,11 +150,18 @@ export class BuildBar {
     return b;
   }
 
-  /** Enables the bar for builders; marks the active tool (an entry id or 'upgrade'); marks entries still locked by research. */
-  update(canBuild: boolean, hasEngineers: boolean, hasCommander: boolean, active: string | null, hint: string, locked: (entry: BuildEntry) => string | null) {
+  /**
+   * Enables the bar for builders; marks the active tool (an entry id or 'upgrade'); marks entries
+   * still locked by research (`researched` takes a research id; `researchMask` is the done mask it
+   * reads, so the locks are worked out again only when it changes).
+   */
+  update(canBuild: boolean, hasEngineers: boolean, hasCommander: boolean, active: string | null, hint: string, researchMask: number, researched: (id: string) => boolean) {
+    if (researchMask !== this.lockMask) {
+      this.lockMask = researchMask;
+      for (const [k, e] of this.entries) this.locks.set(k, entryLock(e, researched));
+    }
     for (const [k, b] of this.buttons) {
-      const e = this.entries.get(k);
-      const lock = e ? locked(e) : null;
+      const lock = this.locks.get(k) ?? null;
       b.disabled = k === 'upgrade' || k === 'turret' ? !hasEngineers : k === 'produce' ? !hasCommander : !canBuild || lock !== null;
       b.classList.toggle('on', k === active);
       b.title = lock ? `Locked: needs research "${lock}"` : '';
