@@ -40,6 +40,12 @@
 // and started sites alike, since both draw the `belt` material) carries flow UVs, and the one chevron
 // texture they share scrolls by `beltFlow` (anim.ts BeltFlow): offset.y = −(phase mod 1), set once a
 // frame whatever the belt count. The splitter's surface is the still `beltStill` material.
+// W31: three belt speeds, told apart by chevron count (1 Slow, 2 Medium, 3 Fast). Only the belt
+// surface is split by speed: each belt shape (straight, corners, joins) is baked as its rest (rails,
+// rollers, posts) plus one surface model per speed, `<shape>/slow|medium|fast`, on the `beltSlow`,
+// `beltMedium` and `belt` materials (BELT_SURFACE_MATERIAL), so a shape drawn at all three speeds
+// costs two draw calls more than at one. A belt draws the surface of its tier, the merger Fast's.
+// Each speed's texture scrolls by its own phase (anim.ts BeltFlow).
 
 import { BoxGeometry, Frustum, Group, InstancedBufferAttribute, InstancedMesh, Matrix4, MeshStandardMaterial, Quaternion, Sphere, Vector3, type BufferGeometry, type PerspectiveCamera, type Texture } from 'three';
 import { ALIEN_KINDS, B, U, buildingFootprint, isBelt } from '../sim/kinds.ts';
@@ -173,6 +179,9 @@ const ALIEN_MODEL_NAMES = ['rusher', 'hunter', 'breaker', 'saboteur'] as const;
 /** Icon quad size in screen pixels (the drawn shape fills about 70 % of it). */
 const ICON_PX = { building: 26, belt: 12, alien: 17, commander: 34, engineer: 20, wreck: 11 } as const;
 const BELT_YAW = [0, -Math.PI / 2, Math.PI, Math.PI / 2];
+/** W31: the surface model suffix and material of each belt speed (index = tier; 0 unused, its material a placeholder). */
+export const BELT_SURFACE_SUFFIX = ['', 'slow', 'medium', 'fast'] as const;
+export const BELT_SURFACE_MATERIAL = ['belt', 'beltSlow', 'beltMedium', 'belt'] as const;
 export const ICON_LEVEL = 3;
 /** Thresholds (tiles from the camera) for W17 buildings, aliens and wrecks: model, or icon beyond. */
 const W17_THRESHOLDS = [24, 85, 160];
@@ -348,6 +357,8 @@ export class ModelRenderer {
   private readonly kitPart: PartDef[] = [];
   private readonly models: BakedModel[] = [];
   private readonly modelIndex = new Map<string, number>();
+  /** W31: per belt shape name, the model index of its surface at each speed (index = tier). */
+  private readonly beltSurfaces = new Map<string, number[]>();
   private readonly plinths: SimpleBatch;
   private readonly outlines: SimpleBatch;
   /** Fixed detail level for every object (tests and the detail-level check), or null. */
@@ -425,7 +436,7 @@ export class ModelRenderer {
   private iconYaw = 0;
   /** W29b: each belt tile's shape, worked out again when the belts change. */
   readonly belts: BeltShapes;
-  /** W30: the belts' shared phase; the `belt` material's texture is scrolled by it each frame. */
+  /** W30: the belt clock; W31: each speed's surface texture is scrolled by its own phase each frame. */
   readonly beltFlow = new BeltFlow();
   private readonly ground: (x: number, z: number) => number;
 
@@ -473,8 +484,30 @@ export class ModelRenderer {
       this.modelIndex.set(key, this.models.length);
       this.models.push(bakeModel(def, scale));
     };
+    /** W31 (header): a belt shape's rest model, then its surface once per speed on that speed's material. */
+    const addBeltShape = (name: string, def: ModelDef) => {
+      const baked = bakeModel(def);
+      const surface = baked.pieces.filter((pc) => pc.material === w.belt);
+      const rest = baked.pieces.filter((pc) => pc.material !== w.belt);
+      const tris = (list: BakedModel['pieces']) => list.reduce((n, pc) => n + pc.geometry.getAttribute('position').count / 3, 0);
+      this.modelIndex.set(name, this.models.length);
+      this.models.push({ ...baked, pieces: rest, triangles: tris(rest) });
+      const byTier = [-1];
+      for (let t = 1; t < BELT_SURFACE_SUFFIX.length; t++) {
+        const key = `${name}/${BELT_SURFACE_SUFFIX[t]}`;
+        const pieces = surface.map((pc) => ({ material: w[BELT_SURFACE_MATERIAL[t]!], geometry: pc.geometry }));
+        byTier.push(this.models.length);
+        this.modelIndex.set(key, this.models.length);
+        this.models.push({ ...baked, name: key, pieces, triangles: tris(pieces) });
+      }
+      this.beltSurfaces.set(name, byTier);
+    };
     for (const name of new Set(W17_BUILDING_MODEL.values())) {
       const def = BUILDING_MAKERS[name as keyof typeof BUILDING_MAKERS](w);
+      if (name === 'belt') {
+        addBeltShape(name, def);
+        continue;
+      }
       const moving = MOVING_PARTS[name] ?? [];
       addModel(name, { ...def, parts: def.parts.filter((pd) => !moving.includes(pd.name)) });
       const list: Array<{ batch: number; pivot: Matrix4; motion: Motion; rate: number }> = [];
@@ -487,7 +520,7 @@ export class ModelRenderer {
       if (list.length) this.movingParts.set(name, list);
     }
     // W29b: the belt's corner and join shapes (beltShapes.ts picks one per tile)
-    for (const [name, make] of Object.entries(BELT_SHAPE_MAKERS)) addModel(name, make(w));
+    for (const [name, make] of Object.entries(BELT_SHAPE_MAKERS)) addBeltShape(name, make(w));
     addModel('splitterMarker', beltMarker(w, 'splitter'));
     addModel('mergerMarker', beltMarker(w, 'merger'));
     // aliens: one batch per distinct part geometry (W21: a rusher's four legs share one), each part
@@ -749,8 +782,10 @@ export class ModelRenderer {
     const time = f.time ?? { t: 0, dt, reset: false };
     const reset = this.anim.begin(snap.tick, time);
     if (f.belt) this.beltFlow.advance(f.belt, snap.tick);
-    const chevrons = this.materials.w17.belt.map;
-    if (chevrons) chevrons.offset.y = this.beltFlow.offset;
+    for (let t = 1; t < BELT_SURFACE_MATERIAL.length; t++) {
+      const chevrons = this.materials.w17[BELT_SURFACE_MATERIAL[t]!].map;
+      if (chevrons) chevrons.offset.y = this.beltFlow.offset(t);
+    }
     this.effects.begin(this.camPos, cam, this.wppd, this.anim.t, this.anim.dt, reset);
     this.effects.visible = this.visibleAt;
     this.drawBuildings(f);
@@ -964,6 +999,9 @@ export class ModelRenderer {
       _m.makeRotationY(yaw).setPosition(cx, top, cz);
       const cut = cutOf();
       sink.model(mi, _m.elements, 0, damage, cut);
+      // W31: the belt surface at the belt's speed (the merger: Fast)
+      const surfaces = this.beltSurfaces.get(name);
+      if (surfaces) sink.model(surfaces[kind === B.belt ? tier : 3]!, _m.elements, 0, damage, cut);
       if (kind === B.splitter || kind === B.merger) sink.model(this.modelIndex.get(kind === B.splitter ? 'splitterMarker' : 'mergerMarker')!, _m.elements, 0, damage, cut);
       // W17 moving parts (generator vane, shredder rollers, assembler arm): turned by the running time
       const moving = this.movingParts.get(name);

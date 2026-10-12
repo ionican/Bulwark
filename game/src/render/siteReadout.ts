@@ -18,11 +18,15 @@
 // none: "<resource> <received> / no builder". `stable`: both snapshots have the same working units
 // and the same tuning and research, so the received figure was earned at the wanted rate's terms.
 //
+// W31: a belt's first line names its speed, "Conveyor belt · Fast (3.3 tiles/s)" (reserved or under
+// construction: the speed it is being laid at), and an upgrading belt the speed it goes to,
+// "Conveyor belt · Slow (1.7 tiles/s) — upgrading to Medium (2.5 tiles/s)".
+//
 // Pure: no DOM, no three.js (ui/siteHover.ts draws the panel; main.ts picks the site under the cursor).
 
 import type { Snapshot } from '../sim/snapshot.ts';
 import { BF_COMPLETE, BF_UPGRADING, US_BUILDING, isReserved } from '../sim/schema.ts';
-import { TICK_HZ, buildingInfo, siteWork } from '../sim/kinds.ts';
+import { B, TICK_HZ, beltSpeedText, buildingInfo, siteWork } from '../sim/kinds.ts';
 import { unitBuildRate } from '../sim/tuning.ts';
 import { sameRules, snapshotRules } from '../snapshotRules.ts';
 import { RESOURCE_NAMES, type ResourceName } from './waiting.ts';
@@ -121,8 +125,10 @@ export function siteReadout(prev: Snapshot | null, curr: Snapshot, id: number): 
   const upgradeTo = upgrading ? tier + 1 : 0;
   const percent = Math.min(100, Math.floor(progress * 100 + 1e-6));
   const builders = c.builders[r]!;
+  const belt = kind === B.belt;
+  const title = belt ? `${name} · ${beltSpeedText(tier)}` : name;
   const lines = [
-    upgrading ? `${name} — upgrading to tier ${upgradeTo}` : name,
+    upgrading ? `${title} — upgrading to ${belt ? beltSpeedText(upgradeTo) : `tier ${upgradeTo}`}` : title,
     reserved ? 'reserved — not started' : `${percent}% complete`,
     ...intake.map((i) => `${i.resource} ${i.perSecond === null ? intakeNote : formatRate(i.perSecond)} / ${i.wanted === null ? 'no builder' : `${formatRate(i.wanted)} per s`}`),
     `${builders} ${builders === 1 ? 'builder' : 'builders'}`,

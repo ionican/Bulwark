@@ -25,9 +25,10 @@
 //   beam turret's beam     beam                        BF_FIRING and a present target, every frame    flag clear
 //   shots                  P_BULLET, P_SHELL, P_HEAVY, every observed projectile row, interpolated;   the row is gone: an impact at its
 //                          P_ALIEN                     first point the shooter's muzzle if present    last position
-//   belt chevrons (W30)    every belt surface but the  one shared phase (BeltFlow below): raw        paused; a reset or rewind frame
-//                          splitter's, started or      frame time × speed × BELT_TILES_PER_SECOND,     moves it by 0 (no jump)
-//                          complete                    at most 0.2 tile a frame
+//   belt chevrons (W30,    every belt surface but the  one phase per belt speed (BeltFlow below):   paused; a reset or rewind frame
+//   W31 per speed)         splitter's, started or      one capped game-time delta a frame, raw frame   moves them by 0 (no jump)
+//                          complete (the merger: Fast) time × speed, at most 0.04 game-s, × the speed's
+//                                                      tiles a second
 //
 // Best effort, at every speed (PLAN, Codex 2b-2): a turret fires before projectiles move, so a close
 // shot can be created and removed inside one tick and never appear in any snapshot; above 1× one
@@ -39,14 +40,16 @@
 // while paused, at most 100 ms; a world reset restarts it with a zero delta. Pause freezes every
 // animation; 2×/3×/10× speed them up. The strategic-zoom icons do not animate.
 //
-// Belt clock (BeltFlow, W30): its own phase in tiles, not the effect clock, which clamps after the
-// speed multiply. main.ts hands it the raw frame time (frameTimes; main.ts's own dt is capped at
-// 0.1 s), the runner's speed and pause, and the world epoch. Each frame it advances by
-// min(raw seconds × speed × BELT_TILES_PER_SECOND, BELT_FLOW_MAX_STEP) tiles: 0.2, under half the
-// 0.5-tile chevron period, so the pattern never moves a whole period or more between frames (at 20
-// fps and 10× the uncapped step is exactly two periods and would look still; at 30 fps it could look
-// reversed). So at high speed or a low frame rate the chevrons run slower than the items; the items
-// show the true belt speed. The renderer sets the shared chevron texture's offset.y = −(phase mod 1).
+// Belt clock (BeltFlow, W30; per speed since W31): its own phases in tiles, not the effect clock,
+// which clamps after the speed multiply. main.ts hands it the raw frame time (frameTimes; main.ts's
+// own dt is capped at 0.1 s), the runner's speed and pause, and the world epoch. Each frame takes one
+// game-time delta g = min(raw seconds × speed, BELT_FLOW_MAX_G) = at most 0.04 game-seconds, and each
+// speed's phase advances by g × its tiles a second (Slow 10/6, Medium 2.5, Fast 10/3). One shared g
+// keeps the phases at 0.5 : 0.75 : 1 under the cap, and the largest steps (0.067, 0.1, 0.133 tile)
+// stay under half each speed's chevron period (1, 2, 3 chevrons a tile: 0.5, 0.25, 0.167), so no
+// pattern moves a whole period or more between frames (it would look still or reversed). At high
+// speed or a low frame rate the chevrons run slower than the items; the items show the true speed.
+// The renderer sets each speed's chevron texture offset.y = −(its phase mod 1).
 //
 // Resets (EffectClock, the one detector; Animator.begin reads `time.reset`): the global signal is the
 // worker's world epoch (RunnerInfo.world: loads, rewinds, world replacement) or the snapshot tick
@@ -55,7 +58,7 @@
 // and each turret's last-flashed tick seeded to the restored tick, so a restored BF_FIRING is not
 // replayed as a new shot. A new id in a building slot drops that slot's state. Pause resets nothing.
 
-import { ALIEN_KINDS, B, BELT_TILES_PER_SECOND, CARRY_CAPACITY, U, alienInfo } from '../sim/kinds.ts';
+import { ALIEN_KINDS, B, BELT_TOP_TIER, CARRY_CAPACITY, U, alienInfo, beltTilesPerSecond } from '../sim/kinds.ts';
 import { BF_ACTIVE, BF_COMPLETE, BF_FIRING, BF_IDLE, BF_STARVED, US_BUILDING, US_RECLAIMING } from '../sim/schema.ts';
 import { wrapPi } from './walk.ts';
 import { smoothstep } from './workshop/noise.ts';
@@ -200,8 +203,8 @@ export class EffectClock implements EffectTime {
 
 // ---- W30: the belt clock -------------------------------------------------------------------------
 
-/** Largest belt-phase step per frame (tiles): under half the chevron period (two chevrons a tile). */
-export const BELT_FLOW_MAX_STEP = 0.2;
+/** Largest belt-clock delta per frame (game-seconds): every speed then steps under half its chevron period (header). */
+export const BELT_FLOW_MAX_G = 0.04;
 
 /** What main.ts hands the belt clock each frame. */
 export interface BeltFrame {
@@ -220,13 +223,16 @@ export function frameTimes(nowMs: number, lastMs: number, runner: { speed: numbe
 }
 
 /**
- * The belts' shared phase (tiles of travel). `frozen` and `reversed` are the browser check's negative
- * controls (__game.debugRender): the phase stops, or runs backwards.
+ * The belts' phases (tiles of travel), one per speed, indexed by tier (index 0 unused). `frozen` and
+ * `reversed` are the browser checks' negative controls (__game.debugRender): the phases stop, or run
+ * backwards.
  */
 export class BeltFlow {
-  phase = 0;
-  /** This frame's step (tiles). */
-  step = 0;
+  readonly phases = [0, 0, 0, 0];
+  /** This frame's step per speed (tiles). */
+  readonly steps = [0, 0, 0, 0];
+  /** This frame's game-time delta (seconds), shared by every speed. */
+  g = 0;
   frozen = false;
   reversed = false;
   private readonly watch = new ResetWatch();
@@ -234,16 +240,20 @@ export class BeltFlow {
   /** Advances by one frame; `tick` is the current snapshot's tick. */
   advance(f: BeltFrame, tick: number): this {
     const reset = this.watch.check(tick, f.world);
-    const s = f.seconds * f.speed * BELT_TILES_PER_SECOND;
-    const step = reset || f.paused || !(s > 0) ? 0 : Math.min(BELT_FLOW_MAX_STEP, s);
-    this.step = this.frozen ? 0 : this.reversed ? -step : step;
-    this.phase += this.step;
+    const raw = f.seconds * f.speed;
+    const g = reset || f.paused || !(raw > 0) ? 0 : Math.min(BELT_FLOW_MAX_G, raw);
+    this.g = this.frozen ? 0 : this.reversed ? -g : g;
+    for (let t = 1; t <= BELT_TOP_TIER; t++) {
+      this.steps[t] = this.g * beltTilesPerSecond(t);
+      this.phases[t] = this.phases[t]! + this.steps[t]!;
+    }
     return this;
   }
 
-  /** The chevron texture's offset.y: −(phase mod 1), so the pattern moves toward +v as the phase grows. */
-  get offset(): number {
-    return -(this.phase - Math.floor(this.phase));
+  /** Speed `tier`'s chevron texture offset.y: −(phase mod 1), so the pattern moves toward +v as the phase grows. */
+  offset(tier: number): number {
+    const p = this.phases[tier]!;
+    return -(p - Math.floor(p));
   }
 }
 

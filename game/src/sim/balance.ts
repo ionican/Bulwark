@@ -52,6 +52,10 @@ export const RESEARCH: ResearchNode[] = [
   // experimental structures (W15/W7: experimentals are fed by conveyor-made parts).
   { id: 'heavy', label: 'Heavy cannon', branch: 'experimental', effect: 'unlocks the heavy cannon (fires advanced parts)', cost: res(W12R.heavy.cost), seconds: W12R.heavy.seconds, source: 'W12' },
   { id: 'heavyT2', label: 'Heavy cannon tier 2', branch: 'experimental', effect: 'heavy cannons can be upgraded: 1.5× hp and damage', cost: [150, 2000, 30], seconds: 60, requires: 'heavy', source: 'new' },
+  // W31: belt speeds (new; sized like the economy and intel nodes above). Appended, not grouped with
+  // the economy nodes: research bits and queue entries are these indices, and saves store them.
+  { id: 'beltMedium', label: 'Medium belts', branch: 'economy', effect: 'belts can be laid or upgraded to Medium (75% speed)', cost: [50, 500, 5], seconds: 30, source: 'new' },
+  { id: 'beltFast', label: 'Fast belts', branch: 'economy', effect: 'belts can be laid or upgraded to Fast (full speed)', cost: [100, 1000, 15], seconds: 45, requires: 'beltMedium', source: 'new' },
 ];
 export const RESEARCH_INDEX = Object.fromEntries(RESEARCH.map((r, i) => [r.id, i])) as Record<string, number>;
 export const researchBit = (id: string): number => 1 << RESEARCH_INDEX[id]!;
@@ -59,7 +63,7 @@ export const researchBit = (id: string): number => 1 << RESEARCH_INDEX[id]!;
 /** Research a building kind needs before it can be built (W12 `requires`). */
 export const BUILD_REQUIRES: Record<string, string> = { beam: 'beam', heavy: 'heavy', shield: 'shield' };
 /** Research each upgrade tier needs: kind -> [tier 2, tier 3]. */
-export const TIER_REQUIRES: Record<string, string[]> = { wall: ['wallT2', 'wallT3'], gate: ['wallT2', 'wallT3'], gun: ['gunT2'], area: ['areaT2'], heavy: ['heavyT2'] };
+export const TIER_REQUIRES: Record<string, string[]> = { wall: ['wallT2', 'wallT3'], gate: ['wallT2', 'wallT3'], gun: ['gunT2'], area: ['areaT2'], heavy: ['heavyT2'], belt: ['beltMedium', 'beltFast'] };
 /** Heavy cannon tier 2 (new; same shape as W12's gun and area tier 2). */
 export const HEAVY_T2 = { hpMult: 1.5, damageMult: 1.5, cost: [250, 1000, 10] as Cost, time: 200 };
 
@@ -119,6 +123,17 @@ export const MAX_RUN_DEPTH = 4;
 // ---- belts and the core (W29) ---------------------------------------------------------------
 /** Mass per belt tile (Richard's 0.5, PLAN W29 item 6; was 2). Splitter and merger keep their cost. */
 export const BELT_COST_MASS = 0.5;
+/**
+ * W31 belt speed upgrades (new): Slow → Medium and Medium → Fast, mass and build-power-seconds. A
+ * Slow belt keeps the cost and build time above; each step up costs about twice the step below, so
+ * a Fast line costs 7× a Slow one. A belt laid at Medium or Fast costs the base plus every step
+ * below it (Medium 1.5 mass / 8, Fast 3.5 / 12: kinds.ts siteWork), so laying fast is never cheaper
+ * than laying slow and upgrading.
+ */
+export const BELT_UPGRADES: Array<{ mass: number; time: number }> = [
+  { mass: 1, time: 4 },
+  { mass: 2, time: 4 },
+];
 /** An extractor's buffer holds this many seconds of its output, then stops digging (W29 model). */
 export const EXTRACTOR_BUFFER_SECONDS = 180;
 /** Core hit points (W29 model). At 0 it is disabled, not destroyed. */

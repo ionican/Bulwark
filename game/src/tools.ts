@@ -5,10 +5,13 @@
 // placement either way, as they did before run 3. Escape and right click cancel any tool but select
 // (right click in select is an order or a pan, so it is not consumed). A world change returns to
 // select. Gate and spawn are sandbox-only: `allowed` says which tools the current scenario permits.
+// W31: the build tool also carries a belt speed (`tier`, 1 Slow .. 3 Fast; 1 for every other kind),
+// and B picks the fastest belt speed researched (fastestBeltTier). The upgrade tool also takes a
+// drag along belts (main.ts: one upgradeBelts command per drag).
 // Pure: main.ts owns the input and calls these; the panel names the tool from toolLabel().
 
 import type { Command } from './sim/commands.ts';
-import { SPAWN_AT_MAX } from './sim/balance.ts';
+import { SPAWN_AT_MAX, TIER_REQUIRES } from './sim/balance.ts';
 import { B, isBelt } from './sim/kinds.ts';
 
 export type ToolName = 'select' | 'build' | 'wall' | 'upgrade' | 'gate' | 'spawn';
@@ -17,18 +20,21 @@ export class Tools {
   name: ToolName = 'select';
   /** The building kind for build and wall; -1 otherwise. */
   kind = -1;
+  /** W31: the belt speed the build tool lays (1 Slow, 2 Medium, 3 Fast); 1 for any other kind. */
+  tier = 1;
   /** An action was taken with Shift held since the tool was chosen. */
   shiftActed = false;
 
   constructor(private readonly allowed: (name: ToolName) => boolean) {}
 
   /** Makes `name` the active tool. Refused (false) when the scenario does not allow it. */
-  choose(name: ToolName, kind = -1): boolean {
+  choose(name: ToolName, kind = -1, tier = 1): boolean {
     if (name === 'build' && kind === B.wall) name = 'wall';
     if (name === 'wall') kind = B.wall;
     if (name !== 'select' && !this.allowed(name)) return false;
     this.name = name;
     this.kind = name === 'build' || name === 'wall' ? kind : -1;
+    this.tier = name === 'build' && kind === B.belt ? tier : 1;
     this.shiftActed = false;
     return true;
   }
@@ -38,12 +44,12 @@ export class Tools {
    * `builders` are selected; without them the shortcut cannot arm, and the map returns to select
    * whatever tool was active, so an armed gate or spawn tool does not act on the next click.
    */
-  chooseForBuilders(name: 'build' | 'wall' | 'upgrade', builders: boolean, kind = -1): boolean {
+  chooseForBuilders(name: 'build' | 'wall' | 'upgrade', builders: boolean, kind = -1, tier = 1): boolean {
     if (!builders) {
       this.reset();
       return false;
     }
-    return this.choose(name, kind);
+    return this.choose(name, kind, tier);
   }
 
   /** A left action with the tool (a placement, a gate, a spawn, an upgrade order). */
@@ -90,8 +96,17 @@ export class Tools {
   private reset(): void {
     this.name = 'select';
     this.kind = -1;
+    this.tier = 1;
     this.shiftActed = false;
   }
+}
+
+/** W31: the fastest belt speed whose research is done (`researched` takes a research id): B selects it. */
+export function fastestBeltTier(researched: (id: string) => boolean): number {
+  const req = TIER_REQUIRES.belt!;
+  let tier = 1;
+  while (tier <= req.length && researched(req[tier - 1]!)) tier++;
+  return tier;
 }
 
 /** The panel's words for the active tool (colour is never the only sign of it). */
@@ -104,7 +119,7 @@ export function toolLabel(t: Tools, o: { spawnName?: string; count?: number; dep
     case 'wall':
       return `Tool: wall run, depth ${o.depth ?? 1} — drag on the map`;
     case 'upgrade':
-      return 'Tool: upgrade — click a wall or turret';
+      return 'Tool: upgrade — click a wall, turret or belt; drag along belts';
     case 'gate':
       return 'Tool: gate — click a finished wall';
     case 'spawn':

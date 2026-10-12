@@ -13,7 +13,9 @@
 //     mode a left-drag queues a wall run without orbiting; a plain left-drag orbits; right-drag pans
 //   map 1 (/) and the sandbox (/?sandbox=1)
 //     - loads with 0 console errors (page errors, console.error, __game.errors) and model rendering
-//     - a fixture through the game's own commands: every building kind placed complete (`place`), a
+//     - a fixture through the game's own commands: every building kind placed complete (`place`; W31:
+//       the sandbox's belts at mixed speeds, each tile checked to draw its own speed's surface, the
+//       merger Fast's, with the draw-call count reported), a
 //       wall run built and converted to a gate, a temporary turret dropped, every alien kind spawned
 //       (sandbox); map 1 gets a few buildings by `place` and its starting units
 //     - scene inspection (__game.inspect: the scene graph itself) at a close view and at the full
@@ -249,8 +251,11 @@ const SPOTS = [
   ['gun', 48, 56], ['area', 53, 56], ['beam', 58, 56], ['heavy', 68, 55], ['shield', 74, 56],
   ['generator', 40, 44], ['lab', 47, 44], ['depot', 58, 44], ['shredder', 66, 44], ['smelter', 74, 44], ['assembler', 82, 44],
   ['massExtractor', 54, 50], ['massExtractor', 72, 49], ['rareExtractor', 73, 29],
-  ['belt', 70, 70, 0], ['belt', 71, 70, 0], ['splitter', 72, 70, 0], ['belt', 73, 70, 0], ['merger', 74, 70, 0], ['belt', 75, 70, 0],
+  // W31: the belts are mixed speeds (the fifth field, 1 Slow, 2 Medium, 3 Fast; research granted)
+  ['belt', 70, 70, 0, 1], ['belt', 71, 70, 0, 2], ['splitter', 72, 70, 0], ['belt', 73, 70, 0, 3], ['merger', 74, 70, 0], ['belt', 75, 70, 0, 1],
 ];
+/** W31: the speed surface each mixed-tier fixture tile must draw (the merger draws Fast's). */
+const MIXED_BELTS = [[70, 'slow'], [71, 'medium'], [73, 'fast'], [74, 'fast'], [75, 'slow']];
 
 async function sandboxFixture() {
   const r = js(`(async () => {
@@ -258,7 +263,7 @@ async function sandboxFixture() {
     const out = [];
     out.push(await g.setUnlimited(true));
     out.push(await g.grantResearch('all'));
-    for (const [k, x, y, d] of ${JSON.stringify(SPOTS)}) out.push(await g.place(k, x, y, d ?? 0));
+    for (const [k, x, y, d, t] of ${JSON.stringify(SPOTS)}) out.push(await g.place(k, x, y, d ?? 0, t ?? undefined));
     return out.filter((r) => !r.ok).map((r) => r.reason);
   })()`);
   if (r.length) fail(`sandbox fixture refused: ${r.join('; ')}`);
@@ -1116,6 +1121,16 @@ async function run2a() {
   if (lacking.length) fail(`sandbox, close views: no model instances for ${lacking.join(', ')}`);
   else note(`sandbox, close views: all ${INVENTORY.length} kinds of the inventory have model instances`);
   if (greyIn.length) fail(`sandbox, close views: greybox on ${[...new Set(greyIn)].join(', ')}`);
+  // W31: the mixed-tier belt row draws each tile's own speed surface; the draw-call count is reported
+  camera({ x: 72, z: 68, distance: 30, yaw: 0 });
+  await frames(8);
+  const surfaces = MIXED_BELTS.map(([x]) => js(`__game.beltSurfaceAt(${x}, 70)`).map((m) => m.split(':')[0]));
+  const wrong = MIXED_BELTS.filter(([, want], i) => surfaces[i].length !== 1 || surfaces[i][0] !== want);
+  check(
+    !wrong.length,
+    `W31 mixed-tier fixture: belts at x 70, 71, 73, 74 (merger), 75 draw the ${MIXED_BELTS.map(([, w]) => w).join(', ')} surfaces; draw calls ${js('__game.drawCalls')}`,
+    `W31 mixed-tier fixture: drawn surfaces ${JSON.stringify(MIXED_BELTS.map(([x], i) => [x, surfaces[i]]))}, want ${JSON.stringify(MIXED_BELTS)}`,
+  );
   camera({ x: 64, z: 64, distance: 200, yaw: 0 });
   await frames(10);
   inspect('sandbox, full zoom-out', INVENTORY, 'icons');

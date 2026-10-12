@@ -1,16 +1,20 @@
 // Command validation. Every command from the render thread passes through here before it is
 // queued; a rejected command is reported back (never silently dropped). The same checks run
 // again when the command is applied, because the state may have changed in between.
+// W31: a belt's tier is its speed. `build` and `place` take a tier for belts only (integer 1..3;
+// `allTiers` lifts only the research check, never this). A build at a speed whose research is not
+// done is refused naming it. Tier is part of reserved-site identity (queue.ts header). The
+// drag-upgrade command's plan (planBeltUpgrades) is made here and reused when it applies.
 
 import { SANDBOX_COMMANDS, type Command } from './commands.ts';
-import { ALIEN_KINDS, BUILDING_KINDS, U, buildingInfo } from './kinds.ts';
-import { BF_COMPLETE, BF_UPGRADING } from './schema.ts';
+import { ALIEN_KINDS, B, BELT_SPEED_NAMES, BELT_TOP_TIER, BUILDING_KINDS, U, buildingInfo, isBeltTier } from './kinds.ts';
+import { BF_COMPLETE, BF_UPGRADING, isReserved } from './schema.ts';
 import { BUILD_REQUIRES, MAX_RUN_DEPTH, RESEARCH, RESEARCH_INDEX, SPAWN_AT_MAX, TIER_REQUIRES } from './balance.ts';
 import { MAX_ORDERS, type World } from './world.ts';
 import { newSites, planRun, runById, runCapacityProblem } from './runs.ts';
 import { planGate } from './gate.ts';
 import { spawnPlaces } from './sandbox.ts';
-import { dequeueIndex, ownReservedSite, replacementProblem, worldSiteSource } from './queue.ts';
+import { dequeueIndex, heldReservedSite, replacementProblem, worldSiteSource } from './queue.ts';
 import { TUNE_TARGETS, tuneFieldProblem, tuneProblem, type TuneTarget } from './tuning.ts';
 import { map1 } from '../../../model/data/map1.ts';
 
@@ -48,13 +52,21 @@ function check(w: World, cmd: Command): string | null {
       if (cmd.dir !== undefined && (!isInt(cmd.dir) || cmd.dir < 0 || cmd.dir > 3)) return 'dir must be 0..3';
       const placedBy = buildingInfo(cmd.kind).placedBy;
       if (placedBy) return placedBy;
+      if (cmd.tier !== undefined) {
+        if (cmd.kind !== B.belt) return `only belts take a tier (${buildingInfo(cmd.kind).label} got tier ${JSON.stringify(cmd.tier)})`;
+        if (!isBeltTier(cmd.tier)) return `belt tier must be an integer 1..${BELT_TOP_TIER} (got ${JSON.stringify(cmd.tier)})`;
+      }
+      const tier = cmd.tier ?? 1;
       if (cmd.t === 'build') {
         if (!idList(cmd.ids)) return 'build needs unit ids';
         const req = BUILD_REQUIRES[BUILDING_KINDS[cmd.kind]!];
         if (req && !w.researched(req)) return `${buildingInfo(cmd.kind).label} needs research "${RESEARCH[RESEARCH_INDEX[req]!]!.label}"`;
-        // run 3 C2: an unshifted build on the issuers' own reserved site of exactly this kind, anchor and direction
-        if (!w.canPlace(cmd.kind, cmd.tx, cmd.ty) && ownReservedSite(worldSiteSource(w), cmd.ids, cmd.kind, cmd.tx, cmd.ty, cmd.dir ?? 0, cmd.queue ?? false) < 0)
-          return `${buildingInfo(cmd.kind).label} cannot stand at ${cmd.tx},${cmd.ty}`;
+        const tierReq = tier > 1 ? TIER_REQUIRES.belt![tier - 2]! : null;
+        if (tierReq && !w.researched(tierReq) && !w.debug.allTiers) return `${BELT_SPEED_NAMES[tier]} belts need research "${RESEARCH[RESEARCH_INDEX[tierReq]!]!.label}"`;
+        // run 3 C2: an unshifted build on the issuers' own reserved site of exactly this kind, anchor
+        // and direction; W31: at another belt speed, the issuers' own site is replaced (queue.ts)
+        if (!w.canPlace(cmd.kind, cmd.tx, cmd.ty) && heldReservedSite(worldSiteSource(w), cmd.ids, cmd.kind, cmd.tx, cmd.ty, cmd.dir ?? 0, cmd.queue ?? false) < 0)
+          return otherSpeedSite(w, cmd.kind, cmd.tx, cmd.ty, tier) ?? `${buildingInfo(cmd.kind).label} cannot stand at ${cmd.tx},${cmd.ty}`;
       }
       return null;
     }
@@ -67,6 +79,11 @@ function check(w: World, cmd: Command): string | null {
       const s = w.buildings.slotForId(cmd.target);
       if (s < 0) return 'upgrade target does not exist';
       return upgradeProblem(w, s);
+    }
+    case 'upgradeBelts': {
+      const plan = planBeltUpgrades(w, cmd);
+      w.validated = { cmd, result: plan }; // the apply step and the runner's report reuse it
+      return typeof plan === 'string' ? plan : null;
     }
     case 'reclaim':
       if (!idList(cmd.ids) || !isInt(cmd.wreck)) return 'reclaim needs ids and a wreck';
@@ -202,8 +219,92 @@ export function upgradeProblem(w: World, s: number): string | null {
   if (!(c.flags[s]! & BF_COMPLETE)) return `${info.label} is not finished`;
   if (c.flags[s]! & BF_UPGRADING) return null;
   const tier = c.tier[s]!;
-  if (tier > info.tiers.length) return `${info.label} is already at its top tier`;
+  const belt = c.kind[s] === B.belt;
+  if (tier > info.tiers.length) return belt ? `${info.label} is already Fast, its top tier` : `${info.label} is already at its top tier`;
   const req = TIER_REQUIRES[kind]?.[tier - 1];
-  if (req && !w.researched(req) && !w.debug.allTiers) return `${info.label} tier ${tier + 1} needs research "${RESEARCH[RESEARCH_INDEX[req]!]!.label}"`;
+  if (req && !w.researched(req) && !w.debug.allTiers)
+    return `${info.label} ${belt ? `to ${BELT_SPEED_NAMES[tier + 1]}` : `tier ${tier + 1}`} needs research "${RESEARCH[RESEARCH_INDEX[req]!]!.label}"`;
   return null;
+}
+
+/**
+ * W31: "a Slow belt site is already planned here" when (tx, ty) holds a reserved belt site at a
+ * speed other than `tier` that the build may not replace; null otherwise.
+ */
+function otherSpeedSite(w: World, kind: number, tx: number, ty: number, tier: number): string | null {
+  if (kind !== B.belt || tx < 0 || ty < 0 || tx >= w.terrain.w || ty >= w.terrain.h) return null;
+  const s = w.occupancy[ty * w.terrain.w + tx]! - 1;
+  const c = w.buildings.cols;
+  if (s < 0 || c.kind[s] !== B.belt || !isReserved(c.flags[s]!) || c.tier[s] === tier) return null;
+  return `a ${BELT_SPEED_NAMES[c.tier[s]!]} belt site is already planned here`;
+}
+
+/** Why each skipped drag-upgrade target was left out (W31; the runner reports the counts). */
+export interface BeltUpgradeSkips {
+  duplicate: number;
+  gone: number;
+  notBelt: number;
+  changed: number;
+  upgrading: number;
+  top: number;
+  locked: number;
+}
+
+/** The belts a drag-upgrade command will upgrade, in drag order, and what it skips. */
+export interface BeltUpgradePlan {
+  /** Building ids to upgrade one speed step. */
+  ids: number[];
+  toMedium: number;
+  toFast: number;
+  skipped: BeltUpgradeSkips;
+}
+
+/**
+ * W31: plans an `upgradeBelts` command on this state, or says why it is refused. Targets are taken
+ * in order; one is skipped (and counted) when it repeats an earlier id, is gone, is not a complete
+ * belt (a splitter, a merger, a site), is no longer at its `expectedTier`, is already upgrading, is
+ * at Fast, or its next speed's research is not done (`allTiers` lifts that). Refused: when every
+ * target is skipped (the command would change nothing, so an unshifted one does not clear the
+ * queues), and when the upgrades would not all fit any live unit's queue (MAX_ORDERS, counting its
+ * current orders only with `queue`), so no upgrade flag is set for part of a batch.
+ */
+export function planBeltUpgrades(w: World, cmd: Extract<Command, { t: 'upgradeBelts' }>): BeltUpgradePlan | string {
+  if (!idList(cmd.ids) || !cmd.ids.length) return 'upgradeBelts needs unit ids';
+  const targets = cmd.targets as unknown;
+  if (!Array.isArray(targets) || !targets.length) return 'upgradeBelts needs targets';
+  if (!targets.every((t) => t && typeof t === 'object' && isInt((t as { id?: unknown }).id) && isInt((t as { expectedTier?: unknown }).expectedTier)))
+    return 'upgradeBelts targets must be { id, expectedTier } with integers';
+  const plan: BeltUpgradePlan = { ids: [], toMedium: 0, toFast: 0, skipped: { duplicate: 0, gone: 0, notBelt: 0, changed: 0, upgrading: 0, top: 0, locked: 0 } };
+  const k = plan.skipped;
+  const c = w.buildings.cols;
+  const seen = new Set<number>();
+  for (const { id, expectedTier } of targets as Array<{ id: number; expectedTier: number }>) {
+    if (seen.has(id)) {
+      k.duplicate++;
+      continue;
+    }
+    seen.add(id);
+    const s = w.buildings.slotForId(id);
+    if (s < 0) k.gone++;
+    else if (c.kind[s] !== B.belt || !(c.flags[s]! & BF_COMPLETE)) k.notBelt++;
+    else if (c.tier[s] !== expectedTier) k.changed++;
+    else if (c.flags[s]! & BF_UPGRADING) k.upgrading++;
+    else if (c.tier[s]! >= BELT_TOP_TIER) k.top++;
+    else if (upgradeProblem(w, s)) k.locked++;
+    else {
+      plan.ids.push(id);
+      if (c.tier[s] === 1) plan.toMedium++;
+      else plan.toFast++;
+    }
+  }
+  const n = targets.length;
+  if (!plan.ids.length)
+    return `nothing to upgrade: all ${n} target${n === 1 ? '' : 's'} skipped (duplicate ${k.duplicate}, gone ${k.gone}, not a belt ${k.notBelt}, changed ${k.changed}, upgrading ${k.upgrading}, already Fast ${k.top}, locked ${k.locked})`;
+  for (const uid of cmd.ids) {
+    const u = w.units.slotForId(uid);
+    if (u < 0) continue;
+    const base = cmd.queue ? (w.orders[u]?.length ?? 0) : 0;
+    if (base + plan.ids.length > MAX_ORDERS) return `order queue full: unit ${uid} would hold ${base + plan.ids.length} orders (${MAX_ORDERS} per unit); upgrade fewer belts`;
+  }
+  return plan;
 }

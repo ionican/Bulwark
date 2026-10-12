@@ -129,14 +129,16 @@ describe('W31 costs (test 7)', () => {
       research(w, 'beltFast');
       const eng = w.spawnUnit(U.engineer, 12.5, 13.5);
       expect(why(w.submit({ t: 'build', ids: [eng], kind: B.belt, tx: 12, ty: 12, dir: 0, tier } as Command))).toBe('(accepted)');
+      // read before the first step: the engineer stands beside the tile and builds from that tick
+      const spent0 = w.spentTotal[0]!;
       w.step();
       const s = w.occupancy[12 * 40 + 12]! - 1;
       expect(s, 'the site').toBeGreaterThanOrEqual(0);
       expect(w.buildings.cols.tier[s]).toBe(tier);
       expect(w.workOf(s).time).toBe(time);
-      const spent0 = w.spentTotal[0]!;
       until(w, () => (w.buildings.cols.flags[s]! & BF_COMPLETE) !== 0);
-      expect(w.spentTotal[0]! - spent0).toBeCloseTo(mass, 6);
+      // progress is f32 (economy.ts PROGRESS_SNAP), so the drained total is within about 1e-6
+      expect(w.spentTotal[0]! - spent0).toBeCloseTo(mass, 5);
       expect(w.buildings.cols.tier[s]).toBe(tier);
     });
   }
@@ -224,8 +226,8 @@ describe('W31 reserved-site identity (test 8)', () => {
     }
     // the main thread's click rule: unshifted over the own site at another speed may be sent (the replace step frees it), shifted not
     const view: DragView = { terrain: w.terrain, occupancy, kinds: snap.buildings.cols.kind, units: { count: snap.units.count, id: snap.units.id, x: snap.units.cols.x, z: snap.units.cols.z }, snapshot: snap };
-    expect(placeableOn(view, [a], B.belt, 30, 20, 0, false, 3)).toBe(true);
-    expect(placeableOn(view, [a], B.belt, 30, 20, 0, true, 3)).toBe(false);
+    expect(placeableOn(view, [a], B.belt, 30, 20, 0, false)).toBe(true);
+    expect(placeableOn(view, [a], B.belt, 30, 20, 0, true)).toBe(false);
   });
 
   it('a save with a belt tier of 0 or 4 fails to load with a named error (no silent clamp)', () => {

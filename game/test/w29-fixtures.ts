@@ -3,6 +3,9 @@
 //
 //   row z = ROW: extractor (2 × 2) at x0 .. x0+1, belt tiles x0+2 .. CORE_X-1 (facing +x), core at
 //   CORE_X .. CORE_X+2 (rows ROW .. ROW+2). A belt of n tiles puts the extractor at CORE_X - 2 - n.
+//
+// W31: belts have three speeds. The line is laid Fast (tier 3, 3 ticks a tile) by default, the one
+// speed build 170 had, so the W29 numbers stay pinned tick for tick; `tier` lays another speed.
 
 import { World } from '../src/sim/world.ts';
 import type { Deposit } from '../src/sim/terrain.ts';
@@ -10,6 +13,8 @@ import { flatWorld } from './fixtures.ts';
 import { B, ITEM_NONE, isBelt } from '../src/sim/kinds.ts';
 
 export const ROW = 20;
+/** Fast belts: build 170's only speed. */
+export const FAST = 3;
 
 export interface BeltLine {
   w: World;
@@ -24,8 +29,9 @@ export interface BeltLine {
 /**
  * A `belts: true` world (seed 1, no waves, no units) of width `mapW`, with an extractor of `kind`
  * (mass or rare) and a straight belt of `n` tiles into a core. `belt: false` leaves the belt out.
+ * `tier` is the belt speed (default 3, Fast).
  */
-export function beltLine(n: number, opts: { kind?: 'mass' | 'rare'; belt?: boolean; mapW?: number; mapH?: number; belts?: boolean } = {}): BeltLine {
+export function beltLine(n: number, opts: { kind?: 'mass' | 'rare'; belt?: boolean; mapW?: number; mapH?: number; belts?: boolean; tier?: number } = {}): BeltLine {
   const kind = opts.kind ?? 'mass';
   const coreX = n + 6;
   const mapW = opts.mapW ?? Math.max(40, coreX + 10);
@@ -35,7 +41,7 @@ export function beltLine(n: number, opts: { kind?: 'mass' | 'rare'; belt?: boole
   const core = w.placeBuilding(B.core, coreX, ROW, true);
   const extractor = w.placeBuilding(kind === 'mass' ? B.massExtractor : B.rareExtractor, x0, ROW, true);
   const belts: number[] = [];
-  if (opts.belt !== false) for (let x = x0 + 2; x < coreX; x++) belts.push(w.placeBuilding(B.belt, x, ROW, true, 0));
+  if (opts.belt !== false) for (let x = x0 + 2; x < coreX; x++) belts.push(w.placeBuilding(B.belt, x, ROW, true, 0, undefined, undefined, opts.tier ?? FAST));
   return { w, core, extractor, belts, coreX };
 }
 

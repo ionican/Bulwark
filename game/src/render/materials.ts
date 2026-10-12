@@ -134,7 +134,9 @@ export function createRenderMaterials(bank: TextureBank): RenderMaterials {
   return { asset, w17, alien, depth: asset.depth, plinth, outline: outlineMaterial() };
 }
 
-const W17_KEYS: W17Key[] = ['ivory', 'trim', 'copper', 'glow', 'glass', 'void', 'pad', 'hull', 'alienGlow', 'crystal', 'ore', 'belt', 'beltStill', 'hot', 'rock'];
+const W17_KEYS: W17Key[] = ['ivory', 'trim', 'copper', 'glow', 'glass', 'void', 'pad', 'hull', 'alienGlow', 'crystal', 'ore', 'belt', 'beltSlow', 'beltMedium', 'beltStill', 'hot', 'rock'];
+/** W31: the scrolling belt surfaces (Fast, Slow, Medium): each stand-in gets its own texture. */
+const BELT_SURFACE_KEYS = new Set<W17Key>(['belt', 'beltSlow', 'beltMedium']);
 const ASSET_KEYS: MatKey[] = ['ceramic', 'gunmetal', 'bronze', 'dark', 'glow'];
 
 /** Name-only stand-ins (Node tests): the same material names, no textures or shader patches. */
@@ -144,7 +146,7 @@ export function standInMaterials(): RenderMaterials {
   const depth = new MeshDepthMaterial();
   const asset: AssetMats = { byKey, depth, noise: new Texture(), all: Object.values(byKey) };
   const w17 = {} as Mats;
-  for (const k of W17_KEYS) w17[k] = new MeshStandardMaterial({ name: `${k}-cut`, map: k === 'belt' ? new Texture() : null });
+  for (const k of W17_KEYS) w17[k] = new MeshStandardMaterial({ name: `${k}-cut`, map: BELT_SURFACE_KEYS.has(k) ? new Texture() : null });
   const alien = { ...w17, hull: new MeshStandardMaterial({ name: 'alienHull-cut' }), trim: new MeshStandardMaterial({ name: 'alienTrim-cut' }) };
   return { asset, w17, alien, depth, plinth: new MeshStandardMaterial({ name: 'plinth' }), outline: outlineMaterial() };
 }

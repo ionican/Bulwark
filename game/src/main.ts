@@ -20,8 +20,8 @@ import { CoreOverlay, canvasCoreMark, inspectCore } from './render/coreView.ts';
 import { SiteHover } from './ui/siteHover.ts';
 import { waitingCounts, waitingState } from './render/waiting.ts';
 import { DragPreview, inspectDrag } from './render/dragPreview.ts';
-import { DragPlanCache, beltLineTiles, dragLabel, paintsRow, placeableOn, planDrag, rowBuildCommands, type DragPlan, type DragView } from './dragPlan.ts';
-import { Tools, gateCommand, runCommand, spawnAtCommand, toolLabel } from './tools.ts';
+import { DragPlanCache, beltLineTiles, dragLabel, paintsRow, placeableOn, planBeltUpgrade, planDrag, rowBuildCommands, upgradeLabel, type BeltUpgradePlan, type DragPlan, type DragView } from './dragPlan.ts';
+import { Tools, fastestBeltTier, gateCommand, runCommand, spawnAtCommand, toolLabel } from './tools.ts';
 import { SandboxPanel, debugSpawnVisible, multToSlider } from './ui/sandboxPanel.ts';
 import { editingTarget } from './ui/focusReturn.ts';
 import { ITEM_MATERIAL, OVERLAY_NAMES, hideOverlay, overlayMeshes, setOverlayDepthTest } from './render/debugRender.ts';
@@ -29,6 +29,7 @@ import { RouteView } from './render/routeView.ts';
 import { WorkerWindow } from './workerWindow.ts';
 import { footprintRange, groundHeight } from './render/ground.ts';
 import { BELT_SURFACE_Y } from './render/workshop/models/procedural/buildings.ts';
+import { BELT_SURFACE_MATERIAL, BELT_SURFACE_SUFFIX } from './render/models.ts';
 import { INSPECT_FRAME, drawnMeshes, entitiesOf, inspectScene, submissionFloor, type DrawnMesh, type InspectFrame } from './render/inspect.ts';
 import { LOD_THRESHOLDS } from './render/lod.ts';
 import { Interpolator, type MobileView } from './render/interp.ts';
@@ -53,6 +54,7 @@ import {
   buildingInfo,
   buildingFootprint,
   isBelt,
+  BELT_SPEED_NAMES,
   COMMANDER_INCOME,
   ITEM_MASS,
   ITEM_RARE,
@@ -111,13 +113,13 @@ import { map1Terrain } from './sim/terrain.ts';
 import { canPlaceOn } from './sim/world.ts';
 import type { Command } from './sim/commands.ts';
 import type { FromWorker, RunnerInfo, ToWorker } from './sim/protocol.ts';
-import { BUILD_REQUIRES, RESEARCH, RESEARCH_INDEX } from './sim/balance.ts';
+import { RESEARCH, RESEARCH_INDEX } from './sim/balance.ts';
 import { alienKindIndex, buildingKindIndex, entryIndex as entryIndexOf, researchNodeId, tuneKindIndex } from './sim/names.ts';
 import { EndScreen, ResearchPanel, Ticker, TimeControls, Toasts } from './ui/panels.ts';
 import type { ScenarioName } from './sim/scenarios.ts';
 import { Hud } from './ui/hud.ts';
 import { BUILD, versionLabel } from './version.ts';
-import { BuildBar, TEST_GROUP } from './ui/buildbar.ts';
+import { BuildBar, TEST_GROUP, entryId, entryLock } from './ui/buildbar.ts';
 import { QueuePanel, type QueuePanelUnit } from './ui/queuePanel.ts';
 
 // ---- setup ---------------------------------------------------------------------------------
@@ -392,11 +394,10 @@ const endScreen = new EndScreen({ rewind, exportSave: () => exportSave(true), re
 function researchDoneMask(): number {
   return interp.curr?.globals[G_RESEARCH_DONE] ?? 0;
 }
-/** Research label a building kind (or the upgrade tool) still needs, or null. */
-function lockedBy(kind: string): string | null {
-  const req = BUILD_REQUIRES[kind];
-  if (!req) return null;
-  return researchDoneMask() & (1 << RESEARCH_INDEX[req]!) ? null : RESEARCH[RESEARCH_INDEX[req]!]!.label;
+/** True when research node `id` is done in the latest snapshot. */
+function researched(id: string): boolean {
+  const i = RESEARCH_INDEX[id];
+  return i !== undefined && (researchDoneMask() & (1 << i)) !== 0;
 }
 
 function pickView(): PickView | null {
@@ -537,9 +538,9 @@ function buildTool(): { kind: number; dir: number } | null {
  */
 let shiftHeld = false;
 
-/** The build bar or a key picks a building kind; with no builders selected the map returns to select. */
-function setBuildMode(kind: BuildingKind) {
-  tools.chooseForBuilders('build', selectedBuilders().length > 0, B[kind]);
+/** The build bar or a key picks a building kind (W31: a belt at a speed); with no builders selected the map returns to select. */
+function setBuildMode(kind: BuildingKind, tier = 1) {
+  tools.chooseForBuilders('build', selectedBuilders().length > 0, B[kind], tier);
 }
 
 /** Footprint origin under a ground point, centred on the cursor. */
@@ -571,7 +572,8 @@ function sendBuild(cmd: Extract<Command, { t: 'build' }>) {
 function placeBuild(kind: number, tx: number, ty: number, dir: number, queue: boolean): boolean {
   const ids = selectedBuilders();
   if (!ids.length || !placeable(kind, tx, ty, dir, queue, () => ids)) return false;
-  sendBuild({ t: 'build', ids, kind, tx, ty, dir, queue });
+  // W31: a belt is laid at the tool's speed (a tier on any other kind is refused)
+  sendBuild(kind === B.belt ? { t: 'build', ids, kind, tx, ty, dir, tier: tools.tier, queue } : { t: 'build', ids, kind, tx, ty, dir, queue });
   return true;
 }
 
@@ -630,7 +632,7 @@ function currentDragPlan(): DragPlan | null {
     return null;
   }
   const queue = drag.shift || shiftHeld;
-  const plan = dragPlans.get(s.tick, buildMode.kind, drag.from, drag.to, buildMode.dir, queue, buildMode.kind === B.wall ? runDepth() : 1, () => ({ view: dragView(s), ids: selectedBuilders() }));
+  const plan = dragPlans.get(s.tick, buildMode.kind, drag.from, drag.to, buildMode.dir, queue, buildMode.kind === B.wall ? runDepth() : 1, () => ({ view: dragView(s), ids: selectedBuilders() }), buildMode.kind === B.belt ? tools.tier : 1);
   if (plan !== dragPlan) {
     dragPlan = plan;
     dragLabelEl.textContent = dragLabel(plan);
@@ -638,10 +640,31 @@ function currentDragPlan(): DragPlan | null {
   return dragPlan;
 }
 
+/**
+ * W31: the upgrade tool's drag along belts (dragPlan.ts planBeltUpgrade), worked out again only when
+ * the snapshot tick or an end tile changes. Released, it is one upgradeBelts command.
+ */
+let upgradePlan: { tick: number; from: [number, number]; to: [number, number]; plan: BeltUpgradePlan; tiles: { kind: number; build: Array<[number, number, number]>; skipped: Array<[number, number]> } } | null = null;
+function currentUpgradePlan(): BeltUpgradePlan | null {
+  const s = interp.curr;
+  if (!drag || tools.name !== 'upgrade' || !s) {
+    upgradePlan = null;
+    return null;
+  }
+  const u = upgradePlan;
+  if (!u || u.tick !== s.tick || u.from[0] !== drag.from[0] || u.from[1] !== drag.from[1] || u.to[0] !== drag.to[0] || u.to[1] !== drag.to[1]) {
+    const plan = planBeltUpgrade(dragView(s), drag.from, drag.to, 0);
+    upgradePlan = { tick: s.tick, from: [...drag.from], to: [...drag.to], plan, tiles: { kind: B.belt, build: plan.tiles, skipped: plan.skipped } };
+    dragLabelEl.textContent = upgradeLabel(plan);
+  }
+  return upgradePlan!.plan;
+}
+
 function updateDragPreview() {
-  const plan = currentDragPlan();
-  dragPreview.update(plan, performance.now() / 1000);
-  if (!plan || !drag) {
+  const upgrade = currentUpgradePlan();
+  const plan = upgrade ? null : currentDragPlan();
+  dragPreview.update(upgrade ? upgradePlan!.tiles : plan, performance.now() / 1000);
+  if ((!plan && !upgrade) || !drag) {
     dragLabelEl.style.display = 'none';
     return;
   }
@@ -743,7 +766,11 @@ const gestures = new Gestures(orbit, {
   },
   buildDrag(x0, y0, x1, y1, shift) {
     const buildMode = buildTool();
-    if (!buildMode) return; // a drag with the upgrade, gate or spawn tool does nothing
+    if (!buildMode) {
+      // W31: an upgrade-tool drag upgrades the belts along it one speed, as one command
+      if (tools.name === 'upgrade') upgradeDrag(x0, y0, x1, y1, shift);
+      return; // a drag with the gate or spawn tool does nothing
+    }
     const a = tileAtScreen(x0, y0);
     const b = tileAtScreen(x1, y1);
     if (a && b) {
@@ -761,6 +788,18 @@ const gestures = new Gestures(orbit, {
     tools.acted(shift);
   },
 });
+/** W31: the upgrade tool's drag released: one upgradeBelts command for the belts the preview showed (none: nothing is sent). */
+function upgradeDrag(x0: number, y0: number, x1: number, y1: number, shift: boolean) {
+  const s = interp.curr;
+  const a = tileAtScreen(x0, y0);
+  const b = tileAtScreen(x1, y1);
+  const ids = selectedEngineers();
+  if (s && a && b && ids.length) {
+    const plan = planBeltUpgrade(dragView(s), [a.tx, a.ty], [b.tx, b.ty], 0);
+    if (plan.targets.length) void commandResult({ t: 'upgradeBelts', ids, targets: plan.targets, queue: shift });
+  }
+  tools.acted(shift);
+}
 const ptr = (e: PointerEvent) => ({ button: e.button, x: e.clientX, y: e.clientY, shift: e.shiftKey || shiftHeld });
 canvas.addEventListener('pointerdown', (e) => {
   try {
@@ -890,7 +929,8 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Home') setView('far');
   if (k === 'r' && buildTool()) buildDir = (buildDir + 1) & 3;
   // a held key repeats: picking the same tool again would forget a Shift placement (W25)
-  else if (KEY_TO_KIND.has(k) && !e.repeat) setBuildMode(KEY_TO_KIND.get(k)!);
+  // W31: B picks the fastest belt speed researched
+  else if (KEY_TO_KIND.has(k) && !e.repeat) setBuildMode(KEY_TO_KIND.get(k)!, KEY_TO_KIND.get(k) === 'belt' ? fastestBeltTier(researched) : 1);
   else if (k === 'u') startUpgrade();
   else if (k === 't') dropTurret();
   else if (k === 'x') stopUnits();
@@ -922,7 +962,7 @@ function stopUnits() {
 
 const bar = new BuildBar(
   {
-    build: (k) => setBuildMode(k),
+    build: (k, tier) => setBuildMode(k, tier),
     upgrade: startUpgrade,
     produce: () => {
       const c = selection.find((p) => p.type === 'unit' && p.kind === U.commander);
@@ -949,7 +989,8 @@ const sandboxPanel = new SandboxPanel({
 /** The active tool in words, for the panel ("Tool: spawn rusher × 8 — click the map"). */
 function toolText(): string {
   const m = sandboxPanel.model;
-  return toolLabel(tools, { spawnName: ALIEN_KINDS[m.spawnKind], count: m.count, depth: runDepth(), kindName: tools.kind >= 0 ? buildingInfo(tools.kind).label : undefined });
+  const kindName = tools.kind === B.belt ? `belt — ${BELT_SPEED_NAMES[tools.tier]}` : tools.kind >= 0 ? buildingInfo(tools.kind).label : undefined;
+  return toolLabel(tools, { spawnName: ALIEN_KINDS[m.spawnKind], count: m.count, depth: runDepth(), kindName });
 }
 
 // ---- W24 run 3: D1 diagnostics (__game.debugRender) ---------------------------------------------
@@ -1004,14 +1045,20 @@ function drawnMaterial(pick: (name: string) => boolean): MeshStandardMaterial | 
  * those share one texture and it is the renderer's scrolling one, whether the splitter's surface
  * scrolls, and with `withTexture` the chevron texture's luminance down its centre column and down a
  * column at u ≈ 0.12 (row r is v = r / h; the texture as drawn on the straight).
+ * W31: all of it for one belt speed, `tier` (its surface meshes w17/<shape>/<slow|medium|fast>/…),
+ * with that speed's phase and step, the shared delta `g`, and every speed's phase and step.
  */
-function beltFlowReport(withTexture: boolean) {
+function beltFlowReport(withTexture: boolean, tier: number) {
   const flow = view.models.beltFlow;
-  const scrolling = view.models.materials.w17.belt.map;
+  const suffix = BELT_SURFACE_SUFFIX[tier]!;
+  const mat = BELT_SURFACE_MATERIAL[tier]!;
+  const w17 = view.models.materials.w17;
+  const scrolling = w17[mat].map;
+  const anyScrolling = [1, 2, 3].map((t) => w17[BELT_SURFACE_MATERIAL[t]!].map);
   const map = (pick: (name: string) => boolean) => drawnMaterial(pick)?.map ?? null;
-  const straight = map((n) => n === 'w17/belt/belt-cut');
-  const corner = map((n) => /^w17\/beltCorner[LR]\/belt-cut$/.test(n));
-  const join = map((n) => /^w17\/beltJoin(L|R|LR)\/belt-cut$/.test(n));
+  const straight = map((n) => n === `w17/belt/${suffix}/${mat}-cut`);
+  const corner = map((n) => n === `w17/beltCornerR/${suffix}/${mat}-cut` || n === `w17/beltCornerL/${suffix}/${mat}-cut`);
+  const join = map((n) => /^w17\/beltJoin(L|R|LR)\//.test(n) && n.endsWith(`/${suffix}/${mat}-cut`));
   const splitter = drawnMaterial((n) => /^w17\/splitter\/belt/.test(n));
   const off = (t: Texture | null) => (t ? { offsetY: t.offset.y } : null);
   let texture: { w: number; h: number; centre: number[]; edge: number[] } | null = null;
@@ -1028,13 +1075,18 @@ function beltFlowReport(withTexture: boolean) {
     }
   }
   return {
-    phase: flow.phase,
-    step: flow.step,
+    tier,
+    material: `${mat}-cut`,
+    g: flow.g,
+    phases: flow.phases.slice(1),
+    steps: flow.steps.slice(1),
+    phase: flow.phases[tier]!,
+    step: flow.steps[tier]!,
     straight: off(straight),
     corner: off(corner),
     join: off(join),
     shared: !!straight && straight === corner && straight === scrolling && (!join || join === straight),
-    splitterScrolls: splitter ? splitter.map === scrolling : null,
+    splitterScrolls: splitter ? anyScrolling.includes(splitter.map) : null,
     texture,
   };
 }
@@ -1448,16 +1500,17 @@ function frame(now: number) {
     });
     const builders = selectedBuilders().length > 0;
     const buildMode = buildTool();
-    const active = buildMode ? BUILDING_KINDS[buildMode.kind]! : tools.name === 'upgrade' ? 'upgrade' : null;
+    const active = buildMode ? entryId(BUILDING_KINDS[buildMode.kind]!, tools.tier) : tools.name === 'upgrade' ? 'upgrade' : null;
+    const speed = buildMode?.kind === B.belt ? ` (${BELT_SPEED_NAMES[tools.tier]})` : '';
     const hint = buildMode
-      ? `Placing ${buildingInfo(buildMode.kind).label}${isBelt(buildMode.kind) ? ' — drag for a line, R rotates' : paintsRow(buildMode.kind) ? ' — drag for a row' : ''}. Shift queues more; Esc cancels.`
+      ? `Placing ${buildingInfo(buildMode.kind).label}${speed}${isBelt(buildMode.kind) ? ' — drag for a line, R rotates' : paintsRow(buildMode.kind) ? ' — drag for a row' : ''}. Shift queues more; Esc cancels.`
       : tools.name === 'upgrade'
-        ? 'Click a wall or turret to upgrade it (tiers need research).'
+        ? 'Click a wall, turret or belt to upgrade it, or drag along belts (each goes up one speed). Upgrades need research.'
         : builders
           ? ''
           : 'Select the commander or an engineer to build.';
     const hasCommander = selection.some((p) => p.type === 'unit' && p.kind === U.commander);
-    bar.update(builders, selectedEngineers().length > 0, hasCommander, active, hint, lockedBy);
+    bar.update(builders, selectedEngineers().length > 0, hasCommander, active, hint, (e) => entryLock(e, researched));
   }
 }
 requestAnimationFrame(frame);
@@ -1775,7 +1828,7 @@ const game = {
   },
   /** W24 run 3: the active map tool (tools.ts), its building kind and its words in the panel. */
   get tool() {
-    return { name: tools.name, kind: tools.kind >= 0 ? (BUILDING_KINDS[tools.kind] ?? null) : null, label: toolText() };
+    return { name: tools.name, kind: tools.kind >= 0 ? (BUILDING_KINDS[tools.kind] ?? null) : null, tier: tools.tier, label: toolText() };
   },
   /** W24 run 3: the sandbox panel's state, and the slider position (0..1) of a multiplier. */
   get sandboxPanel() {
@@ -1873,7 +1926,8 @@ const game = {
   // { ok: true, tick, detail? } once it has been applied at its tick, or { ok: false, reason } if it
   // was refused when sent or at its tick (while paused, it resolves after resuming).
   /** Debug (W24 run 2a fixtures): places a complete building at once, as the simulation's `place` command. */
-  place: (kind: string | number, tx: number, ty: number, dir = 0) => commandResult({ t: 'place', kind: buildingKindIndex(kind), tx, ty, dir }),
+  /** W31: `tier` lays a belt at that speed (belts only; the command refuses a tier on any other kind). */
+  place: (kind: string | number, tx: number, ty: number, dir = 0, tier?: number) => commandResult(tier === undefined ? { t: 'place', kind: buildingKindIndex(kind), tx, ty, dir } : { t: 'place', kind: buildingKindIndex(kind), tx, ty, dir, tier }),
   buildRun: (from: [number, number], to: [number, number], depth = 1, opts: { ids?: number[]; queue?: boolean } = {}) =>
     commandResult({ t: 'buildRun', ids: opts.ids ?? allUnitIds(), from, to, depth, queue: opts.queue ?? false }),
   cancelRun: (run: number) => commandResult({ t: 'cancelRun', run }),
@@ -2023,6 +2077,11 @@ const game = {
    * drag is under way.
    */
   get dragPreview() {
+    // W31: the upgrade tool's drag along belts: its tiles, skipped tiles, per-destination counts and label
+    if (drag && upgradePlan && tools.name === 'upgrade') {
+      const p = upgradePlan.plan;
+      return { kind: 'upgrade', build: p.tiles.map(([x, y, dir]) => [x, y, dir]), skipped: p.skipped.map(([x, y]) => [x, y]), toMedium: p.toMedium, toFast: p.toFast, label: dragLabelEl.textContent, refused: null, drawn: inspectDrag(scene) };
+    }
     if (!dragPlan || !drag) return null;
     return {
       kind: BUILDING_KINDS[dragPlan.kind],
@@ -2189,8 +2248,17 @@ const game = {
       if (p.d.name.startsWith('w17/belt') && Math.abs(p.x - (x + 0.5)) < 0.05 && Math.abs(p.z - (z + 0.5)) < 0.05) out.add(p.d.name.split('/')[1]!);
     return [...out].sort();
   },
-  /** W30: the belt clock and the scrolling chevron texture as drawn (beltFlowReport). */
-  beltFlow: (withTexture = false) => beltFlowReport(withTexture),
+  /** W31: the belt surfaces drawn at tile (x, z)'s centre: 'slow', 'medium', 'fast' (w17/<shape>/<speed>/… meshes), sorted. */
+  beltSurfaceAt: (x: number, z: number) => {
+    const out = new Set<string>();
+    for (const p of drawnInstances()) {
+      const parts = p.d.name.split('/');
+      if (parts[0] === 'w17' && parts.length === 4 && (BELT_SURFACE_SUFFIX as readonly string[]).includes(parts[2]!) && Math.abs(p.x - (x + 0.5)) < 0.05 && Math.abs(p.z - (z + 0.5)) < 0.05) out.add(`${parts[2]}:${parts[3]}`);
+    }
+    return [...out].sort();
+  },
+  /** W30: the belt clock and the scrolling chevron texture as drawn (beltFlowReport); W31: for belt speed `tier` (1 Slow, 2 Medium, 3 Fast). */
+  beltFlow: (withTexture = false, tier = 1) => beltFlowReport(withTexture, tier),
   /** Debug (negative control): every belt drawn straight (true) or in the shape its neighbours give it. */
   beltShapesStraight: (on: boolean) => {
     view.models.belts.forceStraight(on);

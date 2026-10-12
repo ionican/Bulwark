@@ -3,12 +3,15 @@
 //
 //   extractor, belts on   name; "buffer <n> / <cap> mass|rare"; "full — not digging" when full
 //   core                  name; hp; delivered mass and rare; "DISABLED …" at 0 hp
+//   belt (W31)            "Conveyor belt · Slow (1.7 tiles/s)" (its speed in words and tiles a
+//                         second); hp when damaged
 //   any other damaged     name; hp
 //   damaged, with builders selected: "right-click: repair" as the last line
 //
-// An undamaged building that is neither an extractor (belts on) nor the core has no readout.
+// An undamaged building that is neither an extractor (belts on), the core nor a belt has no
+// readout. A belt being upgraded shows the site readout (siteReadout.ts) instead.
 
-import { B, buildingInfo, isExtractor } from '../sim/kinds.ts';
+import { B, beltSpeedText, buildingInfo, isExtractor } from '../sim/kinds.ts';
 import { BF_COMPLETE, BF_DISABLED, BF_IDLE, BF_UPGRADING, G_BELTS, G_CORE_MASS, G_CORE_RARE } from '../sim/schema.ts';
 import { extractorCap } from '../sim/tuning.ts';
 import type { Snapshot } from '../sim/snapshot.ts';
@@ -36,9 +39,11 @@ export function buildingReadout(s: Snapshot, id: number, builders: boolean | (()
   const max = c.maxHp[r]!;
   const damaged = hp < max;
   const hpLine = `hp ${Math.ceil(hp)} / ${Math.round(max)}`;
-  const lines = [info.label];
+  const lines = [kind === B.belt ? `${info.label} · ${beltSpeedText(c.tier[r]!)}` : info.label];
   const g = s.globals;
-  if (kind === B.core) {
+  if (kind === B.belt) {
+    if (damaged) lines.push(hpLine);
+  } else if (kind === B.core) {
     lines.push(hpLine, `delivered mass ${g[G_CORE_MASS]} · rare ${g[G_CORE_RARE]}`);
     if (flags & BF_DISABLED) lines.push('DISABLED — takes nothing until repaired to full');
   } else if (g[G_BELTS] === 1 && isExtractor(kind)) {

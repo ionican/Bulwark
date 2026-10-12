@@ -6,7 +6,7 @@ import type { FieldSpec } from './table.ts';
 
 export const BUILDING_FIELDS = [
   { name: 'kind', type: 'u8' },
-  /** 1 = base tier; walls go to 2 and 3. */
+  /** 1 = base tier; walls go to 2 and 3. W31: a belt's speed (1 Slow, 2 Medium, 3 Fast). */
   { name: 'tier', type: 'u8' },
   /** BF_* bits. */
   { name: 'flags', type: 'u8' },

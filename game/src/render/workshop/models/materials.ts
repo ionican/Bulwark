@@ -4,9 +4,12 @@
 // Geometry UVs are box-projected in tile units (1 UV unit = 1 tile = 2 m), so each texture's
 // `repeat` sets its physical scale.
 // W30: belt surfaces carry flow UVs instead (kit.ts UvMap; v = progress along the flow in tiles,
-// u = across the belt, 0..1). The `belt` texture draws two forward-pointing chevrons per tile, tips
-// toward +v; the renderer scrolls it (models.ts, anim.ts BeltFlow). `beltStill` is the same rubber
-// without chevrons on its own texture, which nothing scrolls (the splitter).
+// u = across the belt, 0..1). The chevron textures draw forward-pointing chevrons, tips toward +v;
+// the renderer scrolls each (models.ts, anim.ts BeltFlow). `beltStill` is the same rubber without
+// chevrons on its own texture, which nothing scrolls (the splitter).
+// W31: one texture and material per belt speed, told apart by chevron count (never colour alone):
+// `beltSlow` one chevron a tile, `beltMedium` two, `belt` (Fast, and the material every belt model
+// is built with) three. One texture repeat is still one tile of travel.
 
 import { CanvasTexture, Color, Vector2, MeshStandardMaterial, NoColorSpace, RepeatWrapping, SRGBColorSpace, type Material, type Texture } from 'three';
 import { ivoryPanels, noiseTexture, type PanelMaps } from '../assets/composite.ts';
@@ -25,6 +28,8 @@ export type MatKey =
   | 'crystal'
   | 'ore'
   | 'belt'
+  | 'beltSlow'
+  | 'beltMedium'
   | 'beltStill'
   | 'hot'
   | 'rock';
@@ -35,7 +40,6 @@ const IVORY: [number, number, number] = [232, 211, 174];
 
 let panels: PanelMaps | null = null;
 let wearNoise: CanvasTexture<OffscreenCanvas> | null = null;
-let beltTex: CanvasTexture<OffscreenCanvas> | null = null;
 
 function withRepeat(t: Texture, r: number): Texture {
   t.repeat.set(r, r);
@@ -81,17 +85,17 @@ const BELT_W = 64;
 const BELT_H = 256;
 
 /**
- * W30: one tile of belt, v down the canvas (flipY off: canvas row 0 is v = 0). Two chevrons, each a
- * V whose arms start at the belt's edges and whose tip, on the centre line, is DEPTH further along
- * +v: the tip points the way the belt runs. Drawn again one canvas height either side so a chevron
- * crossing the tile edge wraps.
+ * W30: one tile of belt, v down the canvas (flipY off: canvas row 0 is v = 0). W31: `chevrons` of
+ * them (1 Slow, 2 Medium, 3 Fast), evenly spaced, each a V whose arms start at the belt's edges and
+ * whose tip, on the centre line, is DEPTH further along +v: the tip points the way the belt runs.
+ * Drawn again one canvas height either side so a chevron crossing the tile edge wraps.
  */
-function beltTexture(): CanvasTexture<OffscreenCanvas> {
+function beltTexture(chevrons: number): CanvasTexture<OffscreenCanvas> {
   const c = new OffscreenCanvas(BELT_W, BELT_H);
   const g = c.getContext('2d')!;
   g.fillStyle = RUBBER;
   g.fillRect(0, 0, BELT_W, BELT_H);
-  const PERIOD = BELT_H / 2;
+  const PERIOD = BELT_H / chevrons;
   const DEPTH = 40;
   const T = 22;
   const EDGE = 4;
@@ -107,7 +111,7 @@ function beltTexture(): CanvasTexture<OffscreenCanvas> {
     g.fill();
   };
   for (const wrap of [-BELT_H, 0, BELT_H])
-    for (let k = 0; k < 2; k++) {
+    for (let k = 0; k < chevrons; k++) {
       const y0 = wrap + k * PERIOD + 20;
       g.fillStyle = CLEAT;
       vee(y0, T);
@@ -133,11 +137,16 @@ export function createMaterials(bank: TextureBank): Mats {
     withRepeat(t, 0.42);
     bank.derived.add(t);
   }
-  beltTex = beltTexture();
-  beltTex.repeat.set(1, 1);
-  // W30: the chevrons are seen at a grazing angle from the game camera
-  beltTex.anisotropy = bank.anisotropy;
-  bank.derived.add(beltTex);
+  // W31: Slow, Medium, Fast (1, 2, 3 chevrons a tile)
+  const chevrons = (n: number): Texture => {
+    const t = beltTexture(n);
+    t.repeat.set(1, 1);
+    // W30: the chevrons are seen at a grazing angle from the game camera
+    t.anisotropy = bank.anisotropy;
+    bank.derived.add(t);
+    return t;
+  };
+  const [slowTex, mediumTex, fastTex] = [chevrons(1), chevrons(2), chevrons(3)];
 
   const mp = (k: string) => withRepeat(bank.tex(`metal_plate_02/${k}`), 0.55);
   const cu = (k: string) => withRepeat(bank.tex(`Metal047B/${k}`), 1.4);
@@ -224,10 +233,12 @@ export function createMaterials(bank: TextureBank): Mats {
     roughness: 1,
     metalness: 0,
   });
-  const belt = new MeshStandardMaterial({ name: 'belt', map: beltTex, roughness: 0.8, metalness: 0.1 });
+  const belt = new MeshStandardMaterial({ name: 'belt', map: fastTex, roughness: 0.8, metalness: 0.1 });
+  const beltSlow = new MeshStandardMaterial({ name: 'beltSlow', map: slowTex, roughness: 0.8, metalness: 0.1 });
+  const beltMedium = new MeshStandardMaterial({ name: 'beltMedium', map: mediumTex, roughness: 0.8, metalness: 0.1 });
   const beltStill = new MeshStandardMaterial({ name: 'beltStill', color: RUBBER, roughness: 0.8, metalness: 0.1 });
   for (const t of [panels.normal]) t.colorSpace = NoColorSpace;
-  return { ivory, trim, copper, glow, glass, void: voidM, pad, hull, alienGlow, crystal, ore, belt, beltStill, hot, rock };
+  return { ivory, trim, copper, glow, glass, void: voidM, pad, hull, alienGlow, crystal, ore, belt, beltSlow, beltMedium, beltStill, hot, rock };
 }
 
 /** Rebuild the code-composed maps after a texture-quality change (same Texture objects). */

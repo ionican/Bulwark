@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import { B, COMMANDER_INCOME, ITEM_MASS, ITEM_SALVAGE, U } from '../src/sim/kinds.ts';
 import { BF_IDLE } from '../src/sim/schema.ts';
-import { ROW, beltLine, itemsOnBelts, slot, steps } from './w29-fixtures.ts';
+import { FAST, ROW, beltLine, itemsOnBelts, slot, steps } from './w29-fixtures.ts';
 
 /** Ticks from an item's insertion on the first belt tile to its delivery, for a belt of n tiles. */
 function travelTicks(n: number): number {
@@ -103,7 +103,7 @@ describe('W29 delivery by belt', () => {
     const s = slot(w, extractor);
     expect(w.buildings.cols.stock[s]).toBe(180);
     expect(w.buildings.cols.flags[s]! & BF_IDLE).not.toBe(0);
-    expect(w.placeBuilding(B.belt, cx, ROW, true, 0)).toBeGreaterThanOrEqual(0);
+    expect(w.placeBuilding(B.belt, cx, ROW, true, 0, undefined, undefined, FAST)).toBeGreaterThanOrEqual(0);
     steps(w, 300);
     // 30 s: more than the 30 items one extractor digs, because the stored output flows out at belt speed
     expect(w.delivered[0]! - stopped).toBeGreaterThan(60);
@@ -114,7 +114,7 @@ describe('W29 delivery by belt', () => {
     const { w, belts, coreX } = beltLine(10);
     // a second line into the core's west face one row down; the last five tiles of both lines loaded by hand
     const second: number[] = [];
-    for (let x = coreX - 5; x < coreX; x++) second.push(w.placeBuilding(B.belt, x, ROW + 1, true, 0));
+    for (let x = coreX - 5; x < coreX; x++) second.push(w.placeBuilding(B.belt, x, ROW + 1, true, 0, undefined, undefined, FAST));
     const c = w.buildings.cols;
     for (const id of [...second, ...belts.slice(-5)]) {
       c.item[slot(w, id)] = ITEM_MASS;

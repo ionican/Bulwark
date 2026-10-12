@@ -6,7 +6,7 @@
 
 import { map1 } from '../../../model/data/map1.ts';
 import type { BuildingDef, WeaponDef } from '../../../model/src/types.ts';
-import { BELT_COST_MASS, BUILD_RATE, CORE_HP, CORE_REPAIR_TIME, HEAVY_T2, RARE_EXTRACTOR_OUTPUT, gateStats } from './balance.ts';
+import { BELT_COST_MASS, BELT_UPGRADES, BUILD_RATE, CORE_HP, CORE_REPAIR_TIME, HEAVY_T2, RARE_EXTRACTOR_OUTPUT, gateStats } from './balance.ts';
 
 export const METRES_PER_TILE = 2;
 export const TICK_HZ = 10;
@@ -94,7 +94,7 @@ export interface BuildingInfo {
   weapon?: Weapon;
   /** Chain machine: input item kind, seconds per output, inputs per output, energy per second. */
   machine?: { input: number; output: number; seconds: number; inputPerOutput: number; energyPerSecond: number };
-  /** Tier 2 (and 3 for walls), each gated by research (balance.ts TIER_REQUIRES). */
+  /** Tier 2 (and 3 for walls and belts), each gated by research (balance.ts TIER_REQUIRES). */
   tiers?: Array<{ hpMult: number; damageMult: number; cost: Cost; time: number }>;
   /** Hotkey in the build bar. */
   key: string;
@@ -169,7 +169,18 @@ const INFO: Record<BuildingKind, BuildingInfo> = {
   shield: { label: bd.shield.label, fw: 2, fh: 2, hp: bd.shield.hp, cost: costOf(bd.shield), buildTime: bd.shield.buildTime, role: 'defence', key: '6' },
   tempTurret: { label: 'Temporary turret', fw: 1, fh: 1, hp: map1.tempTurret.hp, cost: [0, 0, 0], buildTime: 1, role: 'defence', weapon: weapon(map1.tempTurret.weapon, P_BULLET, 30), key: '', placedBy: 'the temporary turret is dropped by an engineer, not built' },
   // Belt pieces: not in W12. First-pass numbers; cheap so a chain is a layout question, not a cost one.
-  belt: { label: 'Conveyor belt', fw: 1, fh: 1, hp: 100, cost: [BELT_COST_MASS, 0, 0], buildTime: 4, role: 'floor', key: 'b' },
+  // W31: tier 1/2/3 = Slow/Medium/Fast (BELT_STEP below). The tiers change speed only.
+  belt: {
+    label: 'Conveyor belt',
+    fw: 1,
+    fh: 1,
+    hp: 100,
+    cost: [BELT_COST_MASS, 0, 0],
+    buildTime: 4,
+    role: 'floor',
+    tiers: BELT_UPGRADES.map((u) => ({ hpMult: 1, damageMult: 1, cost: [u.mass, 0, 0] as Cost, time: u.time })),
+    key: 'b',
+  },
   splitter: { label: 'Splitter', fw: 1, fh: 1, hp: 150, cost: [10, 20, 0], buildTime: 10, role: 'floor', key: 'v' },
   merger: { label: 'Merger', fw: 1, fh: 1, hp: 150, cost: [10, 20, 0], buildTime: 10, role: 'floor', key: 'n' },
   // W24 gate: converted from finished walls only (gate.ts), never placed from the build bar. Its
@@ -227,7 +238,19 @@ export const SHIELD = {
   radius: 8,
 };
 export const TEMP_TURRET = { cooldown: map1.tempTurret.cooldown, lifetime: map1.tempTurret.lifetime };
-export const BELT_TILES_PER_SECOND = map1.beltItemsPerSecond;
+// W31: belt speed is the crossing time of a tile in whole ticks, by tier (index 0 unused): Slow 6,
+// Medium 4, Fast 3 (build 170's belt, step 0.4, unchanged tick for tick). An item's stored f32
+// position reaches 1 in exactly that many steps. Splitter and merger move at the Fast step.
+export const BELT_TOP_TIER = 3;
+export const BELT_TICKS_PER_TILE = [0, 6, 4, 3] as const;
+export const BELT_STEP = [0, 1 / 6, 0.25, 0.4] as const;
+export const BELT_SPEED_NAMES = ['', 'Slow', 'Medium', 'Fast'] as const;
+/** Tiles a second an item crosses on a belt of `tier` (Slow 1.67, Medium 2.5, Fast 3.33). */
+export const beltTilesPerSecond = (tier: number): number => TICK_HZ / BELT_TICKS_PER_TILE[tier]!;
+/** "Slow (1.7 tiles/s)": the readout's name for a belt speed. */
+export const beltSpeedText = (tier: number): string => `${BELT_SPEED_NAMES[tier]} (${beltTilesPerSecond(tier).toFixed(1)} tiles/s)`;
+/** True for a tier a belt may have: an integer 1..3. */
+export const isBeltTier = (tier: unknown): tier is number => typeof tier === 'number' && Number.isInteger(tier) && tier >= 1 && tier <= BELT_TOP_TIER;
 export const WRECK_DECAY_PER_SECOND = map1.wreckDecayPerSecond;
 export const START_STOCK: Cost = [map1.startStock.mass, map1.startStock.energy, map1.startStock.rare];
 export const COMMANDER_INCOME: Cost = [map1.commander.income.mass, map1.commander.income.energy, map1.commander.income.rare];
@@ -387,7 +410,8 @@ export function gateUpgradeWork(tiles: number, tier: number): { cost: Cost; time
 /**
  * Cost and BP·s of the work outstanding on a site, from columns both threads have: construction,
  * or the upgrade from `tier` when `upgrading`. World.workOf drains by it; W25b, the render thread's
- * waiting markers (render/waiting.ts) read from it which resources a site draws.
+ * waiting markers (render/waiting.ts) read from it which resources a site draws. W31: a belt site
+ * laid at tier 2 or 3 costs the base plus every upgrade step below it (beltLaidWork).
  */
 export function siteWork(kind: number, upgrading: boolean, tier: number, fw: number, fh: number): { cost: Cost; time: number } {
   if (kind === B.gate) return upgrading ? gateUpgradeWork(fw * fh, tier) : gateBuildWork(fw * fh);
@@ -396,5 +420,19 @@ export function siteWork(kind: number, upgrading: boolean, tier: number, fw: num
     const t = info.tiers![tier - 1]!;
     return { cost: t.cost, time: t.time };
   }
+  if (kind === B.belt && tier > 1) return beltLaidWork(tier);
   return { cost: info.cost, time: info.buildTime };
+}
+
+/** W31: cost and BP·s of laying a belt at `tier`: the Slow belt plus each upgrade below `tier`. */
+export function beltLaidWork(tier: number): { cost: Cost; time: number } {
+  const info = BUILDING_INFO.belt;
+  const cost: Cost = [...info.cost];
+  let time = info.buildTime;
+  for (let t = 1; t < tier; t++) {
+    const up = info.tiers![t - 1]!;
+    for (let k = 0; k < 3; k++) cost[k] = cost[k]! + up.cost[k]!;
+    time += up.time;
+  }
+  return { cost, time };
 }

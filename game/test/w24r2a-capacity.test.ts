@@ -115,9 +115,10 @@ describe('criterion 8: capacity', () => {
     expect(s.units.count).toBe(CAPACITY.units);
     draw(r, s, { level: 0 });
     const n = submitted(r.group);
-    // belts are one W17 model each (all materials share one count)
+    // belts are two W17 models each since W31: the rest model (rails and body) and the moving surface
+    // of the belt's speed (all materials of a model share one count)
     // a rusher is drawn as its parts (body and four legs, walk.ts): one instance each per rusher
-    expect(n.w17).toBe(CAPACITY.buildings + CAPACITY.aliens * ALIEN_MAKERS.rusher(standInMaterials().alien).parts.length);
+    expect(n.w17).toBe(2 * CAPACITY.buildings + CAPACITY.aliens * ALIEN_MAKERS.rusher(standInMaterials().alien).parts.length);
     // engineers: one instance per drawn segment of the rig; the commander likewise
     expect(n.parts).toBeGreaterThan(CAPACITY.units * 10);
     expect(r.overflowed).toBe(false);
