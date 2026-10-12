@@ -16,15 +16,16 @@
 //      join and a straight are drawn with the corner, join and straight models
 //   2  __game.beltFlow(), sampled every frame at 1×: the drawn straight, corner and join meshes share
 //      the renderer's scrolling texture; each frame its offset moves in the −v sense by exactly
-//      min(frame seconds × speed × 4, 0.2) tiles (the frame time from the frame timestamps); paused,
-//      the phase and the offset do not move
+//      min(frame seconds × speed, 0.04) × 10/6 tiles (W31 Slow; W30: min(… × 4, 0.2)), the frame
+//      time from the frame timestamps; paused, the phase and the offset do not move
 //   3  rendered motion: the canvas pixels over a straight tile and over the corner tile (a plain
 //      render, __game.debugRender.capture) differ between two running samples and are identical
-//      between two paused samples
-//   4  the same at 10×, on consecutive frames: every step is above 0 and at most 0.2 tile, the
-//      offset's forward move per frame is under half the 0.5-tile chevron period (so the pattern
+//      between two paused samples (W31: each rectangle spans a whole tile along the belt, the Slow
+//      chevron period, so a chevron is always inside it)
+//   4  the same at 10×, on consecutive frames: every step is above 0 and at most 0.067 tile, the
+//      offset's forward move per frame is under half the 1-tile Slow chevron period (so the pattern
 //      cannot look still or reversed), and consecutive frames' pixels differ
-//   5  chevron orientation, from the texture's canvas as drawn: two chevrons per tile, and along the
+//   5  chevron orientation, from the texture's canvas as drawn: one chevron per tile (Slow), and along the
 //      centre column each chevron's leading edge is at higher v than the same chevron's arm near the
 //      belt's edge (the tip points the way the belt runs)
 //   6  negative controls: with debugRender.beltFlowFrozen the running checks of 2 and 3 fail; with
@@ -32,16 +33,26 @@
 //   7  a splitter's surface does not scroll; close-ups w30-belt-straight.png, w30-belt-corner.png,
 //      w30-belt-join.png, w30-splitter.png; 0 console errors throughout
 // It always stops its server and closes only its own session.
+//
+// W31: belts have three speeds; the bar's Slow entry lays these, so the checks read the Slow surface
+// (__game.beltFlow(…, 1)): one capped game-time delta a frame, g = min(frame seconds × speed, 0.04),
+// moves the Slow phase g × 10/6 tiles (at most 0.067), and every speed's step is g × its tiles a
+// second (checked each frame); the Slow texture has one chevron a tile (a 1-tile period).
+// scripts/check-belt-speeds.mjs checks the three speeds side by side.
 
 import { harness } from './harness.mjs';
 
 const h = harness({ name: 'check-belt-flow', port: 8842, session: 'w30flow' });
 const { note, check, ab, js, frames, until, click, drag, shiftDown, shiftUp, press, clickEl, camera, buildings, units, speed, selectUnit, selectedUnitIds, errorsNow, shot, load } = h;
 
-/** Belt speed (sim/kinds.ts BELT_TILES_PER_SECOND), the per-frame cap and the chevron period (tiles). */
-const TILES_PER_SECOND = 4;
-const MAX_STEP = 0.2;
-const PERIOD = 0.5;
+/** W31: tiles a second per belt speed (index = tier), the cap on the frame's shared game-time delta (anim.ts BELT_FLOW_MAX_G). */
+const TPS = [0, 10 / 6, 2.5, 10 / 3];
+const MAX_G = 0.04;
+/** The Slow belt's speed, its largest step a frame and its chevron period (tiles): one chevron a tile. */
+const TILES_PER_SECOND = TPS[1];
+const MAX_STEP = MAX_G * TILES_PER_SECOND;
+const PERIOD = 1;
+const CHEVRONS = 1;
 /** Top of the belt surface above the tile's base (buildings.ts BELT_SURFACE_Y). */
 const SURFACE_Y = 0.25;
 
@@ -82,8 +93,8 @@ const FLOW = (n) => `(async () => {
   await new Promise((res) => {
     let k = 0;
     const f = (now) => {
-      const s = __game.beltFlow();
-      out.push({ now, phase: s.phase, step: s.step, straight: s.straight && s.straight.offsetY, corner: s.corner && s.corner.offsetY, join: s.join && s.join.offsetY, shared: s.shared, speed: __game.speed, paused: __game.paused });
+      const s = __game.beltFlow(false, 1);
+      out.push({ now, g: s.g, steps: s.steps, phase: s.phase, step: s.step, straight: s.straight && s.straight.offsetY, corner: s.corner && s.corner.offsetY, join: s.join && s.join.offsetY, shared: s.shared, speed: __game.speed, paused: __game.paused });
       if (++k >= ${n}) res(); else requestAnimationFrame(f);
     };
     requestAnimationFrame(f);
@@ -107,8 +118,9 @@ const PIX = (rects, gap) => `(async () => {
 
 /**
  * The running-flow check on frame samples: every frame (after the first) a shared texture drawn on
- * the straight and the corner (and the join), a step of exactly min(frame seconds × speed × 4, 0.2),
- * above 0, and the offset moved forward (−v) by that step mod 1. Returns the problems found.
+ * the straight and the corner (and the join), a Slow step of exactly min(frame seconds × speed, 0.04)
+ * × 10/6, above 0, every speed's step g × its tiles a second (W31), and the offset moved forward (−v)
+ * by the Slow step mod 1. Returns the problems found.
  */
 function flowProblems(s) {
   const bad = [];
@@ -117,7 +129,9 @@ function flowProblems(s) {
     const c = s[k];
     if (!c.shared || c.straight === null || c.corner === null) bad.push(`frame ${k}: straight and corner do not share the scrolling texture (${JSON.stringify(c)})`);
     else if (c.straight !== c.corner || (c.join !== null && c.join !== c.straight)) bad.push(`frame ${k}: offsets differ: straight ${c.straight}, corner ${c.corner}, join ${c.join}`);
-    const want = Math.min(((c.now - p.now) / 1000) * c.speed * TILES_PER_SECOND, MAX_STEP);
+    const want = Math.min(((c.now - p.now) / 1000) * c.speed, MAX_G) * TILES_PER_SECOND;
+    const ratio = c.steps.map((st, i) => st - c.g * TPS[i + 1]);
+    if (ratio.some((d) => Math.abs(d) > 1e-9)) bad.push(`frame ${k}: steps ${c.steps.map((x) => x.toFixed(4)).join(' / ')} are not g ${c.g} × 10/6, 2.5, 10/3`);
     if (!(c.step > 0)) bad.push(`frame ${k}: step ${c.step} (not forward)`);
     if (Math.abs(c.step - want) > 1e-6) bad.push(`frame ${k}: step ${c.step.toFixed(4)}, want ${want.toFixed(4)} (${(c.now - p.now).toFixed(1)} ms at ${c.speed}×)`);
     const moved = mod(p.straight - c.straight, 1);
@@ -137,10 +151,10 @@ function stillProblems(s) {
   return bad;
 }
 
-/** Screen rectangle (CSS px) round world point (x, z) on the belt surface, ±r tiles. */
-function rectAt(x, z, r) {
+/** Screen rectangle (CSS px) round world point (x, z) on the belt surface, ±rx tiles along x and ±rz along z. */
+function rectAt(x, z, rx, rz = rx) {
   const y = js(`__game.terrainInfo.height(${x}, ${z})`) + SURFACE_Y;
-  const pts = [[-r, -r], [r, -r], [r, r], [-r, r]].map(([dx, dz]) => js(`__game.worldToScreen(${x + dx}, ${z + dz}, ${y})`));
+  const pts = [[-rx, -rz], [rx, -rz], [rx, rz], [-rx, rz]].map(([dx, dz]) => js(`__game.worldToScreen(${x + dx}, ${z + dz}, ${y})`));
   return { x0: Math.min(...pts.map((p) => p.x)), y0: Math.min(...pts.map((p) => p.y)), x1: Math.max(...pts.map((p) => p.x)), y1: Math.max(...pts.map((p) => p.y)) };
 }
 
@@ -188,7 +202,7 @@ async function run() {
   const engs = us.filter((u) => u.kindName === 'engineer');
   await selectUnit(cmdr.id);
   for (const e of engs) await selectUnit(e.id, true);
-  await clickEl('.bar button[data-kind="belt"]');
+  await clickEl('.bar button[data-kind="belt"][data-tier="1"]');
   await drag(tileScreen(...leg1[0]), tileScreen(...leg1[1]), 10);
   shiftDown();
   await drag(tileScreen(...leg2[0]), tileScreen(...leg2[1]), 10);
@@ -239,14 +253,19 @@ async function run() {
   const run1 = js(FLOW(40));
   const p1 = flowProblems(run1);
   const moved1 = run1[run1.length - 1].phase - run1[0].phase;
-  check(!p1.length, `1×: straight, corner and join share the scrolling texture; over ${run1.length - 1} frames each step = min(frame s × speed × 4, 0.2) and the offset moved forward by it (phase +${moved1.toFixed(3)})`, `1× flow: ${p1.slice(0, 4).join('; ')} (${p1.length} problems)`);
+  check(!p1.length, `1×: straight, corner and join share the Slow scrolling texture; over ${run1.length - 1} frames each step = min(frame s × speed, 0.04) × 10/6, the three speeds' steps g × 10/6, 2.5, 10/3, and the offset moved forward by it (phase +${moved1.toFixed(3)})`, `1× flow: ${p1.slice(0, 4).join('; ')} (${p1.length} problems)`);
   await setPaused(true);
   const still = js(FLOW(20));
   const ps = stillProblems(still);
   check(!ps.length && still.length === 20, `paused: phase and offset still over ${still.length - 1} frames (phase ${still[0].phase.toFixed(4)})`, `paused flow: ${ps.slice(0, 4).join('; ')}`);
 
   // 3: rendered motion
-  const rects = [rectAt(straight[0] + 0.5, straight[1] + 0.5, 0.18), rectAt(corner[0] + 0.5, corner[1] + 0.5, 0.1)];
+  // W31: the Slow texture has one chevron a tile, so a small patch can hold no chevron for most of a
+  // tile's travel; each rectangle spans a whole tile along the belt (the straight runs along x) so a
+  // chevron is always inside it
+  // half a chevron period either side along the straight (a whole period); the corner's square the same, kept inside its tile
+  const along = PERIOD / 2;
+  const rects = [rectAt(straight[0] + 0.5, straight[1] + 0.5, along, 0.18), rectAt(corner[0] + 0.5, corner[1] + 0.5, Math.min(along, 0.42))];
   note(`pixel rectangles: straight ${JSON.stringify(rects[0])}, corner ${JSON.stringify(rects[1])}`);
   const still2 = js(PIX(rects, 4));
   check(still2.every((x) => x.n > 50 && x.max === 0), `paused: the pixels over the straight and the corner are identical 4 frames apart (${still2.map((x) => `${x.n} px`).join(', ')})`, `paused pixels changed: ${JSON.stringify(still2)}`);
@@ -264,7 +283,7 @@ async function run() {
   const alias = apparent.filter((a) => !(a > 1e-6 && a < PERIOD / 2));
   check(
     !p10.length && !alias.length,
-    `10×: every frame steps above 0 and at most 0.2 (largest ${Math.max(...run10.slice(1).map((c) => c.step)).toFixed(3)}), the pattern moves forward ${Math.min(...apparent).toFixed(3)}–${Math.max(...apparent).toFixed(3)} tile a frame (under half the ${PERIOD}-tile period)`,
+    `10×: every frame steps above 0 and at most ${MAX_STEP.toFixed(3)} (largest ${Math.max(...run10.slice(1).map((c) => c.step)).toFixed(3)}), the pattern moves forward ${Math.min(...apparent).toFixed(3)}–${Math.max(...apparent).toFixed(3)} tile a frame (under half the ${PERIOD}-tile period)`,
     `10× flow: ${[...p10.slice(0, 3), ...alias.slice(0, 3).map((a) => `apparent move ${a.toFixed(3)}`)].join('; ')}`,
   );
   const m10 = motionProblems(rects, 1);
@@ -273,7 +292,7 @@ async function run() {
   await until('speed 1', '__game.speed === 1', 10);
 
   // 5: chevron orientation from the texture as drawn
-  const tex = js('__game.beltFlow(true).texture');
+  const tex = js('__game.beltFlow(true, 1).texture');
   const orient = orientation(tex);
   check(orient.ok, `chevrons: ${orient.msg}`, `chevron orientation: ${orient.msg}`);
 
@@ -297,7 +316,7 @@ async function run() {
   // 7: the splitter and the close-ups
   camera({ x: sp[0] + 0.5, z: sp[1] + 0.8, distance: 7, yaw: 0 });
   await frames(8);
-  const sf = js('__game.beltFlow()');
+  const sf = js('__game.beltFlow(false, 1)');
   check(sf.splitterScrolls === false, 'the splitter is drawn and its surface does not scroll', `splitter: ${JSON.stringify(sf.splitterScrolls)}`);
   await shot('w30-splitter.png');
   camera({ x: straight[0] + 1, z: straight[1] + 0.8, distance: 7, yaw: 0 });
@@ -314,8 +333,9 @@ async function run() {
 
 /**
  * Chevrons from the texture's luminance columns (row r is v = r / h): cleat rows are the brighter
- * bands. Two bands per tile down the centre column; each band in the centre column starts after
- * (at higher v than) the nearest band in the column near the belt's edge, by less than half a period.
+ * bands. CHEVRONS bands per tile down the centre column (W31 Slow: one; W30's belt had two); each
+ * band in the centre column starts after (at higher v than) the nearest band in the column near the
+ * belt's edge, by less than a quarter tile.
  */
 function orientation(t) {
   if (!t || !t.centre?.length || !t.edge?.length) return { ok: false, msg: `no texture read: ${JSON.stringify(t)?.slice(0, 200)}` };
@@ -326,7 +346,7 @@ function orientation(t) {
   const starts = (col) => col.flatMap((v, r) => (v > cut && col[(r - 1 + col.length) % col.length] <= cut ? [r] : []));
   const c = starts(t.centre);
   const e = starts(t.edge);
-  if (c.length !== 2 || e.length !== 2) return { ok: false, msg: `bands: centre ${JSON.stringify(c)}, edge ${JSON.stringify(e)} (want 2 each)` };
+  if (c.length !== CHEVRONS || e.length !== CHEVRONS) return { ok: false, msg: `bands: centre ${JSON.stringify(c)}, edge ${JSON.stringify(e)} (want ${CHEVRONS} each)` };
   const H = t.h;
   const lead = c.map((r) => {
     const d = e.map((s) => ((r - s + H + H / 2) % H) - H / 2);

@@ -3,18 +3,32 @@
 // `queue: true` appends the order to the units' queues instead of replacing them. W25: replacing
 // (or removing, with dequeue and clearQueue) an order removes any reserved site no unit has queued
 // any more; started sites stay.
+// W31: belts have a speed, their tier (1 Slow, 2 Medium, 3 Fast). `build` and `place` take an
+// optional `tier` (belts only, integer 1..3; a tier on any other kind is refused), and
+// `upgradeBelts` upgrades a dragged line one speed step, as one command.
 
 import type { TuneTarget } from './tuning.ts';
 
 export type Command =
   /** Move player units (commander, engineers) to a world point. Ids are unit-table ids. */
   | { t: 'move'; ids: number[]; x: number; z: number; queue?: boolean }
-  /** Lay out a construction site and send the units to build it. `dir` 0..3 for belt pieces. */
-  | { t: 'build'; ids: number[]; kind: number; tx: number; ty: number; dir?: number; queue?: boolean }
+  /**
+   * Lay out a construction site and send the units to build it. `dir` 0..3 for belt pieces. W31:
+   * `tier` 1..3 lays a belt at that speed (default 1, Slow); 2 and 3 need their research.
+   */
+  | { t: 'build'; ids: number[]; kind: number; tx: number; ty: number; dir?: number; tier?: number; queue?: boolean }
   /** Help build (or upgrade) an existing site. */
   | { t: 'assist'; ids: number[]; target: number; queue?: boolean }
-  /** Upgrade a wall to its next tier in place. */
+  /** Upgrade a building (wall, turret, belt) to its next tier in place. */
   | { t: 'upgrade'; ids: number[]; target: number; queue?: boolean }
+  /**
+   * W31 drag-upgrade: one speed step for every belt in `targets`, as one command (the queue rule
+   * applies once per drag). A target is skipped, and counted, when it is a duplicate, gone, not a
+   * belt, no longer at `expectedTier`, already upgrading, at Fast, or its next speed is locked. The
+   * whole batch must fit every unit's queue (world.ts MAX_ORDERS) or the command is refused; so is
+   * a command whose targets are all skipped (it changes nothing). Checked again when it applies.
+   */
+  | { t: 'upgradeBelts'; ids: number[]; targets: Array<{ id: number; expectedTier: number }>; queue?: boolean }
   /** Engineers reclaim a wreck and carry the salvage to a depot. */
   | { t: 'reclaim'; ids: number[]; wreck: number; queue?: boolean }
   | { t: 'stop'; ids: number[] }
@@ -28,8 +42,8 @@ export type Command =
   | { t: 'callWave' }
   /** Debug: spawn a group of `count` aliens of `kind` at entry index `entry`. */
   | { t: 'spawn'; kind: number; entry: number; count: number }
-  /** Debug: place a finished building instantly. */
-  | { t: 'place'; kind: number; tx: number; ty: number; dir?: number }
+  /** Debug: place a finished building instantly. W31: `tier` as for build (belts only), no research check. */
+  | { t: 'place'; kind: number; tx: number; ty: number; dir?: number; tier?: number }
   // ---- W24 ----
   /**
    * Lay a straight wall run (runs.ts) and give each unit one order to work through it. `from` and

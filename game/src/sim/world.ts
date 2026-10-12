@@ -19,6 +19,8 @@
 // W29: with `belts` on, extractors fill their own buffers and their output reaches the pool only
 // when the core takes it off a belt (economy.ts, conveyor.ts); after construction, repair power is
 // applied (economy.ts stepRepair). The core is never removed: at 0 hp it is disabled (combat.ts).
+// W31: a belt's tier is its speed (conveyor.ts). A build lays a belt at a tier; `upgradeBelts`
+// upgrades a dragged line one speed step as one command (validate.ts planBeltUpgrades).
 
 import {
   ALIEN_FIELDS,
@@ -61,8 +63,8 @@ import { stepConveyors } from './conveyor.ts';
 import { acquireTargets, damageBuilding, fireTurrets, stepProjectiles, stepShieldsAndTimers, AlienGrid } from './combat.ts';
 import { stepAliens } from './aliens.ts';
 import { stepUnits, type Order, type OrderSpec } from './units.ts';
-import { dequeueIndex, dropOrphans, ownReservedSite, replacementProblem, worldSiteSource } from './queue.ts';
-import { validateCommand, upgradeProblem } from './validate.ts';
+import { dequeueIndex, dropOrphans, heldReservedSite, ownReservedSite, replacementProblem, worldSiteSource } from './queue.ts';
+import { planBeltUpgrades, validateCommand, upgradeProblem } from './validate.ts';
 import { COMMANDER_WRECK_SALVAGE, RESEARCH, RESEARCH_INDEX, SANDBOX_RESPAWN_TICKS, callEarlyBonus, FIELD_ENG_TURRET_COOLDOWN } from './balance.ts';
 import { map1 } from '../../../model/data/map1.ts';
 import { START_ENGINEERS, TICK_HZ, siteWork } from './kinds.ts';
@@ -488,10 +490,23 @@ export class World {
       }
       case 'build': {
         // Run 3 C2 (queue.ts ownReservedSite): unshifted, on the issuers' own reserved site of exactly
-        // this kind, anchor and direction, the order goes to that site (same id); the replaced
-        // orders' other sites go as for any replacement (dropOrphans, after this command).
-        const own = this.canPlace(cmd.kind, cmd.tx, cmd.ty) ? -1 : ownReservedSite(worldSiteSource(this), cmd.ids, cmd.kind, cmd.tx, cmd.ty, cmd.dir ?? 0, cmd.queue ?? false);
-        const site = own >= 0 ? own : this.placeBuilding(cmd.kind, cmd.tx, cmd.ty, false, cmd.dir ?? 0);
+        // this kind, anchor, direction and (W31) belt speed, the order goes to that site (same id); the
+        // replaced orders' other sites go as for any replacement (dropOrphans, after this command).
+        // W31: the issuers' own site at another speed is replaced: their queues are replaced first and
+        // dropOrphans frees the old site (release first, as buildRun's C3), then the new one is laid.
+        const tier = cmd.tier ?? 1;
+        const dir = cmd.dir ?? 0;
+        let own = -1;
+        if (!this.canPlace(cmd.kind, cmd.tx, cmd.ty)) {
+          const src = worldSiteSource(this);
+          own = ownReservedSite(src, cmd.ids, cmd.kind, cmd.tx, cmd.ty, dir, cmd.queue ?? false, tier);
+          if (own < 0 && heldReservedSite(src, cmd.ids, cmd.kind, cmd.tx, cmd.ty, dir, cmd.queue ?? false) >= 0) {
+            this.replaceQueues(cmd.ids);
+            dropOrphans(this, this.dropped);
+            this.dropped.length = 0;
+          }
+        }
+        const site = own >= 0 ? own : this.placeBuilding(cmd.kind, cmd.tx, cmd.ty, false, dir, undefined, undefined, tier);
         if (site >= 0) this.orderAll(cmd.ids, () => ({ t: 'build', id: site }), cmd.queue);
         break;
       }
@@ -502,6 +517,20 @@ export class World {
       case 'upgrade': {
         const b = this.buildings.slotForId(cmd.target);
         if (b >= 0 && this.startUpgrade(b)) this.orderAll(cmd.ids, () => ({ t: 'build', id: cmd.target }), cmd.queue);
+        break;
+      }
+      case 'upgradeBelts': {
+        // W31: the plan validation made a moment ago, on this state (validate.ts planBeltUpgrades).
+        // Without Shift the queues are replaced once for the whole drag; each belt then gets its
+        // upgrade flag and one build order per unit, in drag order.
+        const plan = this.validatedResult<ReturnType<typeof planBeltUpgrades>>(cmd) ?? planBeltUpgrades(this, cmd);
+        if (typeof plan === 'string') break;
+        // W31 review: plan.units, the live ids each once, so every flagged belt gets its order
+        if (!cmd.queue) this.replaceQueues(plan.units);
+        for (const id of plan.ids) {
+          const b = this.buildings.slotForId(id);
+          if (b >= 0 && this.startUpgrade(b)) this.orderAll(plan.units, () => ({ t: 'build', id }), true);
+        }
         break;
       }
       case 'reclaim': {
@@ -540,7 +569,7 @@ export class World {
         this.callWaveEarly();
         break;
       case 'place':
-        this.placeBuilding(cmd.kind, cmd.tx, cmd.ty, true, cmd.dir ?? 0);
+        this.placeBuilding(cmd.kind, cmd.tx, cmd.ty, true, cmd.dir ?? 0, undefined, undefined, cmd.tier ?? 1);
         break;
       case 'buildRun': {
         // The plan validation made a moment ago, on this state (validate.ts).
@@ -553,15 +582,7 @@ export class World {
         // W25c (queue.ts header): without Shift the builders' queues are replaced before the run is
         // laid, so the own sites the plan keeps join the new run and dropOrphans (after this
         // command) finds them held again; the rest of the replaced orders' sites go as before.
-        if (!cmd.queue) {
-          for (const id of cmd.ids) {
-            const slot = this.units.slotForId(id);
-            if (slot < 0 || !this.orders[slot]?.length) continue;
-            this.dropped.push(...this.orders[slot]!);
-            this.orders[slot] = [];
-            this.paths[slot] = null;
-          }
-        }
+        if (!cmd.queue) this.replaceQueues(cmd.ids);
         if (full) {
           // C3: release first, keeping the sites the new run reuses, so the run and its sites fit;
           // the rest of the replaced orders' sites and runs go by the same rule as always
@@ -685,6 +706,17 @@ export class World {
     for (const k of Object.keys(src)) if (!keep.has(k)) self[k] = src[k];
   }
 
+  /** Empties the queues of units `ids` before an unshifted command's orders; the orders go to `dropped`. */
+  private replaceQueues(ids: readonly number[]): void {
+    for (const id of ids) {
+      const slot = this.units.slotForId(id);
+      if (slot < 0 || !this.orders[slot]?.length) continue;
+      this.dropped.push(...this.orders[slot]!);
+      this.orders[slot] = [];
+      this.paths[slot] = null;
+    }
+  }
+
   /** The result validation stored for `cmd` just now (validate.ts), or undefined. */
   validatedResult<T>(cmd: Command): T | undefined {
     return this.validated && this.validated.cmd === cmd ? (this.validated.result as T) : undefined;
@@ -738,9 +770,10 @@ export class World {
 
   /**
    * Places a building, or a construction site (reserved: no build power yet); returns its id, or
-   * -1 if the footprint is not free. `fw`, `fh` default to the kind's footprint.
+   * -1 if the footprint is not free. `fw`, `fh` default to the kind's footprint. W31: `tier` is a
+   * belt's speed (validated by the caller; a site laid above 1 costs the steps below, kinds.ts siteWork).
    */
-  placeBuilding(kind: number, tx: number, ty: number, complete: boolean, dir = 0, fw?: number, fh?: number): number {
+  placeBuilding(kind: number, tx: number, ty: number, complete: boolean, dir = 0, fw?: number, fh?: number, tier = 1): number {
     const info = buildingInfo(kind);
     const w0 = fw ?? info.fw;
     const h0 = fh ?? info.fh;
@@ -749,13 +782,13 @@ export class World {
     const slot = b.create();
     const c = b.cols;
     c.kind[slot] = kind;
-    c.tier[slot] = 1;
+    c.tier[slot] = tier;
     c.dir[slot] = dir & 3;
     c.tx[slot] = tx;
     c.ty[slot] = ty;
     c.fw[slot] = w0;
     c.fh[slot] = h0;
-    const max = this.maxHpAt(slot, 1);
+    const max = this.maxHpAt(slot, tier);
     c.maxHp[slot] = max;
     c.hp[slot] = complete ? max : max * 0.1;
     c.progress[slot] = complete ? 1 : 0;

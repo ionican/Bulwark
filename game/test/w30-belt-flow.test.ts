@@ -6,10 +6,13 @@
 // without a forward arrow. The belt phase advances by min(raw frame seconds × speed × belt speed,
 // 0.2) tiles a frame: 0 while paused, no jump on a reset or a rewind. The browser half (the drawn
 // texture, rendered motion, the chevrons' orientation) is scripts/check-belt-flow.mjs.
+// W31: belts have three speeds, each with its own surface material and phase; the phase test reads
+// the Slow surface (the fixture's belts are tier 1), which advances by min(raw seconds × speed,
+// 0.04) × 10/6 tiles a frame (test/w31-render.test.ts covers the three speeds together).
 
 import { describe, expect, it } from 'vitest';
 import { InstancedMesh, MeshStandardMaterial, Vector3, type Material, type Scene, type Texture } from 'three';
-import { B, BELT_TILES_PER_SECOND } from '../src/sim/kinds.ts';
+import { B, beltTilesPerSecond } from '../src/sim/kinds.ts';
 import { BELT_CORNER_L, BELT_CORNER_R, itemOnBelt } from '../src/render/beltShapes.ts';
 import { EffectClock, frameTimes, type BeltFrame } from '../src/render/anim.ts';
 import { standInMaterials } from '../src/render/materials.ts';
@@ -209,16 +212,17 @@ describe('W30 the splitter', () => {
     r.forcedLevel = 0;
     r.cull = false;
     r.update({ camera: camera(), viewportHeight: 900, yaw: 0, snapshot: fx.snap, aliens: mobile(fx.snap.aliens), units: mobile(fx.snap.units) });
-    const scrolling = r.materials.w17.belt;
+    // W31: none of the three speeds' scrolling surfaces (Fast is `belt`)
+    const scrollingAny = [r.materials.w17.belt, r.materials.w17.beltSlow, r.materials.w17.beltMedium];
     // KIND_SPOTS: the splitter at (56, 66), facing +z (direction 1)
     const at = meshesAt(scene, 56.5, 66.5);
     const body = at.filter((m) => !m.name.includes('Marker'));
     const marker = at.find((m) => m.name.startsWith('w17/splitterMarker/') && m.name.includes('ivory'));
     expect(body.length, 'the splitter body is drawn').toBeGreaterThan(0);
     for (const m of body) {
-      expect(m.material === scrolling, `${m.name}: not the scrolling belt material`).toBe(false);
+      expect(scrollingAny.includes(m.material as MeshStandardMaterial), `${m.name}: not a scrolling belt material`).toBe(false);
       const map = mapOf(m.material);
-      expect(map !== null && map === scrolling.map, `${m.name}: not the scrolling texture`).toBe(false);
+      expect(map !== null && scrollingAny.some((sm) => sm.map === map), `${m.name}: not a scrolling texture`).toBe(false);
     }
     expect(body.some((m) => !Array.isArray(m.material) && m.material.name.startsWith('belt')), `a belt surface at the splitter (${body.map((m) => m.name).join(', ')})`).toBe(true);
     expect(marker, 'the splitter marker is drawn').toBeDefined();
@@ -237,14 +241,16 @@ describe('W30 the splitter', () => {
 
 describe('W30 belt phase', () => {
   const runner = { speed: 1, paused: false, world: 0 };
-  /** The straight belt mesh's texture offset (the shared scrolling texture, as drawn). */
+  /** The straight belt mesh's texture offset (W31: the Slow surface's scrolling texture, as drawn). */
   const offsetY = (scene: Scene): number => {
     let y = NaN;
     scene.traverseVisible((o) => {
-      if (o instanceof InstancedMesh && o.name === 'w17/belt/belt-cut' && o.count > 0) y = mapOf(o.material)?.offset.y ?? NaN;
+      if (o instanceof InstancedMesh && o.name === 'w17/belt/slow/beltSlow-cut' && o.count > 0) y = mapOf(o.material)?.offset.y ?? NaN;
     });
     return y;
   };
+  /** W31: the Slow phase step of a frame of `seconds` × `speed` (the shared delta capped at 0.04 game-s). */
+  const slow = (seconds: number, speed = 1) => Math.min(seconds * speed, 0.04) * beltTilesPerSecond(1);
   /** One renderer frame with the belt's frame input; returns how far the drawn pattern moved forward (tiles, mod 1). */
   const frame = (r: ModelRenderer, scene: Scene, snap: Snapshot, belt: BeltFrame, dt = Math.min(0.1, belt.seconds)): number => {
     const before = offsetY(scene);
@@ -268,41 +274,40 @@ describe('W30 belt phase', () => {
     return { r, scene, snap, early };
   };
 
-  it('advances min(frame seconds × speed × 4, 0.2) tiles a frame through the drawn texture; 0 while paused; no jump on a reset or a rewind', async () => {
+  it('advances min(frame seconds × speed, 0.04) × 10/6 tiles a frame (Slow) through the drawn texture; 0 while paused; no jump on a reset or a rewind', async () => {
     const { r, scene, snap, early } = setup();
-    expect(BELT_TILES_PER_SECOND).toBe(4);
-    // 60 fps at 1×: 1/15 tile a frame (non-integral: a stationary or reversed phase fails)
-    for (let k = 0; k < 5; k++) expect(frame(r, scene, snap, { seconds: 1 / 60, ...runner }), `60 fps frame ${k}`).toBeCloseTo(1 / 15, 6);
-    // 0.1 s frames at 1×: 0.4 tile uncapped, capped at 0.2
-    for (let k = 0; k < 4; k++) expect(frame(r, scene, snap, { seconds: 0.1, ...runner }), `0.1 s frame ${k}`).toBeCloseTo(0.2, 6);
+    // 60 fps at 1×: 1/36 tile a frame (non-integral: a stationary or reversed phase fails)
+    for (let k = 0; k < 5; k++) expect(frame(r, scene, snap, { seconds: 1 / 60, ...runner }), `60 fps frame ${k}`).toBeCloseTo(slow(1 / 60), 6);
+    // 0.1 s frames at 1×: 0.1 game-s uncapped, capped at 0.04: 1/15 tile
+    for (let k = 0; k < 4; k++) expect(frame(r, scene, snap, { seconds: 0.1, ...runner }), `0.1 s frame ${k}`).toBeCloseTo(slow(0.1), 6);
     // the phase the renderer keeps moves the same way
-    const flow = (r as unknown as { beltFlow: { phase: number; step: number } }).beltFlow;
-    const ph = flow.phase;
+    const flow = (r as unknown as { beltFlow: { phases: number[] } }).beltFlow;
+    const ph = flow.phases[1]!;
     frame(r, scene, snap, { seconds: 1 / 60, ...runner });
-    expect(flow.phase - ph, 'the renderer’s phase').toBeCloseTo(1 / 15, 6);
-    // 20 fps and 30 fps at 10×: every frame moves forward, at most 0.2 tile (under half the 0.5-tile chevron period)
+    expect(flow.phases[1]! - ph, 'the renderer’s phase').toBeCloseTo(slow(1 / 60), 6);
+    // 20 fps and 30 fps at 10×: every frame moves forward, at most 0.04 × 10/6 tile (under half the 1-tile Slow chevron period)
     for (const fps of [20, 30])
       for (let k = 0; k < 6; k++) {
         const d = frame(r, scene, snap, { seconds: 1 / fps, speed: 10, paused: false, world: 0 });
         expect(d, `${fps} fps at 10×, frame ${k}`).toBeGreaterThan(0);
-        expect(d, `${fps} fps at 10×, frame ${k}`).toBeLessThanOrEqual(0.2 + 1e-9);
+        expect(d, `${fps} fps at 10×, frame ${k}`).toBeLessThanOrEqual(slow(1) + 1e-9);
       }
     // paused
     for (let k = 0; k < 3; k++) expect(frame(r, scene, snap, { seconds: 1 / 60, speed: 1, paused: true, world: 0 }), `paused frame ${k}`).toBe(0);
     // a rewind (the tick goes back) and a reset (a new world epoch): no jump, then running again
     expect(frame(r, scene, early, { seconds: 0.1, ...runner }), 'the rewind frame').toBe(0);
-    expect(frame(r, scene, early, { seconds: 1 / 60, ...runner }), 'the frame after the rewind').toBeCloseTo(1 / 15, 6);
+    expect(frame(r, scene, early, { seconds: 1 / 60, ...runner }), 'the frame after the rewind').toBeCloseTo(slow(1 / 60), 6);
     expect(frame(r, scene, early, { seconds: 0.1, speed: 1, paused: false, world: 1 }), 'the reset frame').toBe(0);
-    expect(frame(r, scene, early, { seconds: 1 / 60, speed: 1, paused: false, world: 1 }), 'the frame after the reset').toBeCloseTo(1 / 15, 6);
+    expect(frame(r, scene, early, { seconds: 1 / 60, speed: 1, paused: false, world: 1 }), 'the frame after the reset').toBeCloseTo(slow(1 / 60), 6);
   });
 
-  it('main.ts’s frame path: a single 200 ms raw frame advances 0.2 at 1× (the cap) and at ¼× (0.1 with the 0.1 s-capped dt)', () => {
+  it('main.ts’s frame path: a single 200 ms raw frame advances the capped step at 1× and at ¼× (0.05 game-s, capped at 0.04)', () => {
     const { r, scene, snap } = setup();
     const t = frameTimes(1200, 1000, runner);
     expect(t.dt, 'main.ts’s own dt stays capped at 0.1 s').toBeCloseTo(0.1, 9);
     expect(t.belt.seconds, 'the belt gets the raw frame time').toBeCloseTo(0.2, 9);
-    expect(frame(r, scene, snap, t.belt, t.dt), '200 ms at 1×').toBeCloseTo(0.2, 6);
+    expect(frame(r, scene, snap, t.belt, t.dt), '200 ms at 1×').toBeCloseTo(slow(0.2), 6);
     const q = frameTimes(1200, 1000, { ...runner, speed: 0.25 });
-    expect(frame(r, scene, snap, q.belt, q.dt), '200 ms at ¼×').toBeCloseTo(0.2, 6);
+    expect(frame(r, scene, snap, q.belt, q.dt), '200 ms at ¼×').toBeCloseTo(slow(0.2, 0.25), 6);
   });
 });

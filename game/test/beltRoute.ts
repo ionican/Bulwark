@@ -9,20 +9,28 @@
 //   - it ends on a cell pointing into the core, or, when `join` allows, on a cell pointing into an
 //     earlier route's tile from behind or the side (a belt never takes from the tile it faces),
 //     provided the line from there to the core can move every extractor on it at full output
-//     (boosted mass), so a joined line does not back up into idle extractors;
+//     (boosted mass), so a joined line does not back up into idle extractors. W31: a section's
+//     capacity is its planned speed's (lineCapacity: 10 ÷ ticks per tile items a second, Slow 1.67,
+//     Medium 2.5, Fast 3.33); every route of one call is planned at `tier` (default 1, Slow, the
+//     speed map 1's plans lay). `report` collects each accepted join's downstream loads;
 //   - it keeps off the cells beside a depot or a salvage machine, which would put salvage, scrap,
 //     alloy or parts on the line, and the core refuses those, which stops the line.
 // Routes are planned in the order given and each one keeps off the tiles of the earlier ones.
 
-import { B, BDX as DX, BDZ as DZ, BELT_TILES_PER_SECOND, TICK_SECONDS, buildingInfo } from '../src/sim/kinds.ts';
+import { B, BDX as DX, BDZ as DZ, BELT_TICKS_PER_TILE, TICK_SECONDS, buildingInfo } from '../src/sim/kinds.ts';
 import { Tuning, extractorRate } from '../src/sim/tuning.ts';
 import type { World } from '../src/sim/world.ts';
 
 /** One belt tile: x, z and the direction it carries (0 +x, 1 +z, 2 −x, 3 −z). */
 export type BeltTile = [number, number, number];
 
-/** Items a belt line moves per second: an item crosses a tile in whole ticks (conveyor.ts). */
-const LINE_CAPACITY = 1 / (Math.ceil(1 / (BELT_TILES_PER_SECOND * TICK_SECONDS) - 1e-9) * TICK_SECONDS);
+/** Items a belt section of `tier` moves per second: an item crosses a tile in whole ticks (conveyor.ts). */
+export const lineCapacity = (tier: number): number => 1 / (BELT_TICKS_PER_TILE[tier]! * TICK_SECONDS);
+
+/** W31: the joins a call accepted, each with the combined load and the capacity of every tile downstream of it. */
+export interface RouteReport {
+  joins: Array<{ route: number; at: [number, number]; loads: number[]; capacities: number[] }>;
+}
 /** An extractor's output at its best (mass with the extractors research). */
 const PEAK = { tuning: new Tuning(), researched: () => true };
 const peakRate = (kind: number) => extractorRate(PEAK, kind);
@@ -35,6 +43,10 @@ export interface RouteOptions {
    * only when it cannot. 'nearest': whichever end is nearer, which lays fewer tiles.
    */
   join?: 'fallback' | 'nearest';
+  /** W31: the belt speed every route is planned at (1 Slow, 2 Medium, 3 Fast; default 1). */
+  tier?: number;
+  /** W31: filled with each accepted join (test 13 checks the loads). */
+  report?: RouteReport;
 }
 
 /** For each extractor [kind, tx, ty], its belt tiles from the extractor to the core, or null when no route exists. */
@@ -49,6 +61,7 @@ export function beltRoutesToCore(w: World, extractors: Array<[number, number, nu
   const cx1 = cx0 + c.fw[core]!;
   const cz1 = cz0 + c.fh[core]!;
   const inCore = (x: number, z: number) => x >= cx0 && x < cx1 && z >= cz0 && z < cz1;
+  const capacity = lineCapacity(opts.tier ?? 1);
 
   const blocked = new Uint8Array(W * H);
   const block = (x: number, z: number) => {
@@ -134,7 +147,7 @@ export function beltRoutesToCore(w: World, extractors: Array<[number, number, nu
   };
   /** An earlier route's tile at (x, z) takes from a tile carrying direction d into it (behind or the side, not head-on). */
   const joinable = (x: number, z: number, d: number) =>
-    x >= 0 && z >= 0 && x < W && z < H && laid[z * W + x] !== -1 && laid[z * W + x] !== (d + 2) % 4 && downstream(x, z).every((i) => load[i]! + rate <= LINE_CAPACITY + 1e-9);
+    x >= 0 && z >= 0 && x < W && z < H && laid[z * W + x] !== -1 && laid[z * W + x] !== (d + 2) % 4 && downstream(x, z).every((i) => load[i]! + rate <= capacity + 1e-9);
   /** The route ending at cell `last` carrying `d`, from its source. */
   const trace = (last: number, d: number): BeltTile[] => {
     const out: BeltTile[] = [];
@@ -150,7 +163,7 @@ export function beltRoutesToCore(w: World, extractors: Array<[number, number, nu
     return out.reverse();
   };
 
-  return extractors.map(([kind, tx, ty]) => {
+  return extractors.map(([kind, tx, ty], k) => {
     rate = peakRate(kind);
     const route =
       opts.join === 'nearest' ? search(kind, tx, ty, true) : (search(kind, tx, ty, false) ?? search(kind, tx, ty, true));
@@ -160,7 +173,10 @@ export function beltRoutesToCore(w: World, extractors: Array<[number, number, nu
       load[z * W + x] = rate;
     }
     const [lx, lz, ld] = route[route.length - 1]!;
-    for (const i of downstream(lx + DX[ld]!, lz + DZ[ld]!)) load[i] += rate;
+    const below = downstream(lx + DX[ld]!, lz + DZ[ld]!);
+    for (const i of below) load[i] += rate;
+    if (below.length && opts.report)
+      opts.report.joins.push({ route: k, at: [lx + DX[ld]!, lz + DZ[ld]!], loads: below.map((i) => load[i]!), capacities: below.map(() => capacity) });
     return route;
   });
 }

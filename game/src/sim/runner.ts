@@ -11,6 +11,7 @@ import { TICK_HZ } from './kinds.ts';
 import { deserializeWorld, serializeWorld } from './save.ts';
 import type { Command, StampedCommand } from './commands.ts';
 import { planRun } from './runs.ts';
+import type { planBeltUpgrades } from './validate.ts';
 
 export interface Checkpoint {
   /** Wave number (1-based) that starts on this tick. */
@@ -31,7 +32,7 @@ export interface CommandResult {
   tick: number;
   cmd: Command;
   reason?: string;
-  /** buildRun: tiles laid and tiles skipped. */
+  /** buildRun: tiles laid and tiles skipped. upgradeBelts (W31): upgrades per speed and skips per reason. */
   detail?: Record<string, unknown>;
 }
 
@@ -84,6 +85,10 @@ export class SimRunner {
     if (s.cmd.t === 'buildRun') {
       const plan = w.validatedResult<ReturnType<typeof planRun>>(s.cmd);
       if (plan && typeof plan !== 'string') detail = { tiles: plan.tiles.length, skipped: plan.skipped, axis: plan.axis, start: plan.start };
+    } else if (s.cmd.t === 'upgradeBelts') {
+      // W31: the drag-upgrade plan made when it applied (validate.ts planBeltUpgrades).
+      const plan = w.validatedResult<ReturnType<typeof planBeltUpgrades>>(s.cmd);
+      if (plan && typeof plan !== 'string') detail = { upgrades: plan.ids.length, toMedium: plan.toMedium, toFast: plan.toFast, skipped: { ...plan.skipped } };
     }
     this.onResult?.({ ref, ok: true, tick: w.tick, cmd: s.cmd, detail });
   }

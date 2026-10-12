@@ -28,6 +28,9 @@
 // core is appended to the building kinds (stats.ts statsFromOlderKinds; tuning only grows at its end).
 // From version 4 a save records its building, unit and alien kind counts (`kinds`), and the stats
 // are remapped whenever they differ from this build's; a save without them has the pre-W29 counts.
+// W31 left the format alone: a belt's speed is its `tier`, a column every save already has, and
+// every belt saved before W31 has tier 1, so it loads Slow. A belt whose tier is not 1..3 fails the
+// load with SaveBeltTierError (the conveyor has no clamp, so it would move items wrongly).
 
 import { World, type PendingGroup, type Route, type ScenarioName } from './world.ts';
 import type { WallRun } from './runs.ts';
@@ -38,6 +41,7 @@ import type { AnyTypedArray, FieldSpec, Table } from './table.ts';
 import type { StampedCommand } from './commands.ts';
 import type { Order } from './units.ts';
 import { KIND_COUNTS, statsFromOlderKinds, type KindCounts } from './stats.ts';
+import { B, BELT_TOP_TIER, isBeltTier } from './kinds.ts';
 
 export const SAVE_MAGIC = 0x534b5742; // "BWKS"
 export const SAVE_VERSION = 4;
@@ -55,6 +59,14 @@ const PRE_W29_KINDS: KindCounts = { buildings: 19, units: 2, aliens: 4 };
 const W29_ALIEN_COLUMNS = new Set(['pass', 'passUntil']);
 
 export class SaveVersionError extends Error {}
+
+/** W31: a belt in the save has a tier (speed) outside 1..3. */
+export class SaveBeltTierError extends SaveVersionError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SaveBeltTierError';
+  }
+}
 
 type BlobType = 'f64' | 'f32' | 'i32' | 'u32' | 'i16' | 'u16' | 'u8' | 'i8';
 interface BlobRef {
@@ -270,6 +282,7 @@ export function deserializeWorld(input: Uint8Array | ArrayBuffer): World {
       cols[f.name] = version < 4 && name === 'aliens' && W29_ALIEN_COLUMNS.has(f.name) && !blob.has(`${name}.${f.name}`) ? new Array<number>(meta.highWater).fill(0) : get(`${name}.${f.name}`);
     t.importState({ count: meta.count, highWater: meta.highWater, free: get(`${name}.free`), alive: get(`${name}.alive`), gen: get(`${name}.gen`), cols });
   }
+  checkBeltTiers(w);
   w.pool.set(get('pool'));
   w.incomeRate.set(get('incomeRate'));
   w.spendRate.set(get('spendRate'));
@@ -332,4 +345,14 @@ export function deserializeWorld(input: Uint8Array | ArrayBuffer): World {
   Object.assign(w.debug, state.debug);
   w.beltsDirty = true; // the belt order depends only on the buildings present
   return w;
+}
+
+/** W31: throws SaveBeltTierError for the first belt whose tier is not 1..3 (header). */
+function checkBeltTiers(w: World): void {
+  const b = w.buildings;
+  const c = b.cols;
+  for (let s = 0; s < b.highWater; s++) {
+    if (!b.alive[s] || c.kind[s] !== B.belt || isBeltTier(c.tier[s])) continue;
+    throw new SaveBeltTierError(`Save has a conveyor belt (building ${b.id(s)} at ${c.tx[s]},${c.ty[s]}) with tier ${c.tier[s]}; belt tiers are 1..${BELT_TOP_TIER}.`);
+  }
 }

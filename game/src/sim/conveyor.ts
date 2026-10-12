@@ -1,8 +1,13 @@
 // Advanced-part chain: salvage depot -> one-lane belts -> machines -> parts stock.
 //
-// Belts hold one item per tile; an item crosses a tile at BELT_TILES_PER_SECOND and then moves to
-// the tile ahead if that slot is free, otherwise it waits at the end of its tile, so a blocked
-// machine backs the belt up tile by tile. Belts take items from behind and from either side (not
+// Belts hold one item per tile; an item crosses a tile in its belt's crossing time and then moves
+// to the tile ahead if that slot is free, otherwise it waits at the end of its tile, so a blocked
+// machine backs the belt up tile by tile. W31: the crossing time is the belt's tier's (kinds.ts
+// BELT_TICKS_PER_TILE: Slow 6 ticks, Medium 4, Fast 3; its position rises by BELT_STEP a tick);
+// splitter and merger cross at the Fast step. A slower tile downstream backs faster ones up, so a
+// mixed line carries what its slowest tile does. An item entering a tile does not move that tick
+// (`moved`), and producers run before belts, so a producer-fed line delivers once per crossing
+// time + 1 tick. Belts take items from behind and from either side (not
 // from the front). A splitter sends items alternately to its left and right; a merger takes from
 // behind, left and right in turn when more than one input is waiting.
 // A machine takes items from a belt pointing into it (only its input kind; capacity two batches),
@@ -16,11 +21,12 @@
 // item, and everything while disabled, so the belt backs up.
 
 import { BF_ACTIVE, BF_COMPLETE, BF_DISABLED, BF_STARVED } from './schema.ts';
-import { B, BDX, BDZ, BELT_TILES_PER_SECOND, ITEM_MASS, ITEM_NONE, ITEM_PART, ITEM_RARE, ITEM_SALVAGE, TICK_SECONDS, buildingInfo, isBelt, isExtractor, outputDirs, outputRing } from './kinds.ts';
+import { B, BDX, BDZ, BELT_STEP, BELT_TOP_TIER, ITEM_MASS, ITEM_NONE, ITEM_PART, ITEM_RARE, ITEM_SALVAGE, TICK_SECONDS, buildingInfo, isBelt, isExtractor, outputDirs, outputRing } from './kinds.ts';
 import type { World } from './world.ts';
 
 const DT = TICK_SECONDS;
-const SPEED = BELT_TILES_PER_SECOND * DT;
+/** Splitter and merger: the Fast belt's step. */
+const JUNCTION_STEP = BELT_STEP[BELT_TOP_TIER];
 /** An extractor buffer this close to 1 holds a whole item (f32 sums of 0.1 land either side of 1). */
 const WHOLE = 1 - 1e-4;
 
@@ -194,7 +200,7 @@ export function stepConveyors(w: World): void {
   for (let i = 0; i < w.beltOrder.length; i++) {
     const s = w.beltOrder[i]!;
     if (!b.alive[s] || !isComplete(w, s) || c.item[s] === ITEM_NONE) continue;
-    if (c.moved[s] !== w.tick) c.itemPos[s] = Math.min(1, c.itemPos[s]! + SPEED);
+    if (c.moved[s] !== w.tick) c.itemPos[s] = Math.min(1, c.itemPos[s]! + (c.kind[s] === B.belt ? BELT_STEP[c.tier[s]!]! : JUNCTION_STEP));
     if (c.itemPos[s]! < 1) continue;
     const here = c.ty[s]! * W + c.tx[s]!;
     const item = c.item[s]!;

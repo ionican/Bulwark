@@ -1,6 +1,10 @@
 // Build bar and debug controls (DOM). Labels are text, so nothing depends on colour.
+// W31: the bar is a list of entries, not kinds: the belt has three, "Belt — Slow", "Belt — Medium"
+// and "Belt — Fast", each its own button (ids beltSlow, beltMedium, beltFast; data-kind "belt" and
+// data-tier 1..3). A locked entry is disabled and says "✕ needs <research>" (entryLock).
 
-import { ALIEN_KINDS, ALIEN_INFO, BUILDING_INFO, type BuildingKind } from '../sim/kinds.ts';
+import { ALIEN_KINDS, ALIEN_INFO, BELT_SPEED_NAMES, BUILDING_INFO, beltLaidWork, type BuildingKind } from '../sim/kinds.ts';
+import { BUILD_REQUIRES, RESEARCH, RESEARCH_INDEX, tierRequires } from '../sim/balance.ts';
 
 const css = `
 .bar{position:fixed;left:50%;bottom:8px;transform:translateX(-50%);display:flex;gap:10px;align-items:flex-end;
@@ -24,17 +28,46 @@ export const BUILD_GROUPS: Array<[string, BuildingKind[]]> = [
   ['DEFENCE', ['wall', 'gun', 'area', 'beam', 'heavy', 'shield']],
 ];
 
+/** W31: one build-bar button: a kind, laid at `tier` (belts 1..3; every other kind 1). */
+export interface BuildEntry {
+  id: string;
+  kind: BuildingKind;
+  tier: number;
+  label: string;
+  /** Hotkey shown on the button ('' none). */
+  key: string;
+}
+
+/** The build-bar entry id of `kind` at `tier`: the kind's name, a belt's "beltSlow" / "beltMedium" / "beltFast". */
+export const entryId = (kind: BuildingKind, tier = 1): string => (kind === 'belt' ? `belt${BELT_SPEED_NAMES[tier]}` : kind);
+
+/** BUILD_GROUPS as entries: each kind once, the belt once per speed. */
+export const BUILD_ENTRIES: Array<[string, BuildEntry[]]> = BUILD_GROUPS.map(([title, kinds]) => [
+  title,
+  kinds.flatMap((k): BuildEntry[] => {
+    const info = BUILDING_INFO[k];
+    if (k !== 'belt') return [{ id: entryId(k), kind: k, tier: 1, label: info.label, key: info.key }];
+    return [1, 2, 3].map((tier) => ({ id: entryId(k, tier), kind: k, tier, label: `Belt — ${BELT_SPEED_NAMES[tier]}`, key: info.key }));
+  }),
+]);
+
+/** The research an entry still needs (its label), or null: a kind's research, or a belt speed's. */
+export function entryLock(e: Pick<BuildEntry, 'kind' | 'tier'>, researched: (id: string) => boolean): string | null {
+  const req = e.kind === 'belt' ? tierRequires('belt', e.tier) : BUILD_REQUIRES[e.kind];
+  return req && !researched(req) ? RESEARCH[RESEARCH_INDEX[req]!]!.label : null;
+}
+
 /** Test-group sizes for the debug spawn buttons (W12 wave 2–5 scale). */
 export const TEST_GROUP: Record<string, number> = { rusher: 16, hunter: 4, breaker: 3, saboteur: 6 };
 
-/** A kind's cost as the bar shows it: "0.5M 0E" for a belt tile (fractions as they are, never rounded). */
-export const costLabel = (k: BuildingKind) => {
-  const [m, e, r] = BUILDING_INFO[k].cost;
+/** A kind's cost as the bar shows it: "0.5M 0E" for a belt tile (fractions as they are, never rounded); W31: a belt at `tier` costs its laid cost. */
+export const costLabel = (k: BuildingKind, tier = 1) => {
+  const [m, e, r] = k === 'belt' ? beltLaidWork(tier).cost : BUILDING_INFO[k].cost;
   return `${m}M ${e}E${r ? ` ${r}R` : ''}`;
 };
 
 export interface BuildBarHandlers {
-  build(kind: BuildingKind): void;
+  build(kind: BuildingKind, tier: number): void;
   upgrade(): void;
   produce(): void;
   dropTurret(): void;
@@ -44,6 +77,10 @@ export interface BuildBarHandlers {
 
 export class BuildBar {
   private readonly buttons = new Map<string, HTMLButtonElement>();
+  private readonly entries = new Map<string, BuildEntry>();
+  /** Each entry's lock (entryLock) for the research mask `lockMask`; worked out again when the mask changes. */
+  private readonly locks = new Map<string, string | null>();
+  private lockMask = -1;
   private readonly hint: HTMLDivElement;
 
   constructor(h: BuildBarHandlers, entries: string[]) {
@@ -53,18 +90,21 @@ export class BuildBar {
     const bar = document.createElement('div');
     bar.className = 'bar';
     bar.addEventListener('pointerdown', (e) => e.stopPropagation());
-    for (const [title, kinds] of BUILD_GROUPS) {
+    for (const [title, entries] of BUILD_ENTRIES) {
       const g = this.group(bar, title);
-      for (const k of kinds) {
-        const info = BUILDING_INFO[k];
-        const b = this.button(g, `${info.label} [${info.key.toUpperCase()}]`, costLabel(k), () => h.build(k));
-        b.dataset.kind = k;
-        b.dataset.cost = costLabel(k);
-        this.buttons.set(k, b);
+      for (const e of entries) {
+        const cost = costLabel(e.kind, e.tier);
+        const b = this.button(g, `${e.label}${e.key ? ` [${e.key.toUpperCase()}]` : ''}`, cost, () => h.build(e.kind, e.tier));
+        b.dataset.kind = e.kind;
+        if (e.kind === 'belt') b.dataset.tier = String(e.tier);
+        b.dataset.entry = e.id;
+        b.dataset.cost = cost;
+        this.buttons.set(e.id, b);
+        this.entries.set(e.id, e);
       }
     }
     const act = this.group(bar, 'ENGINEERS');
-    this.buttons.set('upgrade', this.button(act, 'Upgrade [U]', 'click a wall or turret', () => h.upgrade()));
+    this.buttons.set('upgrade', this.button(act, 'Upgrade [U]', 'click a wall, turret or belt', () => h.upgrade()));
     this.buttons.set('produce', this.button(act, 'Produce engineer', 'commander: 60M 200E', () => h.produce()));
     this.buttons.set('turret', this.button(act, 'Drop turret [T]', '75 s cooldown', () => h.dropTurret()));
     this.buttons.set('stop', this.button(act, 'Stop [X]', 'clear orders', () => h.stop()));
@@ -110,10 +150,18 @@ export class BuildBar {
     return b;
   }
 
-  /** Enables the bar for builders; marks the active tool; marks kinds still locked by research. */
-  update(canBuild: boolean, hasEngineers: boolean, hasCommander: boolean, active: string | null, hint: string, locked: (kind: string) => string | null) {
+  /**
+   * Enables the bar for builders; marks the active tool (an entry id or 'upgrade'); marks entries
+   * still locked by research (`researched` takes a research id; `researchMask` is the done mask it
+   * reads, so the locks are worked out again only when it changes).
+   */
+  update(canBuild: boolean, hasEngineers: boolean, hasCommander: boolean, active: string | null, hint: string, researchMask: number, researched: (id: string) => boolean) {
+    if (researchMask !== this.lockMask) {
+      this.lockMask = researchMask;
+      for (const [k, e] of this.entries) this.locks.set(k, entryLock(e, researched));
+    }
     for (const [k, b] of this.buttons) {
-      const lock = locked(k);
+      const lock = this.locks.get(k) ?? null;
       b.disabled = k === 'upgrade' || k === 'turret' ? !hasEngineers : k === 'produce' ? !hasCommander : !canBuild || lock !== null;
       b.classList.toggle('on', k === active);
       b.title = lock ? `Locked: needs research "${lock}"` : '';

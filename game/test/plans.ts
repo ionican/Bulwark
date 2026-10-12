@@ -6,12 +6,13 @@
 import { World } from '../src/sim/world.ts';
 import { B, U, buildingInfo, isExtractor } from '../src/sim/kinds.ts';
 import { createWorld } from '../src/sim/scenarios.ts';
-import { beltRoutesToCore } from './beltRoute.ts';
+import { beltRoutesToCore, type RouteReport } from './beltRoute.ts';
 import { BF_COMPLETE } from '../src/sim/schema.ts';
 import { RESEARCH } from '../src/sim/balance.ts';
 
 type Action =
-  | { build: number; at: [number, number]; dir?: number }
+  /** W31: `tier` lays a belt at that speed (default 1, Slow). */
+  | { build: number; at: [number, number]; dir?: number; tier?: number }
   | { upgrade: [number, number] }
   | { research: string }
   | { engineer: true };
@@ -36,7 +37,7 @@ const wallsZ = (min: number, x: number, zs: number[]) => zs.map((z) => b(min, B.
 // a core of guns, area cannons, beams and shields stands round him. Economy and the salvage chain
 // sit south of the centre; two guarded rare points north, one east. W12's balanced plan, on tiles,
 // without the W29 belt lines (BALANCED below is withBelts of it).
-const BALANCED_BASE: PlanStep[] = [
+export const BALANCED_BASE: PlanStep[] = [
   // Minute 0: the north rare points first (rare material gates research and every advanced
   // defence), a gun between them, then economy and a first north defence.
   b(0, B.massExtractor, 54, 50),
@@ -75,21 +76,10 @@ const BALANCED_BASE: PlanStep[] = [
   r(3, 'gunT2'),
   b(4, B.area, 63, 49),
   b(4, B.generator, 72, 66),
-  // Minute 5: the salvage chain along z = 74: depot -> shredder -> smelter -> assembler.
-  b(5, B.depot, 48, 74),
-  b(5, B.belt, 50, 74),
-  b(5, B.belt, 51, 74),
-  b(5, B.shredder, 52, 74),
-  b(5, B.belt, 54, 74),
-  b(5, B.belt, 55, 74),
-  b(5, B.smelter, 56, 74),
-  b(5, B.belt, 58, 74),
-  b(5, B.belt, 59, 74),
-  b(5, B.assembler, 60, 74),
+  // W31: the salvage chain and the two far mass extractors moved from minutes 5–6 to minute 15
+  // (below), because Slow belts put the early economy 1–2 minutes behind.
   eng(5),
   eng(5),
-  b(6, B.massExtractor, 36, 40),
-  b(6, B.massExtractor, 92, 84),
   b(6, B.generator, 55, 69),
   b(6, B.generator, 72, 69),
   // The core round the commander: area cannons, beams (prefer hunters), shields.
@@ -116,8 +106,23 @@ const BALANCED_BASE: PlanStep[] = [
   eng(14),
   eng(14),
   b(14, B.gun, 63, 56),
+  // W31: moved from minute 6. Their lines are long (77 and 47 Slow tiles) and pay back slowly.
+  b(15, B.massExtractor, 36, 40),
+  b(15, B.massExtractor, 92, 84),
   b(15, B.heavy, 79, 67),
   b(15, B.beam, 80, 57),
+  // The salvage chain along z = 74: depot -> shredder -> smelter -> assembler. W31: moved from
+  // minute 5; a heavy cannon (the first is at minute 10) cannot fire until the chain makes parts.
+  b(15, B.depot, 48, 74),
+  b(15, B.belt, 50, 74),
+  b(15, B.belt, 51, 74),
+  b(15, B.shredder, 52, 74),
+  b(15, B.belt, 54, 74),
+  b(15, B.belt, 55, 74),
+  b(15, B.smelter, 56, 74),
+  b(15, B.belt, 58, 74),
+  b(15, B.belt, 59, 74),
+  b(15, B.assembler, 60, 74),
   b(16, B.gun, 56, 46),
   b(16, B.shield, 60, 66),
   b(17, B.shield, 67, 66),
@@ -182,8 +187,15 @@ for (const min of [20, 20, 26, 26, 32, 32, 38, 38]) BALANCED_BASE.push(eng(min))
 // and an earlier line with room: the planned buildings round the base leave few free input cells, and
 // routing every line into the core sends the 73,29 rare line 81 tiles round the base, which held
 // the minute-4 builds back far enough that the plan lost at wave 5 (13:27).
+// W31: every line is planned and laid Slow (tier 1, the default), and a join is accepted only if the
+// peak output of everything downstream fits a Slow section (1.67 items/s: one boosted mass extractor
+// and a rare one, not two mass). Slow lines also drain a buffer that filled before the line was
+// finished at 0.43 items/s, not 1.5, so the early economy runs 1–2 minutes behind W29's; the plan
+// keeps its defences on time by laying the salvage chain and the two far mass extractors at
+// minute 15, not 5–6 (balanced: won at 53:39, commander 3,800 hp; W29's order on Slow belts lost
+// at wave 5, 13:26).
 /** `plan` with a belt line queued after each of its extractors (a new array; `plan` is unchanged). */
-export function withBelts(plan: PlanStep[]): PlanStep[] {
+export function withBelts(plan: PlanStep[], opts: { tier?: number; report?: RouteReport; first?: boolean } = {}): PlanStep[] {
   const out = plan.slice();
   const planned: Array<[number, number, number]> = [];
   const extractors: number[] = [];
@@ -198,13 +210,13 @@ export function withBelts(plan: PlanStep[]): PlanStep[] {
       const a = out[i]!.act as { build: number; at: [number, number] };
       return [a.build, a.at[0], a.at[1]];
     }),
-    { planned, join: 'nearest' },
+    { planned, join: 'nearest', tier: opts.tier ?? 1, report: opts.report },
   );
   for (let k = extractors.length - 1; k >= 0; k--) {
     const i = extractors[k]!;
     const line = lines[k];
     if (!line) throw new Error(`plans: no belt route from the extractor at ${(out[i]!.act as { at: number[] }).at}`);
-    out.splice(i + 1, 0, ...line.map(([x, z, d]) => b(out[i]!.min, B.belt, x, z, d)));
+    out.splice(opts.first ? i : i + 1, 0, ...line.map(([x, z, d]): PlanStep => ({ min: out[i]!.min, act: { build: B.belt, at: [x, z], dir: d, tier: opts.tier ?? 1 } })));
   }
   return out;
 }
@@ -274,13 +286,13 @@ export function drive(w: World, plan: PlanStep[], opts: { maxTicks?: number; rec
           if (issued[i]) {
             // Rebuild if it was destroyed (and the tiles are free again).
             if (occAt(tx, ty) < 0 && w.canPlace(a.build, tx, ty) && !w.queue.some((q) => q.cmd.t === 'build' && q.cmd.tx === tx && q.cmd.ty === ty)) {
-              if (w.submit({ t: 'build', ids: buildersFor(tx, ty), kind: a.build, tx, ty, dir: a.dir ?? 0, queue: true }) === null) builtAt.set(i, 'rebuilt');
+              if (w.submit({ t: 'build', ids: buildersFor(tx, ty), kind: a.build, tx, ty, dir: a.dir ?? 0, tier: a.tier, queue: true }) === null) builtAt.set(i, 'rebuilt');
             }
             return;
           }
           // A player waits for the rare material rather than parking the builders on a starved site.
           if (buildingInfo(a.build).cost[2] > w.pool[2]!) return;
-          const why = w.submit({ t: 'build', ids: buildersFor(tx, ty), kind: a.build, tx, ty, dir: a.dir ?? 0, queue: true });
+          const why = w.submit({ t: 'build', ids: buildersFor(tx, ty), kind: a.build, tx, ty, dir: a.dir ?? 0, tier: a.tier, queue: true });
           if (why === null) issued[i] = true;
           else if (!/needs research|queue full/.test(why)) {
             issued[i] = true;

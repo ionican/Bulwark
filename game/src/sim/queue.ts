@@ -36,6 +36,13 @@
 // wall run with a full run table can be planned first (replacementProblem): the runs and sites the
 // replacement releases, by the same rule (a gate site is never released), less the sites the new
 // run keeps in place. Capacity is credited only for what will actually be removed.
+//
+// W31: a belt's tier (its speed) is part of a reserved site's identity. ownReservedSite takes the
+// tier the build asks for, so an unshifted Fast build never takes over a Slow site. heldReservedSite
+// is the same holding rule without the tier: when the issuers alone hold a reserved belt site of
+// another speed on that tile, an unshifted build may replace it (world.ts apply 'build': the queues
+// are replaced, dropOrphans frees the old site, then the new one is placed). Anything else at a
+// different speed is refused ("a Slow belt site is already planned here"), never silently reused.
 
 import { B, buildingFootprint } from './kinds.ts';
 import { newSites, runById, runCapacityProblem, type RunCommand, type RunPlan } from './runs.ts';
@@ -194,14 +201,27 @@ export interface SiteSource extends QueueSource {
   liveId(u: number): number;
   /** Id of the reserved site of exactly `kind` (its own footprint) anchored at (tx, ty) facing `dir`, or -1. */
   reservedSiteAt(kind: number, tx: number, ty: number, dir: number): number;
+  /** W31: tier of building `id` (a belt's speed), or 0 when it does not exist. */
+  tierOf(id: number): number;
 }
 
 /**
  * Run 3 C2: the reserved site an unshifted build of `kind` at (tx, ty) facing `dir` by units `ids`
  * takes over, or -1. Only without `queue`; the site must be held (a build order on it, or a run
  * order on a run it belongs to) by at least one live unit in `ids` and by no live unit outside them.
+ * W31: and it must be at `tier` (a belt's speed).
  */
-export function ownReservedSite(src: SiteSource, ids: readonly number[], kind: number, tx: number, ty: number, dir: number, queue: boolean): number {
+export function ownReservedSite(src: SiteSource, ids: readonly number[], kind: number, tx: number, ty: number, dir: number, queue: boolean, tier = 1): number {
+  const site = heldReservedSite(src, ids, kind, tx, ty, dir, queue);
+  return site >= 0 && src.tierOf(site) === tier ? site : -1;
+}
+
+/**
+ * W31: the reserved site of `kind` at (tx, ty) facing `dir`, at any tier, that units `ids` alone hold
+ * (ownReservedSite's holding rule), or -1. Only without `queue`. A belt build at another speed may
+ * replace such a site: replacing the issuers' queues frees it (dropOrphans) before the new one is laid.
+ */
+export function heldReservedSite(src: SiteSource, ids: readonly number[], kind: number, tx: number, ty: number, dir: number, queue: boolean): number {
   if (queue) return -1;
   const site = src.reservedSiteAt(kind, tx, ty, dir);
   if (site < 0) return -1;
@@ -235,6 +255,10 @@ export function worldSiteSource(w: World): SiteSource {
       const [fw, fh] = buildingFootprint(kind);
       return c.fw[s] === fw && c.fh[s] === fh ? w.buildings.id(s) : -1;
     },
+    tierOf: (id) => {
+      const s = w.buildings.slotForId(id);
+      return s < 0 ? 0 : c.tier[s]!;
+    },
   };
 }
 
@@ -252,6 +276,20 @@ export interface ReplaceSource extends QueueSource {
  * it, or a run order on a run it belongs to) and no other unit's queue does (the dropOrphans rule).
  */
 export function ownWallSites(src: ReplaceSource): Map<number, number> {
+  const out = new Map<number, number>();
+  for (const site of releasedSites(src)) {
+    const tile = src.wallSiteTile(site);
+    if (tile >= 0) out.set(tile, site);
+  }
+  return out;
+}
+
+/**
+ * The sites replacing the queues marked `replaced` would release: held by a replaced queue (a build
+ * order on it, or a run order on a run it belongs to) and by no other unit's queue (the dropOrphans
+ * rule; only the reserved ones among them are then removed). In queue order.
+ */
+export function releasedSites(src: QueueSource & Pick<ReplaceSource, 'replaced'>): Set<number> {
   const mine = new Set<number>();
   const myRuns = new Set<number>();
   const held = new Set<number>();
@@ -265,13 +303,8 @@ export function ownWallSites(src: ReplaceSource): Map<number, number> {
   }
   for (const run of heldRuns) for (const site of Array.from(src.runSites(run))) held.add(site);
   for (const run of myRuns) if (!heldRuns.has(run)) for (const site of Array.from(src.runSites(run))) mine.add(site);
-  const out = new Map<number, number>();
-  for (const site of mine) {
-    if (held.has(site)) continue;
-    const tile = src.wallSiteTile(site);
-    if (tile >= 0) out.set(tile, site);
-  }
-  return out;
+  for (const site of held) mine.delete(site);
+  return mine;
 }
 
 /** ReplaceSource over the simulation's state; `slots` are the unit slots whose queues are replaced. */
