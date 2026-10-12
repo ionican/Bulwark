@@ -191,6 +191,21 @@ function chevrons(t) {
   return { n: c.length, ok, msg: `${c.length} chevrons a tile (centre rows ${c.join(', ')} of ${H}; edge rows ${e.join(', ')}; tips ${lead.join(', ')} rows ahead)` };
 }
 
+/**
+ * Frames until the camera has settled (it eases to a new pose): the screen point of world (x, z)
+ * moves under half a pixel between two samples 4 frames apart (thrown after 60 samples).
+ */
+async function settle([x, z]) {
+  let last = null;
+  for (let k = 0; k < 60; k++) {
+    await frames(4);
+    const p = tileScreen(x, z);
+    if (last && Math.hypot(p.x - last.x, p.y - last.y) < 0.5) return;
+    last = p;
+  }
+  throw new Error(`the camera did not settle over ${x},${z}`);
+}
+
 async function setPaused(want) {
   if (js('__game.paused') !== want) js('(__game.control.pause(), true)');
   await until(`paused ${want}`, `__game.paused === ${want}`, 10);
@@ -212,7 +227,7 @@ async function clearSite(ex, ez) {
   const off = js(`(() => { const occ = new Set(); for (const b of __game.list('building')) for (let j = 0; j < b.fh; j++) for (let i = 0; i < b.fw; i++) occ.add((b.tx + i) + ',' + (b.ty + j)); for (let d = 3; d < 20; d++) for (const [x, z] of [[${ex + BOX.x0} - d, ${ez}], [${ex + BOX.x0} - d, ${ez} - 6], [${ex + BOX.x0} - d, ${ez} + 6]]) if (!occ.has(x + ',' + z) && __game.tileInfo(x + 0.5, z + 0.5).type === 'ground') return [x, z]; return null; })()`);
   if (!off) throw new Error('no open ground west of the site to send the builders to');
   camera({ x: (ex + off[0]) / 2, z: ez + 2, distance: 40, yaw: 0 });
-  await frames(8);
+  await settle([(ex + off[0]) / 2, ez + 2]);
   const want = js(`__game.list('unit').filter((u) => u.kindName === 'commander' || u.kindName === 'engineer').length`);
   if (selectedUnitIds().length < want) await selectBuilders();
   const p = tileScreen(...off);
@@ -286,12 +301,20 @@ async function run() {
   let first = true;
   for (const l of lines) {
     const centre = l.tiles.reduce((a, [x, z]) => [a[0] + x / l.tiles.length, a[1] + z / l.tiles.length], [0, 0]);
-    camera({ x: centre[0] + 0.5, z: centre[1] + 1.5, distance: 30, yaw: 0 });
-    await frames(8);
+    // the line in the upper half of the screen: the build bar's box (pointer events on, as tall as its
+    // tallest group, which grows with the build-mode hint) covers the map above its shorter groups
+    camera({ x: centre[0] + 0.5, z: centre[1] + 5, distance: 30, yaw: 0 });
+    await settle([centre[0] + 0.5, centre[1] + 5]);
     await clickEl(`.bar button[data-entry="belt${NAMES[l.tier]}"]`);
+    await frames(4);
     const tool = js('__game.tool');
     if (tool.kind !== 'belt' || tool.tier !== l.tier) throw new Error(`the ${NAMES[l.tier]} entry chose ${JSON.stringify(tool)}`);
     for (const [a, b] of l.drags) {
+      for (const t of [a, b]) {
+        const p = tileScreen(...t);
+        const top = js(`document.elementFromPoint(${p.x}, ${p.y})?.tagName ?? null`);
+        if (top !== 'CANVAS') throw new Error(`the drag end ${t} (${Math.round(p.x)}, ${Math.round(p.y)}) is under ${top}, not the map`);
+      }
       if (!first) shiftDown();
       await drag(tileScreen(...a), tileScreen(...b), 10);
       if (!first) shiftUp();
@@ -302,7 +325,10 @@ async function run() {
   press('Escape');
   await frames(3);
   const all = lines.flatMap((l) => l.tiles.map(([x, z, d]) => [x, z, d, l.tier]));
-  await until('the belt sites', `__game.list('building').filter((b) => b.kindName === 'belt').length >= ${all.length}`, 20);
+  // on a timeout the check below names the missing or wrong sites
+  const t0 = Date.now();
+  await until('the belt sites', `__game.list('building').filter((b) => b.kindName === 'belt').length >= ${all.length}`, 20).catch(() => null);
+  note(`belt sites: waited ${((Date.now() - t0) / 1000).toFixed(1)} s for ${all.length}; ${js(`__game.list('building').filter((b) => b.kindName === 'belt').length`)} in the snapshot`);
   const at = () => new Map(js(`__game.list('building')`).filter((b) => b.kindName === 'belt').map((b) => [`${b.tx},${b.ty}`, b]));
   const sites = at();
   const wrong = all.filter(([x, z, d, t]) => sites.get(`${x},${z}`)?.dir !== d || sites.get(`${x},${z}`)?.tier !== t);
@@ -407,7 +433,7 @@ async function run() {
   // 5: the upgrade tool dragged along the Slow line (Shift held: the tool stays for the next drag)
   const slow = lines[0];
   camera({ x: ex + 2.5, z: ez - 4, distance: 30, yaw: 0 });
-  await frames(8);
+  await settle([ex + 2.5, ez - 4]);
   await selectBuilders();
   press('u');
   await frames(3);
@@ -440,7 +466,7 @@ async function run() {
   await speed(1);
   await clearSite(ex, ez);
   camera({ x: ex + 2.5, z: ez - 5, distance: 24, yaw: 0 });
-  await frames(10);
+  await settle([ex + 2.5, ez - 5]);
   const reads = [];
   for (const [x, z] of slow.tiles) {
     const p = surfaceScreen(x, z);
