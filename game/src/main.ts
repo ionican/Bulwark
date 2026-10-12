@@ -20,8 +20,8 @@ import { demolishQueueText, hoverReadout } from './render/buildingReadout.ts';
 import { CoreOverlay, canvasCoreMark, inspectCore } from './render/coreView.ts';
 import { SiteHover } from './ui/siteHover.ts';
 import { waitingCounts, waitingState } from './render/waiting.ts';
-import { DragPreview, inspectDrag, type DragTiles } from './render/dragPreview.ts';
-import { DemolishPreviewCache, DragPlanCache, beltLineRelease, demolishLabel, dragLabel, paintsRow, placeableOn, planBeltUpgrade, planDrag, rowBuildCommands, upgradeLabel, type BeltUpgradePreview, type DemolishPreview, type DragPlan, type DragView } from './dragPlan.ts';
+import { DragPreview, inspectDrag } from './render/dragPreview.ts';
+import { BeltUpgradeCache, DemolishPreviewCache, DragPlanCache, beltLineRelease, demolishLabel, dragLabel, paintsRow, placeableOn, planDrag, rowBuildCommands, upgradeLabel, type DragPlan, type DragView, type EndTileCache } from './dragPlan.ts';
 import { DEMOLISH_KEYS, Tools, demolishClickHint, fastestBeltTier, gateCommand, runCommand, spawnAtCommand, toolLabel } from './tools.ts';
 import { SandboxPanel, debugSpawnVisible, multToSlider } from './ui/sandboxPanel.ts';
 import { editingTarget } from './ui/focusReturn.ts';
@@ -661,56 +661,35 @@ function currentDragPlan(): DragPlan | null {
 }
 
 /**
- * W31: the upgrade tool's drag along belts (dragPlan.ts planBeltUpgrade): the last plan and the
- * snapshot tick and end tiles it was made for. Worked out again only when one of those changes; the
- * release sends the cached plan when they still match.
+ * W31 and W32: the upgrade and demolish tools' drags along a line (dragPlan.ts EndTileCache). Each
+ * plan is worked out again only when the snapshot tick or an end tile changes; the release sends the
+ * cached plan when they still match. `labelled` is the plan the drag label was last written for.
  */
-let upgradePlan: { tick: number; fx: number; fy: number; tx: number; ty: number; plan: BeltUpgradePreview } | null = null;
-function upgradePlanFor(s: Snapshot, from: readonly [number, number], to: readonly [number, number]): BeltUpgradePreview {
-  const u = upgradePlan;
-  if (u && u.tick === s.tick && u.fx === from[0] && u.fy === from[1] && u.tx === to[0] && u.ty === to[1]) return u.plan;
-  const plan = planBeltUpgrade(dragView(s), [from[0], from[1]], [to[0], to[1]], 0);
-  upgradePlan = { tick: s.tick, fx: from[0], fy: from[1], tx: to[0], ty: to[1], plan };
-  dragLabelEl.textContent = upgradeLabel(plan);
-  return plan;
-}
-function currentUpgradePlan(): BeltUpgradePreview | null {
-  const s = interp.curr;
-  if (!drag || tools.name !== 'upgrade' || !s) {
-    upgradePlan = null;
-    return null;
-  }
-  return upgradePlanFor(s, drag.from, drag.to);
-}
-
-/**
- * W32: the demolish tool's drag (dragPlan.ts planDemolishPreview), worked out again only when the
- * snapshot tick or an end tile changes; the release sends the cached plan when they still match.
- * `demolishTiles` is what the preview draws for the plan last made: cross marks over the targets'
- * footprints, skip marks on the line's tiles over the core and unfinished sites.
- */
+const upgradePlans = new BeltUpgradeCache();
 const demolishPlans = new DemolishPreviewCache();
-let demolishTiles: { plan: DemolishPreview; tiles: DragTiles } | null = null;
-function currentDemolishPlan(): DemolishPreview | null {
+let labelled: object | null = null;
+/** The plan of the line drag under way with tool `name` (null, and the cache cleared: no drag, or another tool). */
+function linePlan<T extends object>(cache: EndTileCache<T>, name: 'upgrade' | 'demolish', label: (p: T) => string): T | null {
   const s = interp.curr;
-  if (!drag || tools.name !== 'demolish' || !s) {
-    demolishPlans.clear();
-    demolishTiles = null;
+  if (!drag || tools.name !== name || !s) {
+    cache.clear();
     return null;
   }
-  const plan = demolishPlans.get(s.tick, drag.from, drag.to, () => dragView(s));
-  if (demolishTiles?.plan !== plan) {
-    demolishTiles = { plan, tiles: { kind: B.wall, build: [], skipped: plan.skipped, demolish: plan.tiles } };
-    dragLabelEl.textContent = demolishLabel(plan);
+  const plan = cache.get(s.tick, drag.from, drag.to, () => dragView(s));
+  if (plan !== labelled) {
+    labelled = plan;
+    dragLabelEl.textContent = label(plan);
   }
   return plan;
 }
+/** The tool that acts on existing buildings, upgrade or demolish (the bar's active button), or null. */
+const buildingTool = (): 'upgrade' | 'demolish' | null => (tools.name === 'upgrade' || tools.name === 'demolish' ? tools.name : null);
 
 function updateDragPreview() {
-  const demolish = currentDemolishPlan();
-  const upgrade = currentUpgradePlan();
+  const demolish = linePlan(demolishPlans, 'demolish', demolishLabel);
+  const upgrade = linePlan(upgradePlans, 'upgrade', upgradeLabel);
   const plan = upgrade || demolish ? null : currentDragPlan();
-  dragPreview.update(demolish ? demolishTiles!.tiles : (upgrade ?? plan), performance.now() / 1000);
+  dragPreview.update(demolish ?? upgrade ?? plan, performance.now() / 1000);
   if ((!plan && !upgrade && !demolish) || !drag) {
     dragLabelEl.style.display = 'none';
     return;
@@ -862,7 +841,7 @@ function upgradeDrag(x0: number, y0: number, x1: number, y1: number, shift: bool
   const b = tileAtScreen(x1, y1);
   const ids = selectedEngineers();
   if (s && a && b && ids.length) {
-    const plan = upgradePlanFor(s, [a.tx, a.ty], [b.tx, b.ty]);
+    const plan = upgradePlans.get(s.tick, [a.tx, a.ty], [b.tx, b.ty], () => dragView(s));
     if (plan.targets.length) void commandResult({ t: 'upgradeBelts', ids, targets: plan.targets, queue: shift });
   }
   tools.acted(shift);
@@ -922,7 +901,7 @@ function updateSiteHover(moved = false): void {
   }
   // W32: the demolish readout first (being demolished, or the tool active: the time at the selected
   // engineers' build power), then a site's, then a finished building's (buildingReadout.ts hoverReadout)
-  const power = demolishTool ? selectedEngineers().length * unitBuildRate(snapshotRules(curr!), U.engineer) : undefined;
+  const power = demolishTool && id >= 0 ? selectedEngineers().length * unitBuildRate(snapshotRules(curr!), U.engineer) : undefined;
   const readout: HoverReadout | null = id >= 0 ? hoverReadout(samePrevWorld ? interp.prev : null, curr!, id, { demolishTool, builders: () => selectedBuilders().length > 0, power }) : null;
   if (!readout) {
     siteShown = null;
@@ -1597,7 +1576,7 @@ function frame(now: number) {
     });
     const builders = selectedBuilders().length > 0;
     const buildMode = buildTool();
-    const active = buildMode ? entryId(BUILDING_KINDS[buildMode.kind]!, tools.tier) : tools.name === 'upgrade' || tools.name === 'demolish' ? tools.name : null;
+    const active = buildMode ? entryId(BUILDING_KINDS[buildMode.kind]!, tools.tier) : buildingTool();
     const speed = buildMode?.kind === B.belt ? ` (${BELT_SPEED_NAMES[tools.tier]})` : '';
     const hint = buildMode
       ? `Placing ${buildingInfo(buildMode.kind).label}${speed}${isBelt(buildMode.kind) ? ' — drag for a line, R rotates' : paintsRow(buildMode.kind) ? ' — drag for a row' : ''}. Shift queues more; Esc cancels.`
@@ -1729,6 +1708,8 @@ const median = (xs: number[]) => {
 };
 
 const allUnitIds = () => Array.from(interp.units.id.subarray(0, interp.units.count));
+/** Every engineer's id (W32: test hooks that default to the engineers). */
+const allEngineerIds = () => allUnitIds().filter((_, r) => interp.units.kind[r] === U.engineer);
 const entryIndex = (e: string | number | undefined) => entryIndexOf(terrain.entries, e);
 
 const game = {
@@ -1925,7 +1906,7 @@ const game = {
   },
   get buildMode() {
     const b = buildTool();
-    return b ? BUILDING_KINDS[b.kind] : tools.name === 'upgrade' || tools.name === 'demolish' ? tools.name : null;
+    return b ? BUILDING_KINDS[b.kind] : buildingTool();
   },
   /** W24 run 3: the active map tool (tools.ts), its building kind and its words in the panel. */
   get tool() {
@@ -2010,7 +1991,7 @@ const game = {
       command({ t: 'build', ids: opts.ids ?? allUnitIds(), kind: buildingKindIndex(kind), tx, ty, dir: opts.dir ?? 0, queue: opts.queue ?? true }),
     move: (ids: number[] | null, x: number, z: number) => command({ t: 'move', ids: ids ?? allUnitIds(), x, z }),
     reclaim: (ids: number[] | null, wreck: number) =>
-      command({ t: 'reclaim', ids: ids ?? allUnitIds().filter((id) => interp.units.kind[Array.prototype.indexOf.call(interp.units.id, id)] === U.engineer), wreck }),
+      command({ t: 'reclaim', ids: ids ?? allEngineerIds(), wreck }),
     assist: (ids: number[] | null, target: number) => command({ t: 'assist', ids: ids ?? allUnitIds(), target }),
     upgrade: (ids: number[] | null, target: number) => command({ t: 'upgrade', ids: ids ?? allUnitIds(), target }),
     dropTurret: (id: number) => command({ t: 'dropTurret', id }),
@@ -2034,7 +2015,7 @@ const game = {
   cancelRun: (run: number) => commandResult({ t: 'cancelRun', run }),
   /** W32: demolishes `targets` with engineers `ids` (null: every engineer); resolves with the result, refund and skip counts (detail). */
   demolish: (ids: number[] | null, targets: number[], queue = false) =>
-    commandResult({ t: 'demolish', ids: ids ?? allUnitIds().filter((id) => interp.units.kind[Array.prototype.indexOf.call(interp.units.id, id)] === U.engineer), targets, queue }),
+    commandResult({ t: 'demolish', ids: ids ?? allEngineerIds(), targets, queue }),
   gate: (tx: number, ty: number, opts: { ids?: number[]; axis?: 'x' | 'z'; queue?: boolean } = {}) =>
     commandResult({ t: 'gate', ids: opts.ids ?? allUnitIds(), tx, ty, axis: opts.axis, queue: opts.queue ?? false }),
   spawnAt: (kind: string | number, x: number, z: number, count = 1) => commandResult({ t: 'spawnAt', kind: alienKindIndex(kind), x, z, count }),
@@ -2182,13 +2163,13 @@ const game = {
    */
   get dragPreview() {
     // W31: the upgrade tool's drag along belts: its tiles, skipped tiles, per-destination counts and label
-    if (drag && upgradePlan && tools.name === 'upgrade') {
-      const p = upgradePlan.plan;
+    if (drag && upgradePlans.last && tools.name === 'upgrade') {
+      const p = upgradePlans.last;
       return { kind: 'upgrade', build: p.build, skipped: p.skipped, toMedium: p.toMedium, toFast: p.toFast, label: dragLabelEl.textContent, refused: null, drawn: inspectDrag(scene) };
     }
     // W32: the demolish tool's drag: its targets in drag order, their footprints, skipped tiles and counts, refund and label
-    if (drag && demolishTiles && tools.name === 'demolish') {
-      const p = demolishTiles.plan;
+    if (drag && demolishPlans.last && tools.name === 'demolish') {
+      const p = demolishPlans.last;
       return {
         kind: 'demolish',
         count: p.targets.length,

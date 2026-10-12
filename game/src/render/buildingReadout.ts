@@ -19,7 +19,7 @@
 //                         extractor's stock)
 // A building demolished mid-upgrade shows the demolish text, not the upgrade's site readout.
 
-import { B, U, beltSpeedText, buildingInfo, demolishRefund, demolishSkip, demolishTime, isBelt, isExtractor } from '../sim/kinds.ts';
+import { B, U, beltSpeedText, buildingInfo, demolishSkip, demolishTime, isBelt, isDemolishing, isExtractor, slotRefund } from '../sim/kinds.ts';
 import { BF_COMPLETE, BF_DISABLED, BF_IDLE, BF_UPGRADING, G_BELTS, G_CORE_MASS, G_CORE_RARE } from '../sim/schema.ts';
 import { extractorCap, unitBuildRate } from '../sim/tuning.ts';
 import type { Snapshot } from '../sim/snapshot.ts';
@@ -80,12 +80,6 @@ export function amount(v: number): string {
 /** W32: "+50 mass", "+175 mass +7 rare": a demolish refund (rare only when there is some). */
 const refundText = (m: number, r: number) => `+${amount(m)} mass${r > 0 ? ` +${amount(r)} rare` : ''}`;
 
-/** W32: the refund demolishing snapshot row `r` returns now (kinds.ts demolishRefund; a part-done upgrade at its stored progress). */
-export function rowRefund(s: Snapshot, r: number): [number, number, number] {
-  const c = s.buildings.cols;
-  return demolishRefund(c.kind[r]!, c.tier[r]!, c.fw[r]!, c.fh[r]!, c.flags[r]! & BF_UPGRADING ? c.progress[r]! : 0);
-}
-
 /** W32: snapshot row `r` holds items that demolishing it loses: a belt piece's item, a machine's buffers, a depot's or extractor's stock. */
 export function itemsInside(s: Snapshot, r: number): boolean {
   const c = s.buildings.cols;
@@ -105,15 +99,15 @@ export function demolishReadout(s: Snapshot, id: number, tool: boolean, power?: 
   const r = rowOf(s, id);
   if (r < 0) return null;
   const c = s.buildings.cols;
-  const d = c.demolish[r]!;
+  const busy = isDemolishing(c, r);
   const kind = c.kind[r]!;
-  if (!(d > 0) && !tool) return null;
+  if (!busy && !tool) return null;
   const why = demolishSkip(kind, c.flags[r]!);
   if (why === 'core') return { id, lines: [titleOf(s, r), 'the core cannot be demolished'] };
   if (why) return null;
-  const [m, , rare] = rowRefund(s, r);
+  const [m, , rare] = slotRefund(c, r);
   const lines = [titleOf(s, r)];
-  if (d > 0) lines.push(`Demolishing ${Math.min(99, Math.floor(d * 100 + 1e-6))}% · ${refundText(m, rare)} when done`);
+  if (busy) lines.push(`Demolishing ${Math.min(99, Math.floor(c.demolish[r]! * 100 + 1e-6))}% · ${refundText(m, rare)} when done`);
   else {
     const bp = power && power > 0 ? power : unitBuildRate(snapshotRules(s), U.engineer);
     lines.push(`Demolish: ${refundText(m, rare)}, ${amount(demolishTime(kind, c.tier[r]!, c.fw[r]!, c.fh[r]!) / bp)} s`);

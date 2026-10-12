@@ -14,7 +14,8 @@
 // stops them cutting diagonally past a gate's corners. Each footprint tile's flow cost uses the
 // gate's hit points ÷ depth, so breaking the gate is charged once along a route (flowfield.ts).
 
-import { B, buildingInfo } from './kinds.ts';
+import { B, buildingInfo, isDemolishing } from './kinds.ts';
+import { holdsDemolish } from './queue.ts';
 import { constructionState } from './schema.ts';
 import { gateStats } from './balance.ts';
 import type { World } from './world.ts';
@@ -134,7 +135,7 @@ export function planGate(w: World, cx: number, cz: number, axis?: 'x' | 'z'): Ga
       return { ...check, ok: false, reason: `every gate tile must be a finished wall: the wall at ${x},${z} is ${state === 'started' ? 'under construction' : 'reserved (not started)'}`, tiles: [] };
     }
     // W32: conversion would remove a wall that is being demolished, or that an engineer is on its way to demolish
-    if (c.demolish[b]! > 0) return { ...check, ok: false, reason: `the wall at ${x},${z} is being demolished`, tiles: [] };
+    if (isDemolishing(c, b)) return { ...check, ok: false, reason: `the wall at ${x},${z} is being demolished`, tiles: [] };
     if (demolishOrdered(w, w.buildings.id(b))) return { ...check, ok: false, reason: `the wall at ${x},${z} has a demolish order`, tiles: [] };
   }
   return check;
@@ -142,10 +143,7 @@ export function planGate(w: World, cx: number, cz: number, axis?: 'x' | 'z'): Ga
 
 /** W32: some live unit holds a demolish order on building `id`. */
 function demolishOrdered(w: World, id: number): boolean {
-  for (let s = 0; s < w.units.highWater; s++) {
-    if (!w.units.alive[s]) continue;
-    for (const o of w.orders[s] ?? []) if (o.t === 'demolish' && o.id === id) return true;
-  }
+  for (let s = 0; s < w.units.highWater; s++) if (w.units.alive[s] && holdsDemolish(w.orders[s], id)) return true;
   return false;
 }
 

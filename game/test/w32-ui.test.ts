@@ -34,10 +34,7 @@ const R = readout as unknown as {
 };
 const WALL = buildingInfo(B.wall).label;
 /** One decimal, a whole number without one (the readouts' rule: "+50 mass", "+12.5 mass"). */
-const one = (v: number) => {
-  const t = Math.round(v * 10) / 10;
-  return Number.isInteger(t) ? String(t) : t.toFixed(1);
-};
+const one = readout.amount;
 
 describe('W32 Demolish button and keys (test 10)', () => {
   type Action = { id: string; label: string; sub: string };

@@ -290,6 +290,8 @@ export class World {
   readonly demolishPower: Float64Array;
   /** Some slot of demolishPower is non-zero this tick (set with it in units.ts). */
   demolishing = false;
+  /** The slots given demolish power this tick, each once (units.ts); emptied by economy.ts stepDemolition. */
+  readonly demolishSlots: number[] = [];
   /** Buildings demolished so far (not counted in buildingsLost). */
   demolished = 0;
   /** Mass and rare their demolition returned to the pool so far. */
@@ -552,17 +554,15 @@ export class World {
       }
       case 'demolish': {
         // W32: the plan validation made a moment ago, on this state (validate.ts planDemolish).
-        // Without Shift the engineers' queues are replaced once; each target then gives each engineer
-        // one demolish order, in drag order, unless it already holds one for that building.
+        // Without Shift the engineers' queues are replaced once; then each engineer gets the orders the
+        // plan worked out for it (one per target it does not already hold, in drag order).
         const plan = this.validatedResult<ReturnType<typeof planDemolish>>(cmd) ?? planDemolish(this, cmd);
         if (typeof plan === 'string') break;
         if (!cmd.queue) this.replaceQueues(plan.units);
-        for (const id of plan.ids)
-          for (const uid of plan.units) {
-            const slot = this.units.slotForId(uid);
-            if (slot < 0 || this.orders[slot]?.some((o) => o.t === 'demolish' && o.id === id)) continue;
-            this.giveOrder(slot, { t: 'demolish', id }, true);
-          }
+        for (const [uid, id] of plan.orders) {
+          const slot = this.units.slotForId(uid);
+          if (slot >= 0) this.giveOrder(slot, { t: 'demolish', id }, true);
+        }
         break;
       }
       case 'reclaim': {

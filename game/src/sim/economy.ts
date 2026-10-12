@@ -19,7 +19,7 @@
 // in one step (no carrying, no rubble object) and removes the building.
 
 import { BF_ACTIVE, BF_COMPLETE, BF_DISABLED, BF_IDLE, BF_STARTED, BF_STARVED, BF_UPGRADING } from './schema.ts';
-import { B, COMMANDER_INCOME, SHIELD, TICK_SECONDS, buildingInfo, demolishRefund, demolishTime, isExtractor, siteWork, type Cost } from './kinds.ts';
+import { B, COMMANDER_INCOME, SHIELD, TICK_SECONDS, buildingInfo, demolishTime, isExtractor, siteWork, slotRefund, type Cost } from './kinds.ts';
 import { extractorCap, extractorRate } from './tuning.ts';
 import { ENGINEER_BUILD_TIME, ENGINEER_COST, RESEARCH } from './balance.ts';
 import { map1 } from '../../../model/data/map1.ts';
@@ -265,17 +265,13 @@ export function stepRepair(w: World): void {
 
 /**
  * W32: no double work on one building. Run after the units have delivered their power and before
- * stepConstruction and stepRepair: every slot that got demolish power this tick, or is being
- * demolished, loses its build and repair power, so an upgrade or repair never advances on the tick
- * demolition starts (the units drop those orders from the next tick, units.ts).
+ * stepConstruction and stepRepair: every slot that got demolish power this tick (w.demolishSlots)
+ * loses its build and repair power, so an upgrade or repair never advances on the tick demolition
+ * starts. A building already being demolished gets none anyway: the units drop build and repair
+ * orders on it before delivering power (units.ts).
  */
 export function stopDemolishedWork(w: World): void {
-  if (!w.demolishing) return;
-  const b = w.buildings;
-  const d = b.cols.demolish;
-  const p = w.demolishPower;
-  for (let s = 0; s < b.highWater; s++) {
-    if (p[s]! <= 0 && !(d[s]! > 0)) continue;
+  for (const s of w.demolishSlots) {
     w.buildPower[s] = 0;
     w.builderCount[s] = 0;
     w.repairPower[s] = 0;
@@ -298,7 +294,9 @@ export function stepDemolition(w: World): void {
   const b = w.buildings;
   const c = b.cols;
   const p = w.demolishPower;
-  for (let s = 0; s < b.highWater; s++) {
+  // in slot order, as a scan over every slot would take them (the pool's sums and slot reuse depend on it)
+  const slots = w.demolishSlots.sort((x, y) => x - y);
+  for (const s of slots) {
     const bp = p[s]!;
     if (bp <= 0) continue;
     p[s] = 0;
@@ -313,19 +311,17 @@ export function stepDemolition(w: World): void {
     }
     demolished(w, s);
   }
+  slots.length = 0;
 }
 
 /** W32: building slot s is demolished: the refund into the pool and the counters, then removal. */
 function demolished(w: World, s: number): void {
-  const c = w.buildings.cols;
-  const kind = c.kind[s]!;
-  const refund = kind === B.tempTurret ? null : demolishRefund(kind, c.tier[s]!, c.fw[s]!, c.fh[s]!, c.flags[s]! & BF_UPGRADING ? c.progress[s]! : 0);
-  if (refund) {
-    w.pool[0] = w.pool[0]! + refund[0];
-    w.pool[2] = w.pool[2]! + refund[2];
-    w.demolishRefund[0] = w.demolishRefund[0]! + refund[0];
-    w.demolishRefund[1] = w.demolishRefund[1]! + refund[2];
-  }
+  // a temporary turret cost nothing, so returns nothing
+  const refund = slotRefund(w.buildings.cols, s);
+  w.pool[0] = w.pool[0]! + refund[0];
+  w.pool[2] = w.pool[2]! + refund[2];
+  w.demolishRefund[0] = w.demolishRefund[0]! + refund[0];
+  w.demolishRefund[1] = w.demolishRefund[1]! + refund[2];
   w.demolished++;
   w.removeBuilding(s);
 }

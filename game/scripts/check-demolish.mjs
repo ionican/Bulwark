@@ -15,8 +15,9 @@
 //   2  the engineers alone selected by clicks; Delete chooses the demolish tool (the button is on,
 //      the hint names the tool); Escape closes it; Backspace chooses it again; hovering the gun
 //      reads "Demolish: +<refund> mass, <time> s"; screenshot w32-demolish-tool.png
-//   3  unlimited spending off; a click on the gun: one demolish order on it per engineer; the
-//      hover reads "Demolishing …%"; screenshot w32-demolishing.png; once the gun is gone the
+//   3  unlimited spending off; a click on the gun: one demolish order on it per engineer; paused once
+//      its demolish progress passes 5%, the hover reads "Demolishing …%"; screenshot
+//      w32-demolishing.png; resumed, and once the gun is gone the
 //      demolishRefund counter rose by exactly half the gun's mass cost, and over the same ticks the
 //      pool's mass changed by that refund + deliveries + commander income − exact spending (as
 //      check-belts.mjs balanceOf)
@@ -30,6 +31,7 @@
 // It always stops its server and closes only its own session (never `close --all`).
 
 import { B, buildingFootprint, demolishRefund } from '../src/sim/kinds.ts';
+import { amount } from '../src/render/buildingReadout.ts';
 import { harness } from './harness.mjs';
 
 const h = harness({ name: 'check-demolish', port: 8844, session: 'w32demo' });
@@ -44,11 +46,6 @@ async function hover(p) {
   await frames(4);
 }
 const hoverOf = (label, id) => until(label, `(() => { const h = __game.siteHover; return h.visible && h.id === ${id} ? h : null; })()`, 10);
-/** "50", "12.5": the readouts' amount rule (buildingReadout.ts amount). */
-const amount = (v) => {
-  const t = Math.round(v * 10) / 10;
-  return Number.isInteger(t) ? String(t) : t.toFixed(1);
-};
 
 /** The site: x 0..9 (relative), z 0..8: walls on row 0, the gun at (0, 3) 2 × 2, the belt line on row 7. */
 const BOX = { w: 10, h: 9 };
@@ -198,23 +195,43 @@ async function run() {
   await shot('w32-demolish-tool.png');
 
   // 3: the gun by a click; the economy balanced over the same ticks, unlimited spending off
-  const off = js(`(async () => [await __game.setUnlimited(false), await __game.tune('unit', 'engineer', 'buildRate', 1)].filter((x) => !x.ok).map((x) => x.reason))()`);
-  if (off.length) throw new Error(`setUnlimited(false) or tune refused: ${off.join('; ')}`);
+  const off = js(`(async () => [await __game.setUnlimited(false)].filter((x) => !x.ok).map((x) => x.reason))()`);
+  if (off.length) throw new Error(`setUnlimited(false) refused: ${off.join('; ')}`);
   await frames(6);
   const a = js(ECON);
+  // watched every frame in the page: the engineers' queues (one demolish order each on the gun), and
+  // the game paused once the gun's demolish progress passes 5%, so the readout can be read
+  js(`(() => {
+    const w = (window.__w32 = { orders: null, caught: null });
+    const engs = ${JSON.stringify(engs.map((e) => e.id))};
+    const t0 = performance.now();
+    const f = () => {
+      const q = engs.map((id) => (__game.queues.find((x) => x.id === id)?.orders ?? []).filter((o) => o.kind === 'demolish'));
+      if (!w.orders && q.every((o) => o.length === 1 && o[0].target === ${gun.id})) w.orders = q;
+      const b = __game.list('building').find((b) => b.id === ${gun.id});
+      if (b && b.demolish > 0.05) {
+        w.caught = b.demolish;
+        if (!__game.paused) __game.control.pause();
+        return;
+      }
+      if (b && performance.now() - t0 < 60000) requestAnimationFrame(f);
+    };
+    requestAnimationFrame(f);
+    return true;
+  })()`);
   await click(...Object.values(gunScreen()));
-  const orders = await until(
-    'a demolish order per engineer',
-    `(() => { const q = ${JSON.stringify(engs.map((e) => e.id))}.map((id) => (__game.queues.find((x) => x.id === id)?.orders ?? []).filter((o) => o.kind === 'demolish')); return q.every((o) => o.length === 1 && o[0].target === ${gun.id}) ? q : null; })()`,
-    10,
-  ).catch(() => null);
+  const caught = await until('the gun being demolished, paused', `window.__w32.caught !== null && __game.paused ? window.__w32.caught : null`, 70).catch(() => null);
+  const orders = js('window.__w32.orders');
   check(!!orders, `the click on the gun: one demolish order on it per engineer ("${orders?.[0]?.[0]?.text}")`, `queues after the click: ${JSON.stringify(engs.map((e) => queueOf(e.id)))}`);
-  await until('the gun being demolished', `(__game.list('building').find((b) => b.id === ${gun.id})?.demolish ?? 0) > 0.05`, 60).catch(() => null);
+  if (caught === null) throw new Error('the gun was not caught part-demolished');
+  await frames(4);
   await hover(gunScreen());
   const hv2 = await until('the "Demolishing" readout', `(() => { const h = __game.siteHover; return h.visible && h.id === ${gun.id} && /^Demolishing \\d+% · \\+/.test(h.lines[1] ?? '') ? h : null; })()`, 10).catch(() => null);
   check(!!hv2, `hover while demolished: ${JSON.stringify(hv2?.lines)}`, `the gun's hover while demolished: ${JSON.stringify(js('__game.siteHover'))}`);
   await shot('w32-demolishing.png');
   away();
+  js('(__game.control.pause(), true)');
+  await until('resumed', '__game.paused === false', 10);
   await until('the gun gone', `!__game.list('building').some((b) => b.id === ${gun.id})`, 120);
   const b = js(ECON);
   const bal = balanceOf(a, b);
@@ -225,7 +242,6 @@ async function run() {
   );
 
   // 4: a drag along the belt line
-  js(`(async () => await __game.tune('unit', 'engineer', 'buildRate', 10))()`);
   camera({ x: ax + 4, z: az + 9, distance: 26, yaw: 0 });
   await settle([ax + 4, az + 9]);
   press('Backspace');

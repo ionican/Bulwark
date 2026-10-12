@@ -18,7 +18,7 @@
 // demolished (demolish > 0) are dropped, so an upgrade or repair on it stops.
 
 import { BF_COMPLETE, BF_UPGRADING, US_BUILDING, US_IDLE, US_MOVING, US_RECLAIMING, US_UNLOADING, US_WAITING } from './schema.ts';
-import { B, CARRY_CAPACITY, RECLAIM_RATE, TICK_SECONDS, U, demolishSkip, unitInfo } from './kinds.ts';
+import { B, CARRY_CAPACITY, RECLAIM_RATE, TICK_SECONDS, U, demolishSkip, isDemolishing, unitInfo } from './kinds.ts';
 import { centreOf, distToBuilding } from './combat.ts';
 import { unitBuildRate, unitSpeed } from './tuning.ts';
 import { PROGRESS_EPS } from './economy.ts';
@@ -145,6 +145,8 @@ function workOnSite(w: World, s: number, b: number, id: number, range: number, b
       w.repairPower[b] = w.repairPower[b]! + buildRate;
       w.repairing = true;
     } else if (work === 'demolish') {
+      // the slots given demolish power this tick, each once (economy.ts loops over them)
+      if (w.demolishPower[b] === 0) w.demolishSlots.push(b);
       w.demolishPower[b] = w.demolishPower[b]! + buildRate;
       w.demolishing = true;
     } else {
@@ -258,7 +260,7 @@ export function stepUnits(w: World): void {
     if (order.t === 'build') {
       const b = w.buildings.slotForId(order.id);
       // W32: an upgrade on a building being demolished stops
-      if (b < 0 || !unfinished(w, b) || w.buildings.cols.demolish[b]! > 0) {
+      if (b < 0 || !unfinished(w, b) || isDemolishing(w.buildings.cols, b)) {
         orders.shift();
         w.paths[s] = null;
         continue;
@@ -269,7 +271,7 @@ export function stepUnits(w: World): void {
     if (order.t === 'repair') {
       const b = w.buildings.slotForId(order.id);
       const bc = w.buildings.cols;
-      if (b < 0 || !(bc.flags[b]! & BF_COMPLETE) || bc.hp[b]! >= bc.maxHp[b]! || bc.demolish[b]! > 0) {
+      if (b < 0 || !(bc.flags[b]! & BF_COMPLETE) || bc.hp[b]! >= bc.maxHp[b]! || isDemolishing(bc, b)) {
         orders.shift();
         w.paths[s] = null;
         continue;

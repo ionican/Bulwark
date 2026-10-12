@@ -85,18 +85,27 @@ export const ENGINEER_ACTIONS: readonly EngineerAction[] = [
   { id: 'stop', label: 'Stop [X]', sub: 'clear orders' },
 ];
 
+/** Each action's two states, disabled and enabled, built once (the bar reads them every frame). */
+const ACTION_STATES = new Map(
+  ENGINEER_ACTIONS.map((a) => [
+    a.id,
+    {
+      off: Object.freeze({ disabled: true, sub: a.id === 'demolish' ? 'needs an engineer' : a.sub }),
+      on: Object.freeze({ disabled: false, sub: a.sub }),
+    },
+  ]),
+);
+
 /**
  * Whether an Engineers-group action is disabled for the selection (`engineers`, `commander`: one is
- * selected; `builders`: either is, default when either is), and its small text: an action that needs
+ * selected; `builders`: either is, which only Stop reads), and its small text: an action that needs
  * an engineer says "needs an engineer" while it is disabled (W32: demolish; upgrade and the turret
  * keep their text, as before).
  */
-export function engineerAction(id: EngineerAction['id'], has: { engineers: boolean; commander: boolean; builders?: boolean }): { disabled: boolean; sub: string } {
-  const a = ENGINEER_ACTIONS.find((x) => x.id === id)!;
-  if (id === 'produce') return { disabled: !has.commander, sub: a.sub };
-  if (id === 'stop') return { disabled: !(has.builders ?? (has.engineers || has.commander)), sub: a.sub };
-  const disabled = !has.engineers;
-  return { disabled, sub: disabled && id === 'demolish' ? 'needs an engineer' : a.sub };
+export function engineerAction(id: EngineerAction['id'], has: { engineers: boolean; commander: boolean; builders?: boolean }): { readonly disabled: boolean; readonly sub: string } {
+  const st = ACTION_STATES.get(id)!;
+  const enabled = id === 'produce' ? has.commander : id === 'stop' ? has.builders === true : has.engineers;
+  return enabled ? st.on : st.off;
 }
 
 export interface BuildBarHandlers {
@@ -197,9 +206,10 @@ export class BuildBar {
       this.lockMask = researchMask;
       for (const [k, e] of this.entries) this.locks.set(k, entryLock(e, researched));
     }
+    const has = { engineers: hasEngineers, commander: hasCommander, builders: canBuild };
     for (const [k, b] of this.buttons) {
       const lock = this.locks.get(k) ?? null;
-      const action = b.dataset.action ? engineerAction(b.dataset.action as EngineerAction['id'], { engineers: hasEngineers, commander: hasCommander, builders: canBuild }) : null;
+      const action = b.dataset.action ? engineerAction(b.dataset.action as EngineerAction['id'], has) : null;
       b.disabled = action ? action.disabled : !canBuild || lock !== null;
       b.classList.toggle('on', k === active);
       if (action) {

@@ -367,3 +367,16 @@ export function orderPosition(w: World, unitSlot: number, o: Order): [number, nu
 export function orderTarget(o: Order): number {
   return o.t === 'build' || o.t === 'reclaim' || o.t === 'repair' || o.t === 'demolish' ? o.id : o.t === 'run' ? o.site : -1;
 }
+
+/** W32: the buildings `orders` hold a demolish order on (a unit's queue; none: empty). */
+export function heldDemolish(orders: readonly Order[] | undefined): Set<number> {
+  const held = new Set<number>();
+  for (const o of orders ?? []) if (o.t === 'demolish') held.add(o.id);
+  return held;
+}
+
+/** W32: `orders` (a unit's queue) hold a demolish order on building `id`. */
+export function holdsDemolish(orders: readonly Order[] | undefined, id: number): boolean {
+  for (const o of orders ?? []) if (o.t === 'demolish' && o.id === id) return true;
+  return false;
+}
